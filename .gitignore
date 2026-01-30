@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build output (regenerated on npm install)
+dist/
+
+# Data and database
+data/*
+!data/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+
+# Environment and config
+.env
+.env.local
+.env.*.local
+agent-config.json
+
+# Platform binaries (auto-downloaded)
+bin/agent-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Lock files (use bun.lock)
+package-lock.json
+yarn.lock

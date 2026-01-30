@@ -1,0 +1,120 @@
+{
+  "agent": {
+    "id": "4da7c69e-3212-4d77-b617-c9e11f722897",
+    "name": "AI Assistant",
+    "description": "An intelligent AI assistant capable of helping with analysis, writing, coding, and general conversation",
+    "test_mode": false,
+    "llm": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 4000,
+      "temperature": 0.7,
+      "system_prompt": "You are a helpful AI assistant. Be concise and accurate in your responses.",
+      "vision": {
+        "enabled": true,
+        "max_images": 20,
+        "max_image_size": 5242880,
+        "allowed_types": [
+          "jpeg",
+          "png",
+          "gif",
+          "webp"
+        ],
+        "resize_images": true,
+        "max_dimension": 1568,
+        "pdf": {
+          "enabled": true,
+          "max_file_size": 33554432,
+          "max_pages": 100,
+          "allow_urls": true
+        }
+      },
+      "parallel_tools": {
+        "enabled": true,
+        "max_concurrent": 10
+      }
+    },
+    "mcp": {
+      "enabled": true,
+      "base_url": "http://localhost:3000/mcp",
+      "api_key": "mcp_test1234567890abcdef",
+      "timeout": "30s",
+      "retry_count": 3,
+      "cache_ttl": "15m",
+      "tools": [
+        "get-current-weather"
+      ],
+      "resource_config": {
+        "enabled": true,
+        "auto_sync": true,
+        "sync_interval": "1h",
+        "subscribe": true,
+        "max_size": 10485760
+      }
+    },
+    "scheduler": {
+      "enabled": false,
+      "interval": "1h",
+      "max_tasks": 100
+    },
+    "tasks": {
+      "enabled": false,
+      "allow_scheduling": true,
+      "allow_recurring": true,
+      "max_tasks": 100,
+      "auto_execute": false
+    },
+    "memory": {
+      "enabled": false,
+      "embedding_model": "text-embedding-3-small",
+      "decision_model": "gpt-4o-mini",
+      "max_memories_per_query": 5,
+      "min_importance": 0.3,
+      "min_similarity": 0,
+      "auto_prune": true,
+      "max_memories": 10000,
+      "embedding_provider": "openai",
+      "ollama_url": "http://localhost:11434",
+      "auto_extract_memories": null,
+      "auto_ingest_files": true,
+      "ingest_types": [
+        "text/plain",
+        "text/markdown",
+        "application/json",
+        "text/csv"
+      ],
+      "chunk_size": 1000,
+      "chunk_overlap": 200,
+      "document_importance": 0.5
+    },
+    "operator": {
+      "enabled": false,
+      "virtual_browser": "http://localhost:8098",
+      "display_width": 1024,
+      "display_height": 768,
+      "max_actions_per_turn": 5
+    },
+    "context": {
+      "max_messages": 30,
+      "max_tokens": 0,
+      "keep_images": 5
+    },
+    "filesystem": {
+      "enabled": false,
+      "max_file_size": 10485760,
+      "max_total_size": 104857600,
+      "auto_extract": true,
+      "min_extract_size": 10240,
+      "deduplication": true,
+      "auto_cleanup": true,
+      "retention_days": 7,
+      "cleanup_orphans": true,
+      "allowed_types": [
+        "image",
+        "document",
+        "audio"
+      ]
+    },
+    "version": "1.0.0"
+  }
+}

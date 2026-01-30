@@ -1,0 +1,67 @@
+{
+  "name": "apteva",
+  "version": "0.1.2",
+  "description": "Run AI agents locally. Multi-provider support for Claude, GPT, Gemini, Llama, and more.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "apteva": "./bin/apteva.js"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/server.ts",
+    "build": "bun run build.ts",
+    "build:cli": "bun build ./src/cli.ts --outdir ./dist --target node",
+    "start": "bun run src/server.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "files": [
+    "bin/apteva.js",
+    "dist/*.js",
+    "dist/*.css",
+    "dist/*.html",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "apteva",
+    "ai",
+    "agents",
+    "llm",
+    "claude",
+    "anthropic",
+    "openai",
+    "gpt",
+    "gemini",
+    "llama",
+    "groq",
+    "local",
+    "cli"
+  ],
+  "author": "Apteva <hello@apteva.com>",
+  "license": "Elastic-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apteva/apteva.git"
+  },
+  "homepage": "https://github.com/apteva/apteva",
+  "bugs": {
+    "url": "https://github.com/apteva/apteva/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@apteva/apteva-kit": "^0.1.102",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}
