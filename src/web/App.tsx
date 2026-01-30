@@ -22,6 +22,7 @@ import {
   Dashboard,
   TasksPage,
   McpPage,
+  TelemetryPage,
 } from "./components";
 
 function App() {
@@ -226,6 +227,8 @@ function App() {
           {route === "tasks" && <TasksPage />}
 
           {route === "mcp" && <McpPage />}
+
+          {route === "telemetry" && <TelemetryPage />}
         </main>
       </div>
 

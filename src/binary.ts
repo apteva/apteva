@@ -333,20 +333,23 @@ export async function getLatestNpmVersion(): Promise<string | null> {
 
 // Get installed version (from npm package or stored)
 export function getInstalledVersion(): string | null {
-  const packageName = getNpmPackageName();
+  // Check stored version first (from manual updates)
+  const stored = getStoredVersion();
+  if (stored?.version) {
+    return stored.version;
+  }
 
-  // Try to get version from npm package
+  // Fall back to npm package version
+  const packageName = getNpmPackageName();
   try {
     const pkgPath = require.resolve(`${packageName}/package.json`);
     const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
     return pkg.version || null;
   } catch {
-    // Not installed via npm, check stored version
+    // Not installed via npm
   }
 
-  // Fall back to stored version
-  const stored = getStoredVersion();
-  return stored?.version || null;
+  return null;
 }
 
 // Check for agent binary updates
@@ -495,6 +498,9 @@ export async function installViaNpm(): Promise<{
     }
 
     const version = await getLatestNpmVersion();
+    if (version) {
+      saveVersion(version);
+    }
     console.log(`${c.green}Installed agent v${version || "latest"}${c.reset}`);
 
     return {

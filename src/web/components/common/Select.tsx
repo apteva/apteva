@@ -50,7 +50,7 @@ export function Select({ value, options, onChange, placeholder = "Select..." }: 
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-[#111] border border-[#222] rounded shadow-lg max-h-60 overflow-auto">
+        <div className="absolute z-50 w-full min-w-max mt-1 bg-[#111] border border-[#222] rounded shadow-lg max-h-60 overflow-y-auto scrollbar-hide">
           {options.map((option) => (
             <button
               key={option.value}

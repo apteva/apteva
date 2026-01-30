@@ -3,7 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
 import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR } from "../server";
-import { AgentDB, McpServerDB, generateId, type Agent, type AgentFeatures, type McpServer } from "../db";
+import { AgentDB, McpServerDB, TelemetryDB, generateId, type Agent, type AgentFeatures, type McpServer } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import {
   binaryExists,
@@ -20,6 +20,7 @@ import {
   listMcpTools,
   callMcpTool,
   getMcpProcess,
+  getMcpProxyUrl,
 } from "../mcp-client";
 
 // Data directory for agent instances (in ~/.apteva/agents/)
@@ -56,38 +57,17 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
   const features = agent.features;
 
   // Get MCP server details for the agent's selected servers
+  // All MCP servers are accessed via HTTP proxy (apteva manages the stdio processes)
   const mcpServers = (agent.mcp_servers || [])
     .map(id => McpServerDB.findById(id))
-    .filter((s): s is NonNullable<typeof s> => s !== null)
-    .map(s => {
-      // For stdio-based servers (npm, github, custom with command), pass command config
-      // so the agent container can spawn the process itself
-      if (s.command) {
-        // Parse command if it contains the executable + args as a string
-        const cmdParts = s.command.split(/\s+/);
-        const baseCommand = cmdParts;
-        const extraArgs = s.args ? s.args.split(/\s+/) : [];
-        return {
-          name: s.name,
-          type: "stdio" as const,
-          command: [...baseCommand, ...extraArgs],
-          env: s.env || {},
-          enabled: true,
-        };
-      }
-      // For HTTP-based servers, require them to be running in apteva
-      if (s.status !== "running") {
-        return null;
-      }
-      return {
-        name: s.name,
-        type: "http" as const,
-        url: `http://localhost:${s.port}`,
-        headers: {},
-        enabled: true,
-      };
-    })
-    .filter((s): s is NonNullable<typeof s> => s !== null);
+    .filter((s): s is NonNullable<typeof s> => s !== null && s.status === "running" && s.port)
+    .map(s => ({
+      name: s.name,
+      type: "http" as const,
+      url: `http://localhost:${s.port}/mcp`,
+      headers: {},
+      enabled: true,
+    }));
 
   return {
     id: agent.id,
@@ -117,6 +97,7 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
         enabled: true,
         max_concurrent: 10,
       },
+      tools: [], // Clear any old tool whitelist - agent uses all registered tools
     },
     tasks: {
       enabled: features.tasks,
@@ -177,6 +158,13 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
       auto_cleanup: true,
       retention_days: 7,
     },
+    telemetry: {
+      enabled: true,
+      endpoint: `http://localhost:${process.env.PORT || 4280}/api/telemetry`,
+      batch_size: 10,
+      flush_interval: 30,
+      categories: [], // Empty = all categories
+    },
   };
 }
 
@@ -199,8 +187,127 @@ async function pushConfigToAgent(port: number, config: any): Promise<{ success: 
   }
 }
 
+// Exported helper to start an agent process (used by API route and auto-restart)
+export async function startAgentProcess(
+  agent: Agent,
+  options: { silent?: boolean } = {}
+): Promise<{ success: boolean; port?: number; error?: string }> {
+  const { silent = false } = options;
+
+  // Check if binary exists
+  if (!binaryExists(BIN_DIR)) {
+    return { success: false, error: "Agent binary not available" };
+  }
+
+  // Check if already running
+  if (agentProcesses.has(agent.id)) {
+    return { success: false, error: "Agent already running" };
+  }
+
+  // Get the API key for the agent's provider
+  const providerKey = ProviderKeys.getDecrypted(agent.provider);
+  if (!providerKey) {
+    return { success: false, error: `No API key for provider: ${agent.provider}` };
+  }
+
+  // Get provider config for env var name
+  const providerConfig = PROVIDERS[agent.provider as ProviderId];
+  if (!providerConfig) {
+    return { success: false, error: `Unknown provider: ${agent.provider}` };
+  }
+
+  // Assign port
+  const port = getNextPort();
+
+  try {
+    // Create data directory for this agent
+    const agentDataDir = join(AGENTS_DATA_DIR, agent.id);
+    if (!existsSync(agentDataDir)) {
+      mkdirSync(agentDataDir, { recursive: true });
+    }
+
+    if (!silent) {
+      console.log(`Starting agent ${agent.name} on port ${port}...`);
+      console.log(`  Provider: ${agent.provider}`);
+      console.log(`  Data dir: ${agentDataDir}`);
+    }
+
+    // Build environment with provider key
+    const env: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      PORT: String(port),
+      DATA_DIR: agentDataDir,
+      [providerConfig.envVar]: providerKey,
+    };
+
+    const proc = spawn({
+      cmd: [BINARY_PATH],
+      env,
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+
+    agentProcesses.set(agent.id, proc);
+
+    // Wait for agent to be healthy
+    if (!silent) {
+      console.log(`  Waiting for agent to be ready...`);
+    }
+    const isHealthy = await waitForAgentHealth(port);
+    if (!isHealthy) {
+      if (!silent) {
+        console.error(`  Agent failed to start (health check timeout)`);
+      }
+      proc.kill();
+      agentProcesses.delete(agent.id);
+      return { success: false, error: "Health check timeout" };
+    }
+
+    // Push configuration to the agent
+    if (!silent) {
+      console.log(`  Pushing configuration...`);
+    }
+    const config = buildAgentConfig(agent, providerKey);
+    const configResult = await pushConfigToAgent(port, config);
+    if (!configResult.success) {
+      if (!silent) {
+        console.error(`  Failed to configure agent: ${configResult.error}`);
+      }
+      // Agent is running but not configured - still usable but log warning
+    } else if (!silent) {
+      console.log(`  Configuration applied successfully`);
+    }
+
+    // Update status in database
+    AgentDB.setStatus(agent.id, "running", port);
+
+    if (!silent) {
+      console.log(`Agent ${agent.name} started on port ${port} (pid: ${proc.pid})`);
+    }
+
+    return { success: true, port };
+  } catch (err) {
+    if (!silent) {
+      console.error(`Failed to start agent: ${err}`);
+    }
+    return { success: false, error: String(err) };
+  }
+}
+
 // Transform DB agent to API response format (camelCase for frontend compatibility)
 function toApiAgent(agent: Agent) {
+  // Look up MCP server details
+  const mcpServerDetails = (agent.mcp_servers || [])
+    .map(id => McpServerDB.findById(id))
+    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .map(s => ({
+      id: s.id,
+      name: s.name,
+      type: s.type,
+      status: s.status,
+      port: s.port,
+    }));
+
   return {
     id: agent.id,
     name: agent.name,
@@ -210,7 +317,8 @@ function toApiAgent(agent: Agent) {
     status: agent.status,
     port: agent.port,
     features: agent.features,
-    mcpServers: agent.mcp_servers,
+    mcpServers: agent.mcp_servers, // Keep IDs for backwards compatibility
+    mcpServerDetails, // Include full details
     createdAt: agent.created_at,
     updatedAt: agent.updated_at,
   };
@@ -329,90 +437,13 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       return json({ error: "Agent not found" }, 404);
     }
 
-    // Check if binary exists
-    if (!binaryExists(BIN_DIR)) {
-      return json({ error: "Agent binary not available. The binary will be downloaded automatically when available, or you can set AGENT_BINARY_PATH environment variable." }, 400);
+    const result = await startAgentProcess(agent);
+    if (!result.success) {
+      return json({ error: result.error }, 400);
     }
 
-    // Check if already running
-    if (agentProcesses.has(agent.id)) {
-      return json({ error: "Agent already running" }, 400);
-    }
-
-    // Get the API key for the agent's provider
-    const providerKey = ProviderKeys.getDecrypted(agent.provider);
-    if (!providerKey) {
-      return json({ error: `No API key configured for provider: ${agent.provider}. Please add your API key in Settings.` }, 400);
-    }
-
-    // Get provider config for env var name
-    const providerConfig = PROVIDERS[agent.provider as ProviderId];
-    if (!providerConfig) {
-      return json({ error: `Unknown provider: ${agent.provider}` }, 400);
-    }
-
-    // Assign port
-    const port = getNextPort();
-
-    // Spawn the agent binary
-    try {
-      // Create data directory for this agent
-      const agentDataDir = join(AGENTS_DATA_DIR, agent.id);
-      if (!existsSync(agentDataDir)) {
-        mkdirSync(agentDataDir, { recursive: true });
-      }
-
-      console.log(`Starting agent ${agent.name} on port ${port}...`);
-      console.log(`  Provider: ${agent.provider}`);
-      console.log(`  Data dir: ${agentDataDir}`);
-
-      // Build environment with provider key
-      const env: Record<string, string> = {
-        ...process.env as Record<string, string>,
-        PORT: String(port),
-        DATA_DIR: agentDataDir,
-        [providerConfig.envVar]: providerKey,
-      };
-
-      const proc = spawn({
-        cmd: [BINARY_PATH],
-        env,
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-
-      agentProcesses.set(agent.id, proc);
-
-      // Wait for agent to be healthy
-      console.log(`  Waiting for agent to be ready...`);
-      const isHealthy = await waitForAgentHealth(port);
-      if (!isHealthy) {
-        console.error(`  Agent failed to start (health check timeout)`);
-        proc.kill();
-        agentProcesses.delete(agent.id);
-        return json({ error: "Agent failed to start (health check timeout)" }, 500);
-      }
-
-      // Push configuration to the agent
-      console.log(`  Pushing configuration...`);
-      const config = buildAgentConfig(agent, providerKey);
-      const configResult = await pushConfigToAgent(port, config);
-      if (!configResult.success) {
-        console.error(`  Failed to configure agent: ${configResult.error}`);
-        // Agent is running but not configured - still usable but log warning
-      } else {
-        console.log(`  Configuration applied successfully`);
-      }
-
-      // Update status in database
-      const updated = AgentDB.setStatus(agent.id, "running", port);
-
-      console.log(`Agent ${agent.name} started on port ${port} (pid: ${proc.pid})`);
-      return json({ agent: updated ? toApiAgent(updated) : null, message: `Agent started on port ${port}` });
-    } catch (err) {
-      console.error(`Failed to start agent: ${err}`);
-      return json({ error: `Failed to start agent: ${err}` }, 500);
-    }
+    const updated = AgentDB.findById(agent.id);
+    return json({ agent: updated ? toApiAgent(updated) : null, message: `Agent started on port ${result.port}` });
   }
 
   // POST /api/agents/:id/stop - Stop an agent
@@ -785,6 +816,41 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
     return json({ servers });
   }
 
+  // GET /api/mcp/registry - Search MCP registry for available servers
+  if (path === "/api/mcp/registry" && method === "GET") {
+    const url = new URL(req.url);
+    const search = url.searchParams.get("search") || "";
+    const limit = url.searchParams.get("limit") || "20";
+
+    try {
+      const registryUrl = `https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(search)}&limit=${limit}`;
+      const res = await fetch(registryUrl);
+      if (!res.ok) {
+        return json({ error: "Failed to fetch registry" }, 500);
+      }
+      const data = await res.json();
+
+      // Transform to simpler format
+      const servers = (data.servers || []).map((item: any) => {
+        const s = item.server;
+        const pkg = s.packages?.find((p: any) => p.registryType === "npm");
+        return {
+          name: s.name,
+          description: s.description,
+          version: s.version,
+          repository: s.repository?.url,
+          npmPackage: pkg?.identifier,
+          transport: pkg?.transport?.type || "stdio",
+          envVars: pkg?.environmentVariables || [],
+        };
+      }).filter((s: any) => s.npmPackage); // Only show npm packages for now
+
+      return json({ servers });
+    } catch (e) {
+      return json({ error: "Failed to search registry" }, 500);
+    }
+  }
+
   // POST /api/mcp/servers - Create/install a new MCP server
   if (path === "/api/mcp/servers" && method === "POST") {
     try {
@@ -876,39 +942,57 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
     }
 
     // Determine command to run
+    // Helper to substitute $ENV_VAR references with actual values
+    const substituteEnvVars = (str: string, env: Record<string, string>): string => {
+      return str.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName) => {
+        return env[varName] || '';
+      });
+    };
+
     let cmd: string[];
+    const serverEnv = server.env || {};
+
     if (server.command) {
-      // Custom command
+      // Custom command - substitute env vars in args
       cmd = server.command.split(" ");
       if (server.args) {
-        cmd.push(...server.args.split(" "));
+        const substitutedArgs = substituteEnvVars(server.args, serverEnv);
+        cmd.push(...substitutedArgs.split(" "));
       }
     } else if (server.package) {
       // npm package - use npx
       cmd = ["npx", "-y", server.package];
       if (server.args) {
-        cmd.push(...server.args.split(" "));
+        const substitutedArgs = substituteEnvVars(server.args, serverEnv);
+        cmd.push(...substitutedArgs.split(" "));
       }
     } else {
       return json({ error: "No command or package specified" }, 400);
     }
 
+    // Get a port for the HTTP proxy
+    const port = getNextPort();
+
     console.log(`Starting MCP server ${server.name}...`);
     console.log(`  Command: ${cmd.join(" ")}`);
+    console.log(`  HTTP proxy: http://localhost:${port}/mcp`);
 
-    // Start the MCP process with stdio pipes
-    const result = await startMcpProcess(server.id, cmd, server.env || {});
+    // Start the MCP process with stdio pipes + HTTP proxy
+    const result = await startMcpProcess(server.id, cmd, server.env || {}, port);
 
     if (!result.success) {
       console.error(`Failed to start MCP server: ${result.error}`);
       return json({ error: `Failed to start: ${result.error}` }, 500);
     }
 
-    // Update status (port is now just for display, stdio is used for communication)
-    const port = getNextPort(); // Just for identification
+    // Update status with the HTTP proxy port
     const updated = McpServerDB.setStatus(server.id, "running", port);
 
-    return json({ server: updated, message: "MCP server started" });
+    return json({
+      server: updated,
+      message: "MCP server started",
+      proxyUrl: `http://localhost:${port}/mcp`,
+    });
   }
 
   // POST /api/mcp/servers/:id/stop - Stop an MCP server
@@ -981,6 +1065,80 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       console.error(`Failed to call MCP tool: ${err}`);
       return json({ error: `Failed to call tool: ${err}` }, 500);
     }
+  }
+
+  // ============ Telemetry Endpoints ============
+
+  // POST /api/telemetry - Receive telemetry events from agents
+  if (path === "/api/telemetry" && method === "POST") {
+    try {
+      const body = await req.json() as {
+        agent_id: string;
+        sent_at: string;
+        events: Array<{
+          id: string;
+          timestamp: string;
+          category: string;
+          type: string;
+          level: string;
+          trace_id?: string;
+          span_id?: string;
+          thread_id?: string;
+          data?: Record<string, unknown>;
+          metadata?: Record<string, unknown>;
+          duration_ms?: number;
+          error?: string;
+        }>;
+      };
+
+      if (!body.agent_id || !body.events) {
+        return json({ error: "agent_id and events are required" }, 400);
+      }
+
+      // Filter out debug events - too noisy
+      const filteredEvents = body.events.filter(e => e.level !== "debug");
+      const inserted = TelemetryDB.insertBatch(body.agent_id, filteredEvents);
+      return json({ received: body.events.length, inserted });
+    } catch (e) {
+      console.error("Telemetry error:", e);
+      return json({ error: "Invalid telemetry payload" }, 400);
+    }
+  }
+
+  // GET /api/telemetry/events - Query telemetry events
+  if (path === "/api/telemetry/events" && method === "GET") {
+    const url = new URL(req.url);
+    const events = TelemetryDB.query({
+      agent_id: url.searchParams.get("agent_id") || undefined,
+      category: url.searchParams.get("category") || undefined,
+      level: url.searchParams.get("level") || undefined,
+      trace_id: url.searchParams.get("trace_id") || undefined,
+      since: url.searchParams.get("since") || undefined,
+      until: url.searchParams.get("until") || undefined,
+      limit: parseInt(url.searchParams.get("limit") || "100"),
+      offset: parseInt(url.searchParams.get("offset") || "0"),
+    });
+    return json({ events });
+  }
+
+  // GET /api/telemetry/usage - Get usage statistics
+  if (path === "/api/telemetry/usage" && method === "GET") {
+    const url = new URL(req.url);
+    const usage = TelemetryDB.getUsage({
+      agent_id: url.searchParams.get("agent_id") || undefined,
+      since: url.searchParams.get("since") || undefined,
+      until: url.searchParams.get("until") || undefined,
+      group_by: (url.searchParams.get("group_by") as "agent" | "day") || undefined,
+    });
+    return json({ usage });
+  }
+
+  // GET /api/telemetry/stats - Get summary statistics
+  if (path === "/api/telemetry/stats" && method === "GET") {
+    const url = new URL(req.url);
+    const agentId = url.searchParams.get("agent_id") || undefined;
+    const stats = TelemetryDB.getStats(agentId);
+    return json({ stats });
   }
 
   return json({ error: "Not found" }, 404);

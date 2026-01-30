@@ -13,4 +13,5 @@ export {
   OperatorIcon,
   McpIcon,
   RealtimeIcon,
+  TelemetryIcon,
 } from "./Icons";

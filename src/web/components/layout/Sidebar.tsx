@@ -1,5 +1,5 @@
 import React from "react";
-import { DashboardIcon, AgentsIcon, TasksIcon, McpIcon, SettingsIcon } from "../common/Icons";
+import { DashboardIcon, AgentsIcon, TasksIcon, McpIcon, TelemetryIcon, SettingsIcon } from "../common/Icons";
 import type { Route } from "../../types";
 
 interface SidebarProps {
@@ -38,6 +38,12 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate }: SidebarPro
           label="MCP"
           active={route === "mcp"}
           onClick={() => onNavigate("mcp")}
+        />
+        <NavButton
+          icon={<TelemetryIcon />}
+          label="Telemetry"
+          active={route === "telemetry"}
+          onClick={() => onNavigate("telemetry")}
         />
         <NavButton
           icon={<SettingsIcon />}

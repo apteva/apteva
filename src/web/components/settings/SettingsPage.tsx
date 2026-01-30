@@ -271,7 +271,7 @@ function UpdatesSettings() {
       if (!data.success) {
         setError(data.error || "Update failed");
       } else {
-        setUpdateSuccess(`Agent updated to v${data.version}! Restart apteva to use it.`);
+        setUpdateSuccess(`Agent updated to v${data.version}. New agents will use this version.`);
         await checkForUpdates();
       }
     } catch (e) {
@@ -397,7 +397,7 @@ function UpdatesSettings() {
             )}
           </div>
 
-          {!hasAnyUpdate && (
+          {!hasAnyUpdate && !updateSuccess && (
             <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 flex items-center gap-2 text-green-400">
               <CheckIcon className="w-5 h-5" />
               Everything is up to date!

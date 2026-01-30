@@ -4,7 +4,8 @@ import { serveStatic } from "./routes/static";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
-import { initDatabase, AgentDB, ProviderKeysDB } from "./db";
+import { initDatabase, AgentDB, ProviderKeysDB, McpServerDB, type McpServer, type Agent } from "./db";
+import { startMcpProcess } from "./mcp-client";
 import {
   ensureBinary,
   getBinaryPath,
@@ -46,8 +47,13 @@ initDatabase(DATA_DIR);
 // Initialize version tracking
 initVersionTracking(DATA_DIR);
 
-// Reset all agents to stopped on startup (processes don't survive restart)
+// Get agents and MCP servers that were running before restart (for auto-restart)
+const agentsToRestart = AgentDB.findRunning();
+const mcpServersToRestart = McpServerDB.findRunning();
+
+// Reset all agents and MCP servers to stopped on startup (processes don't survive restart)
 AgentDB.resetAllStatus();
+McpServerDB.resetAllStatus();
 
 // In-memory store for running agent processes only
 export const agentProcesses: Map<string, Subprocess> = new Map();
@@ -183,5 +189,83 @@ console.log(`
   ${c.gray}Open${c.reset}      ${c.blue}${c.bold}${link(serverUrl)}${c.reset}
             ${c.darkGray}Click link or Cmd/Ctrl+C to copy${c.reset}
 `);
+
+// Auto-restart agents and MCP servers that were running before restart
+const hasRestarts = agentsToRestart.length > 0 || mcpServersToRestart.length > 0;
+
+if (hasRestarts) {
+  // Restart in background to not block startup
+  (async () => {
+    // Import startAgentProcess dynamically to avoid circular dependency
+    const { startAgentProcess } = await import("./routes/api");
+
+    // Restart MCP servers first (agents may depend on them)
+    if (mcpServersToRestart.length > 0) {
+      console.log(`  ${c.darkGray}MCP${c.reset}       ${c.gray}Restarting ${mcpServersToRestart.length} server(s)...${c.reset}`);
+
+      for (const server of mcpServersToRestart) {
+        try {
+          // Helper to substitute $ENV_VAR references with actual values
+          const substituteEnvVars = (str: string, env: Record<string, string>): string => {
+            return str.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName) => {
+              return env[varName] || '';
+            });
+          };
+
+          let cmd: string[];
+          const serverEnv = server.env || {};
+
+          if (server.command) {
+            cmd = server.command.split(" ");
+            if (server.args) {
+              const substitutedArgs = substituteEnvVars(server.args, serverEnv);
+              cmd.push(...substitutedArgs.split(" "));
+            }
+          } else if (server.package) {
+            cmd = ["npx", "-y", server.package];
+            if (server.args) {
+              const substitutedArgs = substituteEnvVars(server.args, serverEnv);
+              cmd.push(...substitutedArgs.split(" "));
+            }
+          } else {
+            console.log(`  ${c.gray}  ✗ ${server.name}: no command or package${c.reset}`);
+            continue;
+          }
+
+          const port = getNextPort();
+          const result = await startMcpProcess(server.id, cmd, serverEnv, port);
+
+          if (result.success) {
+            McpServerDB.setStatus(server.id, "running", port);
+            console.log(`  ${c.gray}  ✓ ${server.name} on :${port}${c.reset}`);
+          } else {
+            console.log(`  ${c.gray}  ✗ ${server.name}: ${result.error}${c.reset}`);
+          }
+        } catch (err) {
+          console.log(`  ${c.gray}  ✗ ${server.name}: ${err}${c.reset}`);
+        }
+      }
+    }
+
+    // Then restart agents
+    if (agentsToRestart.length > 0) {
+      console.log(`  ${c.darkGray}Agents${c.reset}    ${c.gray}Restarting ${agentsToRestart.length} agent(s)...${c.reset}`);
+
+      for (const agent of agentsToRestart) {
+        try {
+          const result = await startAgentProcess(agent, { silent: true });
+
+          if (result.success) {
+            console.log(`  ${c.gray}  ✓ ${agent.name} on :${result.port}${c.reset}`);
+          } else {
+            console.log(`  ${c.gray}  ✗ ${agent.name}: ${result.error}${c.reset}`);
+          }
+        } catch (err) {
+          console.log(`  ${c.gray}  ✗ ${agent.name}: ${err}${c.reset}`);
+        }
+      }
+    }
+  })();
+}
 
 // Note: Don't use "export default server" - it causes Bun to print "Started server" message

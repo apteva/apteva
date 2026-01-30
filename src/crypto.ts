@@ -159,3 +159,47 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
 
   return { valid: true };
 }
+
+/**
+ * Encrypt an object (for env vars / credentials)
+ * Returns encrypted JSON string
+ */
+export function encryptObject(obj: Record<string, string>): string {
+  if (!obj || Object.keys(obj).length === 0) {
+    return "";
+  }
+  return encrypt(JSON.stringify(obj));
+}
+
+/**
+ * Decrypt an object (for env vars / credentials)
+ * Handles both encrypted and legacy unencrypted JSON
+ */
+export function decryptObject(data: string): Record<string, string> {
+  if (!data || data === "{}") {
+    return {};
+  }
+
+  // Check if it looks like encrypted data (base64) or plain JSON
+  if (data.startsWith("{")) {
+    // Plain JSON (legacy unencrypted)
+    try {
+      return JSON.parse(data);
+    } catch {
+      return {};
+    }
+  }
+
+  // Try to decrypt
+  try {
+    const decrypted = decrypt(data);
+    return JSON.parse(decrypted);
+  } catch {
+    // Decryption failed, try parsing as JSON (migration case)
+    try {
+      return JSON.parse(data);
+    } catch {
+      return {};
+    }
+  }
+}

@@ -11,3 +11,4 @@ export { AgentCard, CreateAgentModal, AgentPanel, AgentsView } from "./agents";
 export { Dashboard } from "./dashboard";
 export { TasksPage } from "./tasks";
 export { McpPage } from "./mcp";
+export { TelemetryPage } from "./telemetry/TelemetryPage";

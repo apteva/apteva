@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { join } from "path";
 import { mkdirSync, existsSync } from "fs";
+import { encryptObject, decryptObject } from "./crypto";
 
 // Types
 export interface AgentFeatures {
@@ -245,6 +246,32 @@ function runMigrations() {
         ALTER TABLE agents ADD COLUMN mcp_servers TEXT DEFAULT '[]';
       `,
     },
+    {
+      name: "009_create_telemetry",
+      sql: `
+        CREATE TABLE IF NOT EXISTS telemetry_events (
+          id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL,
+          timestamp TEXT NOT NULL,
+          category TEXT NOT NULL,
+          type TEXT NOT NULL,
+          level TEXT NOT NULL,
+          trace_id TEXT,
+          span_id TEXT,
+          thread_id TEXT,
+          data TEXT,
+          metadata TEXT,
+          duration_ms INTEGER,
+          error TEXT,
+          received_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_telemetry_agent ON telemetry_events(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_telemetry_time ON telemetry_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_telemetry_category ON telemetry_events(category);
+        CREATE INDEX IF NOT EXISTS idx_telemetry_level ON telemetry_events(level);
+        CREATE INDEX IF NOT EXISTS idx_telemetry_trace ON telemetry_events(trace_id);
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -288,6 +315,12 @@ export const AgentDB = {
   // Get all agents
   findAll(): Agent[] {
     const rows = db.query("SELECT * FROM agents ORDER BY created_at DESC").all() as AgentRow[];
+    return rows.map(rowToAgent);
+  },
+
+  // Get running agents (for auto-restart)
+  findRunning(): Agent[] {
+    const rows = db.query("SELECT * FROM agents WHERE status = 'running'").all() as AgentRow[];
     return rows.map(rowToAgent);
   },
 
@@ -550,12 +583,13 @@ function rowToProviderKey(row: ProviderKeyRow): ProviderKey {
 export const McpServerDB = {
   create(server: Omit<McpServer, "created_at" | "status" | "port">): McpServer {
     const now = new Date().toISOString();
-    const envJson = JSON.stringify(server.env || {});
+    // Encrypt env vars (credentials) before storing
+    const envEncrypted = encryptObject(server.env || {});
     const stmt = db.prepare(`
       INSERT INTO mcp_servers (id, name, type, package, command, args, env, status, port, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
     `);
-    stmt.run(server.id, server.name, server.type, server.package, server.command, server.args, envJson, now);
+    stmt.run(server.id, server.name, server.type, server.package, server.command, server.args, envEncrypted, now);
     return this.findById(server.id)!;
   },
 
@@ -603,7 +637,8 @@ export const McpServerDB = {
     }
     if (updates.env !== undefined) {
       fields.push("env = ?");
-      values.push(JSON.stringify(updates.env));
+      // Encrypt env vars (credentials) before storing
+      values.push(encryptObject(updates.env));
     }
     if (updates.port !== undefined) {
       fields.push("port = ?");
@@ -643,14 +678,8 @@ export const McpServerDB = {
 
 // Helper to convert DB row to McpServer type
 function rowToMcpServer(row: McpServerRow): McpServer {
-  let env: Record<string, string> = {};
-  if (row.env) {
-    try {
-      env = JSON.parse(row.env);
-    } catch {
-      // Use empty object if parsing fails
-    }
-  }
+  // Decrypt env vars (handles both encrypted and legacy unencrypted data)
+  const env = row.env ? decryptObject(row.env) : {};
   return {
     id: row.id,
     name: row.name,
@@ -662,6 +691,281 @@ function rowToMcpServer(row: McpServerRow): McpServer {
     port: row.port,
     status: row.status as "stopped" | "running",
     created_at: row.created_at,
+  };
+}
+
+// Telemetry Event types
+export interface TelemetryEvent {
+  id: string;
+  agent_id: string;
+  timestamp: string;
+  category: string;
+  type: string;
+  level: string;
+  trace_id: string | null;
+  span_id: string | null;
+  thread_id: string | null;
+  data: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+  duration_ms: number | null;
+  error: string | null;
+  received_at: string;
+}
+
+interface TelemetryEventRow {
+  id: string;
+  agent_id: string;
+  timestamp: string;
+  category: string;
+  type: string;
+  level: string;
+  trace_id: string | null;
+  span_id: string | null;
+  thread_id: string | null;
+  data: string | null;
+  metadata: string | null;
+  duration_ms: number | null;
+  error: string | null;
+  received_at: string;
+}
+
+// Telemetry operations
+export const TelemetryDB = {
+  // Insert batch of events
+  insertBatch(agentId: string, events: Array<{
+    id: string;
+    timestamp: string;
+    category: string;
+    type: string;
+    level: string;
+    trace_id?: string;
+    span_id?: string;
+    thread_id?: string;
+    data?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    duration_ms?: number;
+    error?: string;
+  }>): number {
+    const now = new Date().toISOString();
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO telemetry_events
+      (id, agent_id, timestamp, category, type, level, trace_id, span_id, thread_id, data, metadata, duration_ms, error, received_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    let inserted = 0;
+    for (const event of events) {
+      const result = stmt.run(
+        event.id,
+        agentId,
+        event.timestamp,
+        event.category,
+        event.type,
+        event.level,
+        event.trace_id || null,
+        event.span_id || null,
+        event.thread_id || null,
+        event.data ? JSON.stringify(event.data) : null,
+        event.metadata ? JSON.stringify(event.metadata) : null,
+        event.duration_ms || null,
+        event.error || null,
+        now
+      );
+      if (result.changes > 0) inserted++;
+    }
+    return inserted;
+  },
+
+  // Query events with filters
+  query(filters: {
+    agent_id?: string;
+    category?: string;
+    level?: string;
+    trace_id?: string;
+    since?: string;
+    until?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): TelemetryEvent[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filters.agent_id) {
+      conditions.push("agent_id = ?");
+      params.push(filters.agent_id);
+    }
+    if (filters.category) {
+      conditions.push("category = ?");
+      params.push(filters.category);
+    }
+    if (filters.level) {
+      conditions.push("level = ?");
+      params.push(filters.level);
+    }
+    if (filters.trace_id) {
+      conditions.push("trace_id = ?");
+      params.push(filters.trace_id);
+    }
+    if (filters.since) {
+      conditions.push("timestamp >= ?");
+      params.push(filters.since);
+    }
+    if (filters.until) {
+      conditions.push("timestamp <= ?");
+      params.push(filters.until);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const limit = filters.limit || 100;
+    const offset = filters.offset || 0;
+
+    const sql = `SELECT * FROM telemetry_events ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    const rows = db.query(sql).all(...params) as TelemetryEventRow[];
+    return rows.map(rowToTelemetryEvent);
+  },
+
+  // Get usage stats
+  getUsage(filters: {
+    agent_id?: string;
+    since?: string;
+    until?: string;
+    group_by?: "agent" | "day";
+  } = {}): Array<{
+    agent_id?: string;
+    date?: string;
+    input_tokens: number;
+    output_tokens: number;
+    llm_calls: number;
+    tool_calls: number;
+    errors: number;
+  }> {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filters.agent_id) {
+      conditions.push("agent_id = ?");
+      params.push(filters.agent_id);
+    }
+    if (filters.since) {
+      conditions.push("timestamp >= ?");
+      params.push(filters.since);
+    }
+    if (filters.until) {
+      conditions.push("timestamp <= ?");
+      params.push(filters.until);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    let groupBy = "";
+    let selectFields = "";
+
+    if (filters.group_by === "day") {
+      groupBy = "GROUP BY date(timestamp)";
+      selectFields = "date(timestamp) as date,";
+    } else if (filters.group_by === "agent") {
+      groupBy = "GROUP BY agent_id";
+      selectFields = "agent_id,";
+    }
+
+    const sql = `
+      SELECT
+        ${selectFields}
+        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.input_tokens') ELSE 0 END), 0) as input_tokens,
+        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.output_tokens') ELSE 0 END), 0) as output_tokens,
+        COALESCE(SUM(CASE WHEN category = 'LLM' THEN 1 ELSE 0 END), 0) as llm_calls,
+        COALESCE(SUM(CASE WHEN category = 'TOOL' THEN 1 ELSE 0 END), 0) as tool_calls,
+        COALESCE(SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END), 0) as errors
+      FROM telemetry_events
+      ${where}
+      ${groupBy}
+    `;
+
+    return db.query(sql).all(...params) as Array<{
+      agent_id?: string;
+      date?: string;
+      input_tokens: number;
+      output_tokens: number;
+      llm_calls: number;
+      tool_calls: number;
+      errors: number;
+    }>;
+  },
+
+  // Get summary stats
+  getStats(agentId?: string): {
+    total_events: number;
+    total_llm_calls: number;
+    total_tool_calls: number;
+    total_errors: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+  } {
+    const where = agentId ? "WHERE agent_id = ?" : "";
+    const params = agentId ? [agentId] : [];
+
+    const sql = `
+      SELECT
+        COUNT(*) as total_events,
+        COALESCE(SUM(CASE WHEN category = 'LLM' THEN 1 ELSE 0 END), 0) as total_llm_calls,
+        COALESCE(SUM(CASE WHEN category = 'TOOL' THEN 1 ELSE 0 END), 0) as total_tool_calls,
+        COALESCE(SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END), 0) as total_errors,
+        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.input_tokens') ELSE 0 END), 0) as total_input_tokens,
+        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.output_tokens') ELSE 0 END), 0) as total_output_tokens
+      FROM telemetry_events
+      ${where}
+    `;
+
+    return db.query(sql).get(...params) as {
+      total_events: number;
+      total_llm_calls: number;
+      total_tool_calls: number;
+      total_errors: number;
+      total_input_tokens: number;
+      total_output_tokens: number;
+    };
+  },
+
+  // Delete old events (retention)
+  deleteOlderThan(days: number): number {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const result = db.run(
+      "DELETE FROM telemetry_events WHERE timestamp < ?",
+      [cutoff.toISOString()]
+    );
+    return result.changes;
+  },
+
+  // Count events
+  count(agentId?: string): number {
+    if (agentId) {
+      const row = db.query("SELECT COUNT(*) as count FROM telemetry_events WHERE agent_id = ?").get(agentId) as { count: number };
+      return row.count;
+    }
+    const row = db.query("SELECT COUNT(*) as count FROM telemetry_events").get() as { count: number };
+    return row.count;
+  },
+};
+
+function rowToTelemetryEvent(row: TelemetryEventRow): TelemetryEvent {
+  return {
+    id: row.id,
+    agent_id: row.agent_id,
+    timestamp: row.timestamp,
+    category: row.category,
+    type: row.type,
+    level: row.level,
+    trace_id: row.trace_id,
+    span_id: row.span_id,
+    thread_id: row.thread_id,
+    data: row.data ? JSON.parse(row.data) : null,
+    metadata: row.metadata ? JSON.parse(row.metadata) : null,
+    duration_ms: row.duration_ms,
+    error: row.error,
+    received_at: row.received_at,
   };
 }
 

@@ -1,7 +1,8 @@
 // MCP Client for communicating with MCP servers
 // Supports both stdio (subprocess) and HTTP transports
+// Includes HTTP proxy to expose stdio servers over HTTP for agents
 
-import { spawn, type Subprocess } from "bun";
+import { spawn, serve, type Subprocess, type Server } from "bun";
 
 export interface McpTool {
   name: string;
@@ -68,10 +69,33 @@ interface McpProcess {
   serverInfo: { name: string; version: string } | null;
   requestId: number;
   buffer: string;
+  httpServer?: Server;  // HTTP proxy server
+  httpPort?: number;    // Port the HTTP proxy is running on
 }
 
 // Store running MCP processes
 const mcpProcesses = new Map<string, McpProcess>();
+
+// Mutex for serializing stdio requests (one at a time per process)
+const requestLocks = new Map<string, Promise<void>>();
+
+async function withLock<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+  // Wait for any pending request to complete
+  while (requestLocks.has(serverId)) {
+    await requestLocks.get(serverId);
+  }
+
+  let resolve: () => void;
+  const lockPromise = new Promise<void>(r => { resolve = r; });
+  requestLocks.set(serverId, lockPromise);
+
+  try {
+    return await fn();
+  } finally {
+    requestLocks.delete(serverId);
+    resolve!();
+  }
+}
 
 export function getMcpProcess(serverId: string): McpProcess | undefined {
   return mcpProcesses.get(serverId);
@@ -80,8 +104,9 @@ export function getMcpProcess(serverId: string): McpProcess | undefined {
 export async function startMcpProcess(
   serverId: string,
   command: string[],
-  env: Record<string, string> = {}
-): Promise<{ success: boolean; error?: string }> {
+  env: Record<string, string> = {},
+  httpPort?: number
+): Promise<{ success: boolean; error?: string; port?: number }> {
   // Stop existing process if any
   stopMcpProcess(serverId);
 
@@ -94,13 +119,15 @@ export async function startMcpProcess(
       stderr: "pipe",
     });
 
-    mcpProcesses.set(serverId, {
+    const entry: McpProcess = {
       proc,
       initialized: false,
       serverInfo: null,
       requestId: 0,
       buffer: "",
-    });
+    };
+
+    mcpProcesses.set(serverId, entry);
 
     // Give it a moment to start
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -112,15 +139,124 @@ export async function startMcpProcess(
       return { success: false, error: `Process exited: ${stderr || "unknown error"}` };
     }
 
-    return { success: true };
+    // Start HTTP proxy server if port specified
+    if (httpPort) {
+      try {
+        const httpServer = startHttpProxy(serverId, httpPort);
+        entry.httpServer = httpServer;
+        entry.httpPort = httpPort;
+        console.log(`[MCP] HTTP proxy for ${serverId} started on port ${httpPort}`);
+      } catch (err) {
+        // HTTP proxy failed, but stdio process is running - still usable
+        console.error(`[MCP] Failed to start HTTP proxy for ${serverId}:`, err);
+      }
+    }
+
+    return { success: true, port: httpPort };
   } catch (err) {
     return { success: false, error: String(err) };
   }
 }
 
+// Start HTTP proxy server that forwards requests to stdio process
+function startHttpProxy(serverId: string, port: number): Server {
+  return serve({
+    port,
+    async fetch(req) {
+      const url = new URL(req.url);
+
+      // CORS headers
+      const corsHeaders = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Mcp-Session-Id",
+      };
+
+      // Handle CORS preflight
+      if (req.method === "OPTIONS") {
+        return new Response(null, { headers: corsHeaders });
+      }
+
+      // Only accept POST to /mcp
+      if (req.method !== "POST" || (url.pathname !== "/mcp" && url.pathname !== "/")) {
+        return new Response(JSON.stringify({ error: "Not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const body = await req.json() as JsonRpcRequest;
+
+        // Forward to stdio process with lock to serialize requests
+        const result = await withLock(serverId, async () => {
+          return await sendRequestRaw(serverId, body.method, body.params, body.id);
+        });
+
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } catch (err) {
+        const errorResponse: JsonRpcResponse = {
+          jsonrpc: "2.0",
+          id: 0,
+          error: {
+            code: -32603,
+            message: err instanceof Error ? err.message : String(err),
+          },
+        };
+        return new Response(JSON.stringify(errorResponse), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    },
+  });
+}
+
+// Raw request that returns full JSON-RPC response (for proxy use)
+async function sendRequestRaw(
+  serverId: string,
+  method: string,
+  params?: unknown,
+  requestId?: number
+): Promise<JsonRpcResponse> {
+  const entry = mcpProcesses.get(serverId);
+  if (!entry) {
+    throw new Error("MCP process not running");
+  }
+
+  const id = requestId ?? ++entry.requestId;
+  const request: JsonRpcRequest = {
+    jsonrpc: "2.0",
+    id,
+    method,
+    params,
+  };
+
+  const requestLine = JSON.stringify(request) + "\n";
+
+  // Write to stdin
+  entry.proc.stdin.write(requestLine);
+  entry.proc.stdin.flush();
+
+  // Read response from stdout with timeout
+  return await readJsonRpcResponse(entry, id, 30000);
+}
+
 export function stopMcpProcess(serverId: string): void {
   const entry = mcpProcesses.get(serverId);
   if (entry) {
+    // Stop HTTP proxy server first
+    if (entry.httpServer) {
+      try {
+        entry.httpServer.stop();
+        console.log(`[MCP] HTTP proxy for ${serverId} stopped`);
+      } catch {
+        // Ignore stop errors
+      }
+    }
+    // Kill the stdio process
     try {
       entry.proc.kill();
     } catch {
@@ -128,6 +264,15 @@ export function stopMcpProcess(serverId: string): void {
     }
     mcpProcesses.delete(serverId);
   }
+}
+
+// Get the HTTP proxy URL for an MCP server
+export function getMcpProxyUrl(serverId: string): string | null {
+  const entry = mcpProcesses.get(serverId);
+  if (entry?.httpPort) {
+    return `http://localhost:${entry.httpPort}/mcp`;
+  }
+  return null;
 }
 
 async function sendRequest(serverId: string, method: string, params?: unknown): Promise<unknown> {

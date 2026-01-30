@@ -18,6 +18,14 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   realtime: false,
 };
 
+export interface McpServerSummary {
+  id: string;
+  name: string;
+  type: string;
+  status: "stopped" | "running";
+  port: number | null;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -28,6 +36,7 @@ export interface Agent {
   port?: number;
   features: AgentFeatures;
   mcpServers: string[]; // Array of MCP server IDs
+  mcpServerDetails?: McpServerSummary[]; // Full details included from API
   createdAt: string;
 }
 
@@ -82,7 +91,7 @@ export interface OnboardingStatus {
   has_any_keys: boolean;
 }
 
-export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "settings";
+export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "telemetry" | "settings";
 
 export interface Task {
   id: string;
