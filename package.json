@@ -65,10 +65,10 @@
     "react-dom": "^18.2.0"
   },
   "optionalDependencies": {
-    "@apteva/agent-darwin-arm64": "^0.2.0",
-    "@apteva/agent-darwin-x64": "^0.2.0",
-    "@apteva/agent-linux-x64": "^0.2.0",
-    "@apteva/agent-linux-arm64": "^0.2.0",
-    "@apteva/agent-win32-x64": "^0.2.0"
+    "@apteva/agent-darwin-arm64": "^1.33.0",
+    "@apteva/agent-darwin-x64": "^1.33.0",
+    "@apteva/agent-linux-arm64": "^1.33.0",
+    "@apteva/agent-linux-x64": "^1.33.30",
+    "@apteva/agent-win32-x64": "^1.33.0"
   }
 }
