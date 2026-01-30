@@ -1,13 +1,16 @@
 import { spawn } from "bun";
 import { join } from "path";
+import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
 import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR } from "../server";
 import { AgentDB, generateId, type Agent } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import { binaryExists } from "../binary";
 
-// Data directory for agent instances
-const AGENTS_DATA_DIR = join(import.meta.dir, "../../data/agents");
+// Data directory for agent instances (in ~/.apteva/agents/)
+const AGENTS_DATA_DIR = process.env.DATA_DIR
+  ? join(process.env.DATA_DIR, "agents")
+  : join(homedir(), ".apteva", "agents");
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -172,8 +175,8 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       const proc = spawn({
         cmd: [BINARY_PATH],
         env,
-        stdout: "inherit",
-        stderr: "inherit",
+        stdout: "ignore",
+        stderr: "ignore",
       });
 
       agentProcesses.set(agent.id, proc);
@@ -369,11 +372,45 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       },
       binary: {
         available: binaryStatus.exists,
-        version: binaryStatus.version,
         platform: binaryStatus.platform,
         arch: binaryStatus.arch,
       }
     });
+  }
+
+  // GET /api/version - Get current and latest version
+  if (path === "/api/version" && method === "GET") {
+    try {
+      // Get current version from package.json
+      const pkg = await import("../../package.json");
+      const currentVersion = pkg.version;
+
+      // Check npm registry for latest version
+      let latestVersion = currentVersion;
+      let updateAvailable = false;
+
+      try {
+        const response = await fetch("https://registry.npmjs.org/apteva/latest", {
+          headers: { "Accept": "application/json" },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          latestVersion = data.version;
+          updateAvailable = latestVersion !== currentVersion;
+        }
+      } catch {
+        // Failed to check, assume current is latest
+      }
+
+      return json({
+        current: currentVersion,
+        latest: latestVersion,
+        updateAvailable,
+        updateCommand: "npm update -g apteva",
+      });
+    } catch {
+      return json({ error: "Failed to check version" }, 500);
+    }
   }
 
   return json({ error: "Not found" }, 404);

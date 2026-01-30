@@ -2,7 +2,7 @@ import { $ } from "bun";
 
 const outdir = "./dist";
 
-console.log("🔨 Building Apteva...\n");
+console.log("🔨 Building apteva...\n");
 
 // Clean dist folder
 await $`rm -rf ${outdir}`;
@@ -54,7 +54,7 @@ const html = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Apteva</title>
+  <title>apteva</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/apteva-kit.css">
 </head>

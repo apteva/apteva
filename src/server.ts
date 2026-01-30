@@ -2,11 +2,19 @@ import { type Server, type Subprocess } from "bun";
 import { handleApiRequest } from "./routes/api";
 import { serveStatic } from "./routes/static";
 import { join } from "path";
+import { homedir } from "os";
+import { mkdirSync, existsSync } from "fs";
 import { initDatabase, AgentDB, ProviderKeysDB } from "./db";
-import { ensureBinary, getBinaryPath, getBinaryStatus } from "./binary";
+import { ensureBinary, getBinaryPath, getBinaryStatus, getActualBinaryPath } from "./binary";
 
 const PORT = parseInt(process.env.PORT || "4280");
-const DATA_DIR = process.env.DATA_DIR || join(import.meta.dir, "../data");
+
+// Use ~/.apteva for persistent data (survives npm updates)
+const HOME_DATA_DIR = join(homedir(), ".apteva");
+if (!existsSync(HOME_DATA_DIR)) {
+  mkdirSync(HOME_DATA_DIR, { recursive: true });
+}
+const DATA_DIR = process.env.DATA_DIR || HOME_DATA_DIR;
 const BIN_DIR = join(import.meta.dir, "../bin");
 
 // Load .env file (silently)
@@ -31,8 +39,18 @@ AgentDB.resetAllStatus();
 // In-memory store for running agent processes only
 export const agentProcesses: Map<string, Subprocess> = new Map();
 
-// Binary path - can be overridden via environment variable
-export const BINARY_PATH = process.env.AGENT_BINARY_PATH || getBinaryPath(BIN_DIR);
+// Binary path - can be overridden via environment variable, or found from npm/downloaded
+export function getBinaryPathForAgent(): string {
+  // Environment override takes priority
+  if (process.env.AGENT_BINARY_PATH) {
+    return process.env.AGENT_BINARY_PATH;
+  }
+  // Otherwise use npm package or downloaded binary
+  return getActualBinaryPath(BIN_DIR) || getBinaryPath(BIN_DIR);
+}
+
+// Export for legacy compatibility
+export const BINARY_PATH = getBinaryPathForAgent();
 
 // Export binary status function for API
 export { getBinaryStatus, BIN_DIR };
@@ -69,17 +87,17 @@ function link(url: string, text?: string): string {
 
 // Startup banner
 console.log(`
-  ${c.orange}${c.bold}>_ APTEVA${c.reset}
+  ${c.orange}${c.bold}>_ apteva${c.reset}
   ${c.gray}Run AI agents locally${c.reset}
 `);
 
-// Check binary
-process.stdout.write(`  ${c.darkGray}Binary${c.reset}    `);
+// Check binary - ensureBinary handles progress output when downloading
+process.stdout.write(`  ${c.darkGray}Agent${c.reset}     `);
 const binaryResult = await ensureBinary(BIN_DIR);
-if (!binaryResult.success) {
-  console.log(`${c.orange}not available${c.reset}`);
-} else {
-  console.log(`${c.gray}ready${c.reset}`);
+// ensureBinary prints its own status when downloading/failing
+// We only need to print "ready" if binary already existed
+if (binaryResult.success && !binaryResult.downloaded) {
+  console.log(`${c.gray}binary ready${c.reset}`);
 }
 
 // Check database
@@ -93,6 +111,8 @@ console.log(`${c.gray}${configuredProviders.length} configured${c.reset}`);
 
 const server = Bun.serve({
   port: PORT,
+  hostname: "0.0.0.0", // Listen on all interfaces
+  development: false, // Suppress "Started server" message
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -131,4 +151,4 @@ console.log(`
             ${c.darkGray}Click link or Cmd/Ctrl+C to copy${c.reset}
 `);
 
-export default server;
+// Note: Don't use "export default server" - it causes Bun to print "Started server" message

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { CheckIcon } from "../common/Icons";
 import type { Provider } from "../../types";
 
-type SettingsTab = "providers";
+type SettingsTab = "providers" | "updates";
 
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("providers");
@@ -18,13 +18,18 @@ export function SettingsPage() {
             active={activeTab === "providers"}
             onClick={() => setActiveTab("providers")}
           />
-          {/* Future settings tabs can be added here */}
+          <SettingsNavItem
+            label="Updates"
+            active={activeTab === "updates"}
+            onClick={() => setActiveTab("updates")}
+          />
         </nav>
       </div>
 
       {/* Settings Content */}
       <div className="flex-1 overflow-auto p-6">
         {activeTab === "providers" && <ProvidersSettings />}
+        {activeTab === "updates" && <UpdatesSettings />}
       </div>
     </div>
   );
@@ -176,6 +181,116 @@ interface ProviderKeyCardProps {
   onApiKeyChange: (key: string) => void;
   onSave: () => void;
   onDelete: () => void;
+}
+
+interface VersionInfo {
+  current: string;
+  latest: string;
+  updateAvailable: boolean;
+  updateCommand: string;
+}
+
+function UpdatesSettings() {
+  const [version, setVersion] = useState<VersionInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const checkForUpdates = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/version");
+      if (!res.ok) throw new Error("Failed to check for updates");
+      const data = await res.json();
+      setVersion(data);
+    } catch (e) {
+      setError("Failed to check for updates");
+    }
+    setChecking(false);
+  };
+
+  useEffect(() => {
+    checkForUpdates();
+  }, []);
+
+  const copyCommand = () => {
+    if (version?.updateCommand) {
+      navigator.clipboard.writeText(version.updateCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold mb-1">Updates</h1>
+        <p className="text-[#666]">
+          Check for new versions of apteva.
+        </p>
+      </div>
+
+      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6">
+        {checking && !version ? (
+          <div className="text-[#666]">Checking for updates...</div>
+        ) : error ? (
+          <div className="text-red-400">{error}</div>
+        ) : version ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-[#666]">Current version</div>
+                <div className="text-xl font-mono">v{version.current}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm text-[#666]">Latest version</div>
+                <div className="text-xl font-mono">v{version.latest}</div>
+              </div>
+            </div>
+
+            {version.updateAvailable ? (
+              <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
+                <div className="flex items-center gap-2 text-[#f97316] font-medium mb-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Update available!
+                </div>
+                <p className="text-sm text-[#888] mb-3">
+                  A new version of apteva is available. Run this command to update:
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm">
+                    {version.updateCommand}
+                  </code>
+                  <button
+                    onClick={copyCommand}
+                    className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded text-sm"
+                  >
+                    {copied ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 flex items-center gap-2 text-green-400">
+                <CheckIcon className="w-5 h-5" />
+                You're running the latest version!
+              </div>
+            )}
+
+            <button
+              onClick={checkForUpdates}
+              disabled={checking}
+              className="text-sm text-[#666] hover:text-[#888] disabled:opacity-50"
+            >
+              {checking ? "Checking..." : "Check again"}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function ProviderKeyCard({

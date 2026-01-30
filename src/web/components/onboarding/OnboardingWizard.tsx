@@ -223,7 +223,7 @@ function Step1AddKeys({
   // Default view: show all providers
   return (
     <>
-      <h2 className="text-2xl font-semibold mb-2">Welcome to Apteva</h2>
+      <h2 className="text-2xl font-semibold mb-2">Welcome to apteva</h2>
       <p className="text-[#666] mb-6">
         To get started, you'll need to add at least one AI provider API key.
         Your keys are encrypted and stored locally.
@@ -336,7 +336,7 @@ function Step2Complete({ configuredProviders, onAddMore, onComplete }: Step2Prop
           onClick={onComplete}
           className="flex-1 bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-3 rounded font-medium transition"
         >
-          Start Using Apteva
+          Start Using apteva
         </button>
       </div>
     </>

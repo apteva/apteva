@@ -10,7 +10,7 @@ const __dirname = dirname(__filename);
 
 // Parse command line arguments
 const args = process.argv.slice(2);
-let port = 4015;
+let port = 4280;
 let dataDir = null;
 let configFile = null;
 let showHelp = false;
@@ -19,7 +19,7 @@ let showVersion = false;
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
   if (arg === "--port" || arg === "-p") {
-    port = parseInt(args[++i]) || 4015;
+    port = parseInt(args[++i]) || 4280;
   } else if (arg === "--data-dir" || arg === "-d") {
     dataDir = args[++i];
   } else if (arg === "--config" || arg === "-c") {
@@ -51,14 +51,14 @@ COMMANDS:
   help              Show this help message
 
 OPTIONS:
-  -p, --port <port>       Port to listen on (default: 4015)
+  -p, --port <port>       Port to listen on (default: 4280)
   -d, --data-dir <dir>    Directory for data storage
   -c, --config <file>     Path to config file
   -h, --help              Show this help message
   -v, --version           Show version information
 
 ENVIRONMENT VARIABLES:
-  PORT                    Server port (default: 4015)
+  PORT                    Server port (default: 4280)
   DATA_DIR                Data directory
   ANTHROPIC_API_KEY       Anthropic (Claude) API key
   OPENAI_API_KEY          OpenAI API key
@@ -70,7 +70,7 @@ ENVIRONMENT VARIABLES:
   TOGETHER_API_KEY        Together AI API key
 
 EXAMPLES:
-  apteva                          Start on default port (4015)
+  apteva                          Start on default port (4280)
   apteva --port 8080              Start on port 8080
   apteva --data-dir ./my-data     Use custom data directory
   apteva --config ./config.json   Use config file
@@ -105,8 +105,11 @@ if (configFile) env.CONFIG_FILE = configFile;
 // Check if bun is available
 const runtime = process.env.BUN_INSTALL ? "bun" : "node";
 
+// Build args - use --silent for bun to suppress "Started development server" message
+const runtimeArgs = runtime === "bun" ? ["--silent", entryPoint] : [entryPoint];
+
 // Spawn the server
-const child = spawn(runtime, ["run", entryPoint], {
+const child = spawn(runtime, runtimeArgs, {
   env,
   stdio: "inherit",
   shell: false,
