@@ -47,7 +47,7 @@ export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: Age
           {enabledFeatures.map(({ key, icon: Icon, label }) => (
             <span
               key={key}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1a1a1a] text-[#888] text-xs"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#f97316]/10 text-[#f97316]/70 text-xs"
               title={label}
             >
               <Icon className="w-3 h-3" />

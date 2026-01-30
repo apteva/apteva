@@ -7,8 +7,8 @@ interface ModalProps {
 
 export function Modal({ children, onClose }: ModalProps) {
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-[#111] rounded p-6 w-full max-w-md border border-[#1a1a1a]">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-[#111] rounded p-6 w-full max-w-xl border border-[#1a1a1a] max-h-[90vh] overflow-y-auto">
         {children}
       </div>
     </div>

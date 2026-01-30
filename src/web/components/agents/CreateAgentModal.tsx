@@ -16,11 +16,11 @@ interface CreateAgentModalProps {
 }
 
 const FEATURE_CONFIG = [
-  { key: "memory" as keyof AgentFeatures, label: "Memory", description: "Remember information across conversations", icon: MemoryIcon },
-  { key: "tasks" as keyof AgentFeatures, label: "Tasks", description: "Create and execute scheduled tasks", icon: TasksIcon },
+  { key: "memory" as keyof AgentFeatures, label: "Memory", description: "Persistent recall", icon: MemoryIcon },
+  { key: "tasks" as keyof AgentFeatures, label: "Tasks", description: "Schedule and execute tasks", icon: TasksIcon },
   { key: "vision" as keyof AgentFeatures, label: "Vision", description: "Process images and PDFs", icon: VisionIcon },
-  { key: "operator" as keyof AgentFeatures, label: "Operator", description: "Browser automation (computer use)", icon: OperatorIcon },
-  { key: "mcp" as keyof AgentFeatures, label: "MCP", description: "Connect to external tools and services", icon: McpIcon },
+  { key: "operator" as keyof AgentFeatures, label: "Operator", description: "Browser automation", icon: OperatorIcon },
+  { key: "mcp" as keyof AgentFeatures, label: "MCP", description: "External tools/services", icon: McpIcon },
   { key: "realtime" as keyof AgentFeatures, label: "Realtime", description: "Voice conversations", icon: RealtimeIcon },
 ];
 
@@ -103,7 +103,7 @@ export function CreateAgentModal({
             </FormField>
 
             <FormField label="Features">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {FEATURE_CONFIG.map(({ key, label, description, icon: Icon }) => (
                   <button
                     key={key}
@@ -115,12 +115,12 @@ export function CreateAgentModal({
                         : "border-[#222] hover:border-[#333]"
                     }`}
                   >
-                    <Icon className={`w-5 h-5 ${form.features[key] ? "text-[#f97316]" : "text-[#666]"}`} />
+                    <Icon className={`w-5 h-5 flex-shrink-0 ${form.features[key] ? "text-[#f97316]" : "text-[#666]"}`} />
                     <div className="flex-1 min-w-0">
                       <div className={`text-sm font-medium ${form.features[key] ? "text-[#f97316]" : ""}`}>
                         {label}
                       </div>
-                      <div className="text-xs text-[#666] truncate">{description}</div>
+                      <div className="text-xs text-[#666]">{description}</div>
                     </div>
                   </button>
                 ))}

@@ -126,43 +126,87 @@ function ProvidersSettings() {
     fetchProviders();
   };
 
-  const configuredCount = providers.filter(p => p.hasKey).length;
+  const llmProviders = providers.filter(p => p.type === "llm");
+  const integrations = providers.filter(p => p.type === "integration");
+  const llmConfiguredCount = llmProviders.filter(p => p.hasKey).length;
+  const intConfiguredCount = integrations.filter(p => p.hasKey).length;
 
   return (
-    <div className="max-w-4xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold mb-1">AI Providers</h1>
-        <p className="text-[#666]">
-          Manage your API keys for AI providers. {configuredCount} of {providers.length} configured.
-        </p>
+    <div className="max-w-4xl space-y-10">
+      {/* AI Providers Section */}
+      <div>
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold mb-1">AI Providers</h1>
+          <p className="text-[#666]">
+            Manage your API keys for AI providers. {llmConfiguredCount} of {llmProviders.length} configured.
+          </p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {llmProviders.map(provider => (
+            <ProviderKeyCard
+              key={provider.id}
+              provider={provider}
+              isEditing={selectedProvider === provider.id}
+              apiKey={apiKey}
+              saving={saving}
+              testing={testing}
+              error={selectedProvider === provider.id ? error : null}
+              success={selectedProvider === provider.id ? success : null}
+              onStartEdit={() => {
+                setSelectedProvider(provider.id);
+                setError(null);
+                setSuccess(null);
+              }}
+              onCancelEdit={() => {
+                setSelectedProvider(null);
+                setApiKey("");
+                setError(null);
+              }}
+              onApiKeyChange={setApiKey}
+              onSave={saveKey}
+              onDelete={() => deleteKey(provider.id)}
+            />
+          ))}
+        </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {providers.map(provider => (
-          <ProviderKeyCard
-            key={provider.id}
-            provider={provider}
-            isEditing={selectedProvider === provider.id}
-            apiKey={apiKey}
-            saving={saving}
-            testing={testing}
-            error={selectedProvider === provider.id ? error : null}
-            success={selectedProvider === provider.id ? success : null}
-            onStartEdit={() => {
-              setSelectedProvider(provider.id);
-              setError(null);
-              setSuccess(null);
-            }}
-            onCancelEdit={() => {
-              setSelectedProvider(null);
-              setApiKey("");
-              setError(null);
-            }}
-            onApiKeyChange={setApiKey}
-            onSave={saveKey}
-            onDelete={() => deleteKey(provider.id)}
-          />
-        ))}
+      {/* MCP Integrations Section */}
+      <div>
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-1">MCP Integrations</h2>
+          <p className="text-[#666]">
+            Connect to MCP gateways for tool integrations. {intConfiguredCount} of {integrations.length} configured.
+          </p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {integrations.map(provider => (
+            <IntegrationKeyCard
+              key={provider.id}
+              provider={provider}
+              isEditing={selectedProvider === provider.id}
+              apiKey={apiKey}
+              saving={saving}
+              testing={testing}
+              error={selectedProvider === provider.id ? error : null}
+              success={selectedProvider === provider.id ? success : null}
+              onStartEdit={() => {
+                setSelectedProvider(provider.id);
+                setError(null);
+                setSuccess(null);
+              }}
+              onCancelEdit={() => {
+                setSelectedProvider(null);
+                setApiKey("");
+                setError(null);
+              }}
+              onApiKeyChange={setApiKey}
+              onSave={saveKey}
+              onDelete={() => deleteKey(provider.id)}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -318,6 +362,112 @@ function ProviderKeyCard({
         </div>
         {provider.hasKey ? (
           <span className="text-green-400 text-xs flex items-center gap-1 bg-green-500/10 px-2 py-1 rounded">
+            <CheckIcon className="w-3 h-3" />
+            {provider.keyHint}
+          </span>
+        ) : (
+          <span className="text-[#666] text-xs bg-[#1a1a1a] px-2 py-1 rounded">
+            Not configured
+          </span>
+        )}
+      </div>
+
+      {provider.hasKey ? (
+        <div className="flex items-center justify-between mt-3 pt-3 border-t border-[#1a1a1a]">
+          <a
+            href={provider.docsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-[#3b82f6] hover:underline"
+          >
+            View docs
+          </a>
+          <button
+            onClick={onDelete}
+            className="text-red-400 hover:text-red-300 text-sm"
+          >
+            Remove key
+          </button>
+        </div>
+      ) : (
+        <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
+          {isEditing ? (
+            <div className="space-y-3">
+              <input
+                type="password"
+                value={apiKey}
+                onChange={e => onApiKeyChange(e.target.value)}
+                placeholder="Enter API key..."
+                autoFocus
+                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              />
+              {error && <p className="text-red-400 text-sm">{error}</p>}
+              {success && <p className="text-green-400 text-sm">{success}</p>}
+              <div className="flex gap-2">
+                <button
+                  onClick={onCancelEdit}
+                  className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={onSave}
+                  disabled={!apiKey || saving}
+                  className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+                >
+                  {testing ? "Validating..." : saving ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <a
+                href={provider.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-[#3b82f6] hover:underline"
+              >
+                Get API key
+              </a>
+              <button
+                onClick={onStartEdit}
+                className="text-sm text-[#f97316] hover:text-[#fb923c]"
+              >
+                + Add key
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IntegrationKeyCard({
+  provider,
+  isEditing,
+  apiKey,
+  saving,
+  testing,
+  error,
+  success,
+  onStartEdit,
+  onCancelEdit,
+  onApiKeyChange,
+  onSave,
+  onDelete,
+}: ProviderKeyCardProps) {
+  return (
+    <div className={`bg-[#111] border rounded-lg p-4 ${
+      provider.hasKey ? 'border-[#f97316]/20' : 'border-[#1a1a1a]'
+    }`}>
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h3 className="font-medium">{provider.name}</h3>
+          <p className="text-sm text-[#666]">{provider.description || "MCP integration"}</p>
+        </div>
+        {provider.hasKey ? (
+          <span className="text-[#f97316] text-xs flex items-center gap-1 bg-[#f97316]/10 px-2 py-1 rounded">
             <CheckIcon className="w-3 h-3" />
             {provider.keyHint}
           </span>

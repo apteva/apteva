@@ -19,7 +19,11 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   useEffect(() => {
     fetch("/api/providers")
       .then(res => res.json())
-      .then(data => setProviders(data.providers || []));
+      .then(data => {
+        // Only show LLM providers in onboarding, not integrations
+        const llmProviders = (data.providers || []).filter((p: Provider) => p.type === "llm");
+        setProviders(llmProviders);
+      });
   }, []);
 
   const configuredProviders = providers.filter(p => p.hasKey);

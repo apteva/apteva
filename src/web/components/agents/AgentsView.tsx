@@ -1,38 +1,42 @@
 import React from "react";
 import { AgentCard } from "./AgentCard";
-import { ChatPanel } from "./ChatPanel";
+import { AgentPanel } from "./AgentPanel";
 import { LoadingSpinner } from "../common/LoadingSpinner";
-import type { Agent } from "../../types";
+import type { Agent, Provider } from "../../types";
 
 interface AgentsViewProps {
   agents: Agent[];
   loading: boolean;
   selectedAgent: Agent | null;
+  providers: Provider[];
   onSelectAgent: (agent: Agent) => void;
   onCloseAgent: () => void;
   onToggleAgent: (agent: Agent, e?: React.MouseEvent) => void;
   onDeleteAgent: (id: string, e?: React.MouseEvent) => void;
+  onUpdateAgent: (id: string, updates: Partial<Agent>) => Promise<{ error?: string }>;
 }
 
 export function AgentsView({
   agents,
   loading,
   selectedAgent,
+  providers,
   onSelectAgent,
   onCloseAgent,
   onToggleAgent,
   onDeleteAgent,
+  onUpdateAgent,
 }: AgentsViewProps) {
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div className="flex-1 flex overflow-hidden relative">
       {/* Agents list */}
-      <div className={`${selectedAgent ? 'w-1/2 border-r border-[#1a1a1a]' : 'flex-1'} overflow-auto p-6 transition-all`}>
+      <div className="flex-1 overflow-auto p-6">
         {loading ? (
           <LoadingSpinner message="Loading agents..." />
         ) : agents.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className={`grid gap-4 ${selectedAgent ? 'grid-cols-1 xl:grid-cols-2' : 'md:grid-cols-2 xl:grid-cols-3'}`}>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {agents.map((agent) => (
               <AgentCard
                 key={agent.id}
@@ -47,13 +51,26 @@ export function AgentsView({
         )}
       </div>
 
-      {/* Chat Panel */}
+      {/* Overlay backdrop */}
       {selectedAgent && (
-        <ChatPanel
-          agent={selectedAgent}
-          onClose={onCloseAgent}
-          onStartAgent={(e) => onToggleAgent(selectedAgent, e)}
+        <div
+          className="absolute inset-0 bg-black/40 backdrop-blur-[2px] z-10"
+          onClick={onCloseAgent}
         />
+      )}
+
+      {/* Agent Panel - slides in from right */}
+      {selectedAgent && (
+        <div className="absolute right-0 top-0 bottom-0 w-[600px] z-20">
+          <AgentPanel
+            agent={selectedAgent}
+            providers={providers}
+            onClose={onCloseAgent}
+            onStartAgent={(e) => onToggleAgent(selectedAgent, e)}
+            onUpdateAgent={(updates) => onUpdateAgent(selectedAgent.id, updates)}
+            onDeleteAgent={() => onDeleteAgent(selectedAgent.id)}
+          />
+        </div>
       )}
     </div>
   );

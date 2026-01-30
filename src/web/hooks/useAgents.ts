@@ -24,6 +24,7 @@ export function useAgents(enabled: boolean) {
     provider: string;
     systemPrompt: string;
     features: AgentFeatures;
+    mcpServers?: string[];
   }) => {
     await fetch("/api/agents", {
       method: "POST",
@@ -36,6 +37,27 @@ export function useAgents(enabled: boolean) {
   const deleteAgent = async (id: string) => {
     await fetch(`/api/agents/${id}`, { method: "DELETE" });
     await fetchAgents();
+  };
+
+  const updateAgent = async (id: string, updates: {
+    name?: string;
+    model?: string;
+    provider?: string;
+    systemPrompt?: string;
+    features?: AgentFeatures;
+    mcpServers?: string[];
+  }): Promise<{ error?: string }> => {
+    const res = await fetch(`/api/agents/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json();
+    await fetchAgents();
+    if (!res.ok && data.error) {
+      return { error: data.error };
+    }
+    return {};
   };
 
   const toggleAgent = async (agent: Agent): Promise<{ error?: string }> => {
@@ -57,6 +79,7 @@ export function useAgents(enabled: boolean) {
     runningCount,
     fetchAgents,
     createAgent,
+    updateAgent,
     deleteAgent,
     toggleAgent,
   };

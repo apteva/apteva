@@ -27,7 +27,34 @@ export interface Agent {
   status: "stopped" | "running";
   port?: number;
   features: AgentFeatures;
+  mcpServers: string[]; // Array of MCP server IDs
   createdAt: string;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  type: "npm" | "github" | "http" | "custom";
+  package: string | null;
+  command: string | null;
+  port: number | null;
+  status: "stopped" | "running";
+}
+
+export interface McpTool {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface McpToolCallResult {
+  content: Array<{
+    type: "text" | "image" | "resource";
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  isError?: boolean;
 }
 
 export interface ProviderModel {
@@ -39,11 +66,14 @@ export interface ProviderModel {
 export interface Provider {
   id: string;
   name: string;
+  type: "llm" | "integration";
   docsUrl: string;
+  description?: string;
   models: ProviderModel[];
   hasKey: boolean;
   keyHint: string | null;
   isValid: boolean | null;
+  configured?: boolean; // for backwards compatibility
 }
 
 export interface OnboardingStatus {
@@ -52,7 +82,41 @@ export interface OnboardingStatus {
   has_any_keys: boolean;
 }
 
-export type Route = "dashboard" | "agents" | "settings";
+export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "settings";
+
+export interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  type: "once" | "recurring";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  priority: number;
+  source: "local" | "delegated";
+  created_at: string;
+  execute_at?: string;
+  executed_at?: string;
+  recurrence?: string;
+  next_run?: string;
+  result?: any;
+  agentId: string;
+  agentName: string;
+}
+
+export interface DashboardStats {
+  agents: {
+    total: number;
+    running: number;
+  };
+  tasks: {
+    total: number;
+    pending: number;
+    running: number;
+    completed: number;
+  };
+  providers: {
+    configured: number;
+  };
+}
 
 export interface NewAgentForm {
   name: string;
@@ -60,4 +124,5 @@ export interface NewAgentForm {
   provider: string;
   systemPrompt: string;
   features: AgentFeatures;
+  mcpServers: string[];
 }

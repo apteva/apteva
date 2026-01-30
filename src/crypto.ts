@@ -133,6 +133,15 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
       pattern: /^[a-zA-Z0-9_-]+$/,
       example: "...",
     },
+    // MCP Integrations
+    composio: {
+      pattern: /^[a-zA-Z0-9_-]+$/,
+      example: "...",
+    },
+    smithery: {
+      pattern: /^[a-zA-Z0-9_-]+$/,
+      example: "...",
+    },
   };
 
   const providerPattern = patterns[provider];

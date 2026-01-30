@@ -1,4 +1,4 @@
 export { AgentCard } from "./AgentCard";
 export { CreateAgentModal } from "./CreateAgentModal";
-export { ChatPanel } from "./ChatPanel";
+export { AgentPanel } from "./AgentPanel";
 export { AgentsView } from "./AgentsView";

@@ -3,9 +3,17 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
 import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR } from "../server";
-import { AgentDB, generateId, type Agent } from "../db";
+import { AgentDB, McpServerDB, generateId, type Agent, type AgentFeatures, type McpServer } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import { binaryExists } from "../binary";
+import {
+  startMcpProcess,
+  stopMcpProcess,
+  initializeMcpServer,
+  listMcpTools,
+  callMcpTool,
+  getMcpProcess,
+} from "../mcp-client";
 
 // Data directory for agent instances (in ~/.apteva/agents/)
 const AGENTS_DATA_DIR = process.env.DATA_DIR
@@ -19,6 +27,171 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+// Wait for agent to be healthy (with timeout)
+async function waitForAgentHealth(port: number, maxAttempts = 30, delayMs = 200): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await fetch(`http://localhost:${port}/health`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      if (res.ok) return true;
+    } catch {
+      // Not ready yet
+    }
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
+// Build agent config from apteva agent data
+// Note: POST /config expects flat structure WITHOUT "agent" wrapper
+function buildAgentConfig(agent: Agent, providerKey: string) {
+  const features = agent.features;
+
+  // Get MCP server details for the agent's selected servers
+  const mcpServers = (agent.mcp_servers || [])
+    .map(id => McpServerDB.findById(id))
+    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .map(s => {
+      // For stdio-based servers (npm, github, custom with command), pass command config
+      // so the agent container can spawn the process itself
+      if (s.command) {
+        // Parse command if it contains the executable + args as a string
+        const cmdParts = s.command.split(/\s+/);
+        const baseCommand = cmdParts;
+        const extraArgs = s.args ? s.args.split(/\s+/) : [];
+        return {
+          name: s.name,
+          type: "stdio" as const,
+          command: [...baseCommand, ...extraArgs],
+          env: s.env || {},
+          enabled: true,
+        };
+      }
+      // For HTTP-based servers, require them to be running in apteva
+      if (s.status !== "running") {
+        return null;
+      }
+      return {
+        name: s.name,
+        type: "http" as const,
+        url: `http://localhost:${s.port}`,
+        headers: {},
+        enabled: true,
+      };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+
+  return {
+    id: agent.id,
+    name: agent.name,
+    description: agent.system_prompt,
+    llm: {
+      provider: agent.provider,
+      model: agent.model,
+      max_tokens: 4000,
+      temperature: 0.7,
+      system_prompt: agent.system_prompt,
+      vision: {
+        enabled: features.vision,
+        max_images: 20,
+        max_image_size: 5242880,
+        allowed_types: ["jpeg", "png", "gif", "webp"],
+        resize_images: true,
+        max_dimension: 1568,
+        pdf: {
+          enabled: features.vision,
+          max_file_size: 33554432,
+          max_pages: 100,
+          allow_urls: true,
+        },
+      },
+      parallel_tools: {
+        enabled: true,
+        max_concurrent: 10,
+      },
+    },
+    tasks: {
+      enabled: features.tasks,
+      allow_scheduling: true,
+      allow_recurring: true,
+      max_tasks: 100,
+      auto_execute: false,
+    },
+    scheduler: {
+      enabled: features.tasks,
+      interval: "1m",
+      max_tasks: 100,
+    },
+    memory: {
+      enabled: features.memory,
+      embedding_model: "text-embedding-3-small",
+      decision_model: "gpt-4o-mini",
+      max_memories_per_query: 20,
+      min_importance: 0.3,
+      min_similarity: 0.3,
+      auto_prune: true,
+      max_memories: 10000,
+      embedding_provider: "openai",
+      auto_extract_memories: features.memory ? true : null,
+      auto_ingest_files: true,
+    },
+    operator: {
+      enabled: features.operator,
+      virtual_browser: "http://localhost:8098",
+      display_width: 1024,
+      display_height: 768,
+      max_actions_per_turn: 5,
+    },
+    mcp: {
+      enabled: features.mcp,
+      base_url: "http://localhost:3000/mcp",
+      timeout: "30s",
+      retry_count: 3,
+      cache_ttl: "15m",
+      servers: mcpServers,
+    },
+    realtime: {
+      enabled: features.realtime,
+      provider: "openai",
+      model: "gpt-4o-realtime-preview",
+      voice: "alloy",
+    },
+    context: {
+      max_messages: 30,
+      max_tokens: 0,
+      keep_images: 5,
+    },
+    filesystem: {
+      enabled: true,
+      max_file_size: 10485760,
+      max_total_size: 104857600,
+      auto_extract: true,
+      auto_cleanup: true,
+      retention_days: 7,
+    },
+  };
+}
+
+// Push config to running agent
+async function pushConfigToAgent(port: number, config: any): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`http://localhost:${port}/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      return { success: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    return { success: false, error: data.error || `HTTP ${res.status}` };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
 // Transform DB agent to API response format (camelCase for frontend compatibility)
 function toApiAgent(agent: Agent) {
   return {
@@ -30,6 +203,7 @@ function toApiAgent(agent: Agent) {
     status: agent.status,
     port: agent.port,
     features: agent.features,
+    mcpServers: agent.mcp_servers,
     createdAt: agent.created_at,
     updatedAt: agent.updated_at,
   };
@@ -64,6 +238,7 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
         provider: provider || "anthropic",
         system_prompt: systemPrompt || "You are a helpful assistant.",
         features: features || DEFAULT_FEATURES,
+        mcp_servers: body.mcpServers || [],
       });
 
       return json({ agent: toApiAgent(agent) }, 201);
@@ -98,8 +273,23 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       if (body.model !== undefined) updates.model = body.model;
       if (body.provider !== undefined) updates.provider = body.provider;
       if (body.systemPrompt !== undefined) updates.system_prompt = body.systemPrompt;
+      if (body.features !== undefined) updates.features = body.features;
+      if (body.mcpServers !== undefined) updates.mcp_servers = body.mcpServers;
 
       const updated = AgentDB.update(agentMatch[1], updates);
+
+      // If agent is running, push the new config
+      if (updated && updated.status === "running" && updated.port) {
+        const providerKey = ProviderKeys.getDecrypted(updated.provider);
+        if (providerKey) {
+          const config = buildAgentConfig(updated, providerKey);
+          const configResult = await pushConfigToAgent(updated.port, config);
+          if (!configResult.success) {
+            console.error(`Failed to push config to running agent: ${configResult.error}`);
+          }
+        }
+      }
+
       return json({ agent: updated ? toApiAgent(updated) : null });
     } catch (e) {
       return json({ error: "Invalid request body" }, 400);
@@ -185,6 +375,27 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       });
 
       agentProcesses.set(agent.id, proc);
+
+      // Wait for agent to be healthy
+      console.log(`  Waiting for agent to be ready...`);
+      const isHealthy = await waitForAgentHealth(port);
+      if (!isHealthy) {
+        console.error(`  Agent failed to start (health check timeout)`);
+        proc.kill();
+        agentProcesses.delete(agent.id);
+        return json({ error: "Agent failed to start (health check timeout)" }, 500);
+      }
+
+      // Push configuration to the agent
+      console.log(`  Pushing configuration...`);
+      const config = buildAgentConfig(agent, providerKey);
+      const configResult = await pushConfigToAgent(port, config);
+      if (!configResult.success) {
+        console.error(`  Failed to configure agent: ${configResult.error}`);
+        // Agent is running but not configured - still usable but log warning
+      } else {
+        console.log(`  Configuration applied successfully`);
+      }
 
       // Update status in database
       const updated = AgentDB.setStatus(agent.id, "running", port);
@@ -383,6 +594,115 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
     });
   }
 
+  // ==================== TASKS ====================
+
+  // Helper to fetch from a running agent
+  async function fetchFromAgent(port: number, endpoint: string): Promise<any> {
+    try {
+      const response = await fetch(`http://localhost:${port}${endpoint}`, {
+        headers: { "Accept": "application/json" },
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // GET /api/tasks - Get all tasks from all running agents
+  if (path === "/api/tasks" && method === "GET") {
+    const url = new URL(req.url);
+    const status = url.searchParams.get("status") || "all";
+
+    const runningAgents = AgentDB.findAll().filter(a => a.status === "running" && a.port);
+    const allTasks: any[] = [];
+
+    for (const agent of runningAgents) {
+      const data = await fetchFromAgent(agent.port!, `/tasks?status=${status}`);
+      if (data?.tasks) {
+        // Add agent info to each task
+        for (const task of data.tasks) {
+          allTasks.push({
+            ...task,
+            agentId: agent.id,
+            agentName: agent.name,
+          });
+        }
+      }
+    }
+
+    // Sort by created_at descending
+    allTasks.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    return json({ tasks: allTasks, count: allTasks.length });
+  }
+
+  // GET /api/agents/:id/tasks - Get tasks from a specific agent
+  const agentTasksMatch = path.match(/^\/api\/agents\/([^/]+)\/tasks$/);
+  if (agentTasksMatch && method === "GET") {
+    const agentId = agentTasksMatch[1];
+    const agent = AgentDB.findById(agentId);
+
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    const url = new URL(req.url);
+    const status = url.searchParams.get("status") || "all";
+
+    const data = await fetchFromAgent(agent.port, `/tasks?status=${status}`);
+    if (!data) {
+      return json({ error: "Failed to fetch tasks from agent" }, 500);
+    }
+
+    return json(data);
+  }
+
+  // GET /api/dashboard - Get dashboard statistics
+  if (path === "/api/dashboard" && method === "GET") {
+    const agents = AgentDB.findAll();
+    const runningAgents = agents.filter(a => a.status === "running" && a.port);
+
+    let totalTasks = 0;
+    let pendingTasks = 0;
+    let completedTasks = 0;
+    let runningTasks = 0;
+
+    for (const agent of runningAgents) {
+      const data = await fetchFromAgent(agent.port!, "/tasks?status=all");
+      if (data?.tasks) {
+        totalTasks += data.tasks.length;
+        for (const task of data.tasks) {
+          if (task.status === "pending") pendingTasks++;
+          else if (task.status === "completed") completedTasks++;
+          else if (task.status === "running") runningTasks++;
+        }
+      }
+    }
+
+    return json({
+      agents: {
+        total: agents.length,
+        running: runningAgents.length,
+      },
+      tasks: {
+        total: totalTasks,
+        pending: pendingTasks,
+        running: runningTasks,
+        completed: completedTasks,
+      },
+      providers: {
+        configured: ProviderKeys.getConfiguredProviders().length,
+      },
+    });
+  }
+
   // GET /api/version - Get current and latest version
   if (path === "/api/version" && method === "GET") {
     try {
@@ -415,6 +735,212 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       });
     } catch {
       return json({ error: "Failed to check version" }, 500);
+    }
+  }
+
+  // ============ MCP Server API ============
+
+  // GET /api/mcp/servers - List all MCP servers
+  if (path === "/api/mcp/servers" && method === "GET") {
+    const servers = McpServerDB.findAll();
+    return json({ servers });
+  }
+
+  // POST /api/mcp/servers - Create/install a new MCP server
+  if (path === "/api/mcp/servers" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { name, type, package: pkg, command, args, env } = body;
+
+      if (!name) {
+        return json({ error: "Name is required" }, 400);
+      }
+
+      const server = McpServerDB.create({
+        id: generateId(),
+        name,
+        type: type || "npm",
+        package: pkg || null,
+        command: command || null,
+        args: args || null,
+        env: env || {},
+      });
+
+      return json({ server }, 201);
+    } catch (e) {
+      console.error("Create MCP server error:", e);
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // GET /api/mcp/servers/:id - Get a specific MCP server
+  const mcpServerMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)$/);
+  if (mcpServerMatch && method === "GET") {
+    const server = McpServerDB.findById(mcpServerMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+    return json({ server });
+  }
+
+  // PUT /api/mcp/servers/:id - Update an MCP server
+  if (mcpServerMatch && method === "PUT") {
+    const server = McpServerDB.findById(mcpServerMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+
+    try {
+      const body = await req.json();
+      const updates: Partial<McpServer> = {};
+
+      if (body.name !== undefined) updates.name = body.name;
+      if (body.type !== undefined) updates.type = body.type;
+      if (body.package !== undefined) updates.package = body.package;
+      if (body.command !== undefined) updates.command = body.command;
+      if (body.args !== undefined) updates.args = body.args;
+      if (body.env !== undefined) updates.env = body.env;
+
+      const updated = McpServerDB.update(mcpServerMatch[1], updates);
+      return json({ server: updated });
+    } catch (e) {
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // DELETE /api/mcp/servers/:id - Delete an MCP server
+  if (mcpServerMatch && method === "DELETE") {
+    const server = McpServerDB.findById(mcpServerMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+
+    // Stop if running
+    if (server.status === "running") {
+      // TODO: Stop the server process
+    }
+
+    McpServerDB.delete(mcpServerMatch[1]);
+    return json({ success: true });
+  }
+
+  // POST /api/mcp/servers/:id/start - Start an MCP server
+  const mcpStartMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/start$/);
+  if (mcpStartMatch && method === "POST") {
+    const server = McpServerDB.findById(mcpStartMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+
+    if (server.status === "running") {
+      return json({ error: "MCP server already running" }, 400);
+    }
+
+    // Determine command to run
+    let cmd: string[];
+    if (server.command) {
+      // Custom command
+      cmd = server.command.split(" ");
+      if (server.args) {
+        cmd.push(...server.args.split(" "));
+      }
+    } else if (server.package) {
+      // npm package - use npx
+      cmd = ["npx", "-y", server.package];
+      if (server.args) {
+        cmd.push(...server.args.split(" "));
+      }
+    } else {
+      return json({ error: "No command or package specified" }, 400);
+    }
+
+    console.log(`Starting MCP server ${server.name}...`);
+    console.log(`  Command: ${cmd.join(" ")}`);
+
+    // Start the MCP process with stdio pipes
+    const result = await startMcpProcess(server.id, cmd, server.env || {});
+
+    if (!result.success) {
+      console.error(`Failed to start MCP server: ${result.error}`);
+      return json({ error: `Failed to start: ${result.error}` }, 500);
+    }
+
+    // Update status (port is now just for display, stdio is used for communication)
+    const port = getNextPort(); // Just for identification
+    const updated = McpServerDB.setStatus(server.id, "running", port);
+
+    return json({ server: updated, message: "MCP server started" });
+  }
+
+  // POST /api/mcp/servers/:id/stop - Stop an MCP server
+  const mcpStopMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/stop$/);
+  if (mcpStopMatch && method === "POST") {
+    const server = McpServerDB.findById(mcpStopMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+
+    // Stop the MCP process
+    stopMcpProcess(server.id);
+
+    const updated = McpServerDB.setStatus(server.id, "stopped");
+    return json({ server: updated, message: "MCP server stopped" });
+  }
+
+  // GET /api/mcp/servers/:id/tools - List tools from an MCP server
+  const mcpToolsMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/tools$/);
+  if (mcpToolsMatch && method === "GET") {
+    const server = McpServerDB.findById(mcpToolsMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+
+    // Check if process is running
+    const mcpProcess = getMcpProcess(server.id);
+    if (!mcpProcess) {
+      return json({ error: "MCP server is not running" }, 400);
+    }
+
+    try {
+      const serverInfo = await initializeMcpServer(server.id);
+      const tools = await listMcpTools(server.id);
+
+      return json({
+        serverInfo,
+        tools,
+      });
+    } catch (err) {
+      console.error(`Failed to list MCP tools: ${err}`);
+      return json({ error: `Failed to communicate with MCP server: ${err}` }, 500);
+    }
+  }
+
+  // POST /api/mcp/servers/:id/tools/:toolName/call - Call a tool on an MCP server
+  const mcpToolCallMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/tools\/([^/]+)\/call$/);
+  if (mcpToolCallMatch && method === "POST") {
+    const server = McpServerDB.findById(mcpToolCallMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+
+    // Check if process is running
+    const mcpProcess = getMcpProcess(server.id);
+    if (!mcpProcess) {
+      return json({ error: "MCP server is not running" }, 400);
+    }
+
+    const toolName = decodeURIComponent(mcpToolCallMatch[2]);
+
+    try {
+      const body = await req.json();
+      const args = body.arguments || {};
+
+      const result = await callMcpTool(server.id, toolName, args);
+
+      return json({ result });
+    } catch (err) {
+      console.error(`Failed to call MCP tool: ${err}`);
+      return json({ error: `Failed to call tool: ${err}` }, 500);
     }
   }
 

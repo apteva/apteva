@@ -1,14 +1,15 @@
 import React from "react";
-import { DashboardIcon, AgentsIcon, SettingsIcon } from "../common/Icons";
+import { DashboardIcon, AgentsIcon, TasksIcon, McpIcon, SettingsIcon } from "../common/Icons";
 import type { Route } from "../../types";
 
 interface SidebarProps {
   route: Route;
   agentCount: number;
+  taskCount?: number;
   onNavigate: (route: Route) => void;
 }
 
-export function Sidebar({ route, agentCount, onNavigate }: SidebarProps) {
+export function Sidebar({ route, agentCount, taskCount, onNavigate }: SidebarProps) {
   return (
     <aside className="w-56 border-r border-[#1a1a1a] flex-shrink-0 p-4">
       <nav className="space-y-1">
@@ -24,6 +25,19 @@ export function Sidebar({ route, agentCount, onNavigate }: SidebarProps) {
           active={route === "agents"}
           onClick={() => onNavigate("agents")}
           badge={agentCount > 0 ? String(agentCount) : undefined}
+        />
+        <NavButton
+          icon={<TasksIcon />}
+          label="Tasks"
+          active={route === "tasks"}
+          onClick={() => onNavigate("tasks")}
+          badge={taskCount && taskCount > 0 ? String(taskCount) : undefined}
+        />
+        <NavButton
+          icon={<McpIcon />}
+          label="MCP"
+          active={route === "mcp"}
+          onClick={() => onNavigate("mcp")}
         />
         <NavButton
           icon={<SettingsIcon />}

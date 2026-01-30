@@ -20,6 +20,8 @@ import {
   CreateAgentModal,
   AgentsView,
   Dashboard,
+  TasksPage,
+  McpPage,
 } from "./components";
 
 function App() {
@@ -33,6 +35,7 @@ function App() {
     runningCount,
     fetchAgents,
     createAgent,
+    updateAgent,
     deleteAgent,
     toggleAgent,
   } = useAgents(onboardingComplete === true);
@@ -48,6 +51,28 @@ function App() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [route, setRoute] = useState<Route>("dashboard");
   const [startError, setStartError] = useState<string | null>(null);
+  const [taskCount, setTaskCount] = useState(0);
+
+  // Fetch task count periodically
+  useEffect(() => {
+    if (onboardingComplete !== true) return;
+
+    const fetchTaskCount = async () => {
+      try {
+        const res = await fetch("/api/tasks?status=pending");
+        if (res.ok) {
+          const data = await res.json();
+          setTaskCount(data.count || 0);
+        }
+      } catch {
+        // Ignore errors
+      }
+    };
+
+    fetchTaskCount();
+    const interval = setInterval(fetchTaskCount, 15000);
+    return () => clearInterval(interval);
+  }, [onboardingComplete]);
 
   // Form state
   const [newAgent, setNewAgent] = useState<NewAgentForm>({
@@ -152,7 +177,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex flex-col">
+    <div className="h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex flex-col overflow-hidden">
       <Header
         onNewAgent={() => setShowCreate(true)}
         canCreateAgent={configuredProviders.length > 0}
@@ -166,6 +191,7 @@ function App() {
         <Sidebar
           route={route}
           agentCount={agents.length}
+          taskCount={taskCount}
           onNavigate={handleNavigate}
         />
 
@@ -177,10 +203,12 @@ function App() {
               agents={agents}
               loading={loading}
               selectedAgent={selectedAgent}
+              providers={providers}
               onSelectAgent={handleSelectAgent}
               onCloseAgent={() => setSelectedAgent(null)}
               onToggleAgent={handleToggleAgent}
               onDeleteAgent={handleDeleteAgent}
+              onUpdateAgent={updateAgent}
             />
           )}
 
@@ -194,6 +222,10 @@ function App() {
               onSelectAgent={handleSelectAgent}
             />
           )}
+
+          {route === "tasks" && <TasksPage />}
+
+          {route === "mcp" && <McpPage />}
         </main>
       </div>
 

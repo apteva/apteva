@@ -30,6 +30,7 @@ export interface Agent {
   status: "stopped" | "running";
   port: number | null;
   features: AgentFeatures;
+  mcp_servers: string[]; // Array of MCP server IDs
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +44,7 @@ export interface AgentRow {
   status: string;
   port: number | null;
   features: string | null;
+  mcp_servers: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +71,32 @@ export interface ProviderKeyRow {
   key_hint: string;
   is_valid: number;
   last_tested_at: string | null;
+  created_at: string;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  type: "npm" | "github" | "http" | "custom";
+  package: string | null;
+  command: string | null;
+  args: string | null;
+  env: Record<string, string>;
+  port: number | null;
+  status: "stopped" | "running";
+  created_at: string;
+}
+
+export interface McpServerRow {
+  id: string;
+  name: string;
+  type: string;
+  package: string | null;
+  command: string | null;
+  args: string | null;
+  env: string | null;
+  port: number | null;
+  status: string;
   created_at: string;
 }
 
@@ -193,6 +221,30 @@ function runMigrations() {
         ALTER TABLE agents ADD COLUMN features TEXT DEFAULT '{"memory":true,"tasks":false,"vision":true,"operator":false,"mcp":false,"realtime":false}';
       `,
     },
+    {
+      name: "007_create_mcp_servers",
+      sql: `
+        CREATE TABLE IF NOT EXISTS mcp_servers (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'npm',
+          package TEXT,
+          command TEXT,
+          args TEXT,
+          env TEXT DEFAULT '{}',
+          port INTEGER,
+          status TEXT NOT NULL DEFAULT 'stopped',
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_mcp_servers_status ON mcp_servers(status);
+      `,
+    },
+    {
+      name: "008_add_agent_mcp_servers",
+      sql: `
+        ALTER TABLE agents ADD COLUMN mcp_servers TEXT DEFAULT '[]';
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -218,11 +270,12 @@ export const AgentDB = {
   create(agent: Omit<Agent, "created_at" | "updated_at" | "status" | "port">): Agent {
     const now = new Date().toISOString();
     const featuresJson = JSON.stringify(agent.features || DEFAULT_FEATURES);
+    const mcpServersJson = JSON.stringify(agent.mcp_servers || []);
     const stmt = db.prepare(`
-      INSERT INTO agents (id, name, model, provider, system_prompt, features, status, port, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'stopped', NULL, ?, ?)
+      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, status, port, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?, ?)
     `);
-    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, now, now);
+    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, now, now);
     return this.findById(agent.id)!;
   },
 
@@ -273,6 +326,10 @@ export const AgentDB = {
     if (updates.features !== undefined) {
       fields.push("features = ?");
       values.push(JSON.stringify(updates.features));
+    }
+    if (updates.mcp_servers !== undefined) {
+      fields.push("mcp_servers = ?");
+      values.push(JSON.stringify(updates.mcp_servers));
     }
 
     if (fields.length > 0) {
@@ -385,6 +442,14 @@ function rowToAgent(row: AgentRow): Agent {
       // Use defaults if parsing fails
     }
   }
+  let mcp_servers: string[] = [];
+  if (row.mcp_servers) {
+    try {
+      mcp_servers = JSON.parse(row.mcp_servers);
+    } catch {
+      // Use empty array if parsing fails
+    }
+  }
   return {
     id: row.id,
     name: row.name,
@@ -394,6 +459,7 @@ function rowToAgent(row: AgentRow): Agent {
     status: row.status as "stopped" | "running",
     port: row.port,
     features,
+    mcp_servers,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -476,6 +542,125 @@ function rowToProviderKey(row: ProviderKeyRow): ProviderKey {
     key_hint: row.key_hint,
     is_valid: row.is_valid === 1,
     last_tested_at: row.last_tested_at,
+    created_at: row.created_at,
+  };
+}
+
+// MCP Server operations
+export const McpServerDB = {
+  create(server: Omit<McpServer, "created_at" | "status" | "port">): McpServer {
+    const now = new Date().toISOString();
+    const envJson = JSON.stringify(server.env || {});
+    const stmt = db.prepare(`
+      INSERT INTO mcp_servers (id, name, type, package, command, args, env, status, port, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
+    `);
+    stmt.run(server.id, server.name, server.type, server.package, server.command, server.args, envJson, now);
+    return this.findById(server.id)!;
+  },
+
+  findById(id: string): McpServer | null {
+    const row = db.query("SELECT * FROM mcp_servers WHERE id = ?").get(id) as McpServerRow | null;
+    return row ? rowToMcpServer(row) : null;
+  },
+
+  findAll(): McpServer[] {
+    const rows = db.query("SELECT * FROM mcp_servers ORDER BY created_at DESC").all() as McpServerRow[];
+    return rows.map(rowToMcpServer);
+  },
+
+  findRunning(): McpServer[] {
+    const rows = db.query("SELECT * FROM mcp_servers WHERE status = 'running'").all() as McpServerRow[];
+    return rows.map(rowToMcpServer);
+  },
+
+  update(id: string, updates: Partial<Omit<McpServer, "id" | "created_at">>): McpServer | null {
+    const server = this.findById(id);
+    if (!server) return null;
+
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.name !== undefined) {
+      fields.push("name = ?");
+      values.push(updates.name);
+    }
+    if (updates.type !== undefined) {
+      fields.push("type = ?");
+      values.push(updates.type);
+    }
+    if (updates.package !== undefined) {
+      fields.push("package = ?");
+      values.push(updates.package);
+    }
+    if (updates.command !== undefined) {
+      fields.push("command = ?");
+      values.push(updates.command);
+    }
+    if (updates.args !== undefined) {
+      fields.push("args = ?");
+      values.push(updates.args);
+    }
+    if (updates.env !== undefined) {
+      fields.push("env = ?");
+      values.push(JSON.stringify(updates.env));
+    }
+    if (updates.port !== undefined) {
+      fields.push("port = ?");
+      values.push(updates.port);
+    }
+    if (updates.status !== undefined) {
+      fields.push("status = ?");
+      values.push(updates.status);
+    }
+
+    if (fields.length > 0) {
+      values.push(id);
+      db.run(`UPDATE mcp_servers SET ${fields.join(", ")} WHERE id = ?`, values);
+    }
+
+    return this.findById(id);
+  },
+
+  setStatus(id: string, status: "stopped" | "running", port?: number): McpServer | null {
+    return this.update(id, { status, port: port ?? null });
+  },
+
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM mcp_servers WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+
+  resetAllStatus(): void {
+    db.run("UPDATE mcp_servers SET status = 'stopped', port = NULL");
+  },
+
+  count(): number {
+    const row = db.query("SELECT COUNT(*) as count FROM mcp_servers").get() as { count: number };
+    return row.count;
+  },
+};
+
+// Helper to convert DB row to McpServer type
+function rowToMcpServer(row: McpServerRow): McpServer {
+  let env: Record<string, string> = {};
+  if (row.env) {
+    try {
+      env = JSON.parse(row.env);
+    } catch {
+      // Use empty object if parsing fails
+    }
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type as McpServer["type"],
+    package: row.package,
+    command: row.command,
+    args: row.args,
+    env,
+    port: row.port,
+    status: row.status as "stopped" | "running",
     created_at: row.created_at,
   };
 }
