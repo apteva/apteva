@@ -5,7 +5,16 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
 import { initDatabase, AgentDB, ProviderKeysDB } from "./db";
-import { ensureBinary, getBinaryPath, getBinaryStatus, getActualBinaryPath } from "./binary";
+import {
+  ensureBinary,
+  getBinaryPath,
+  getBinaryStatus,
+  getActualBinaryPath,
+  initVersionTracking,
+  checkForUpdates,
+  getInstalledVersion,
+  downloadLatestBinary,
+} from "./binary";
 
 const PORT = parseInt(process.env.PORT || "4280");
 
@@ -32,6 +41,9 @@ if (await envFile.exists()) {
 
 // Initialize database (silently)
 initDatabase(DATA_DIR);
+
+// Initialize version tracking
+initVersionTracking(DATA_DIR);
 
 // Reset all agents to stopped on startup (processes don't survive restart)
 AgentDB.resetAllStatus();
@@ -97,8 +109,19 @@ const binaryResult = await ensureBinary(BIN_DIR);
 // ensureBinary prints its own status when downloading/failing
 // We only need to print "ready" if binary already existed
 if (binaryResult.success && !binaryResult.downloaded) {
-  console.log(`${c.gray}binary ready${c.reset}`);
+  const installedVersion = getInstalledVersion();
+  console.log(`${c.gray}v${installedVersion || "unknown"} ready${c.reset}`);
 }
+
+// Check for updates in background (don't block startup)
+checkForUpdates().then(versionInfo => {
+  if (versionInfo.updateAvailable) {
+    console.log(`\n  ${c.orange}Update available:${c.reset} v${versionInfo.installed || "?"} → v${versionInfo.latest}`);
+    console.log(`  ${c.gray}Run 'npm update @apteva/agent-*' or update from Settings${c.reset}\n`);
+  }
+}).catch(() => {
+  // Silently ignore version check failures
+});
 
 // Check database
 process.stdout.write(`  ${c.darkGray}Agents${c.reset}    `);

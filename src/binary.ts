@@ -1,12 +1,16 @@
 import { join } from "path";
-import { existsSync, mkdirSync, chmodSync } from "fs";
+import { existsSync, mkdirSync, chmodSync, readFileSync, writeFileSync } from "fs";
 
 // Binary configuration
 const BINARY_BASE_URL = "https://github.com/apteva/agent/releases/latest/download";
+const NPM_REGISTRY = "https://registry.npmjs.org";
 const CONNECT_TIMEOUT = 15000; // 15 seconds for initial connection
 const DOWNLOAD_TIMEOUT = 120000; // 120 seconds for full download
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second between retries
+
+// Version info stored in data directory
+let versionFilePath: string | null = null;
 
 // ANSI colors for console output
 const c = {
@@ -243,4 +247,206 @@ export function getBinaryStatus(binDir: string): {
     arch,
     source: "none",
   };
+}
+
+// ============ Version Management ============
+
+export interface VersionInfo {
+  installed: string | null;
+  latest: string | null;
+  updateAvailable: boolean;
+  lastChecked: string | null;
+}
+
+// Initialize version file path
+export function initVersionTracking(dataDir: string): void {
+  versionFilePath = join(dataDir, "agent-version.json");
+}
+
+// Get stored version info
+function getStoredVersion(): { version: string; lastChecked: string } | null {
+  if (!versionFilePath || !existsSync(versionFilePath)) {
+    return null;
+  }
+  try {
+    const data = JSON.parse(readFileSync(versionFilePath, "utf-8"));
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// Save version info
+function saveVersion(version: string): void {
+  if (!versionFilePath) return;
+  const data = {
+    version,
+    lastChecked: new Date().toISOString(),
+  };
+  writeFileSync(versionFilePath, JSON.stringify(data, null, 2));
+}
+
+// Get latest version from npm registry
+export async function getLatestNpmVersion(): Promise<string | null> {
+  const packageName = getNpmPackageName();
+  try {
+    const response = await fetch(`${NPM_REGISTRY}/${packageName}/latest`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as { version?: string };
+    return data.version || null;
+  } catch {
+    return null;
+  }
+}
+
+// Get installed version (from npm package or stored)
+export function getInstalledVersion(): string | null {
+  const packageName = getNpmPackageName();
+
+  // Try to get version from npm package
+  try {
+    const pkgPath = require.resolve(`${packageName}/package.json`);
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version || null;
+  } catch {
+    // Not installed via npm, check stored version
+  }
+
+  // Fall back to stored version
+  const stored = getStoredVersion();
+  return stored?.version || null;
+}
+
+// Check for updates
+export async function checkForUpdates(): Promise<VersionInfo> {
+  const installed = getInstalledVersion();
+  const latest = await getLatestNpmVersion();
+
+  let updateAvailable = false;
+  if (installed && latest) {
+    updateAvailable = compareVersions(latest, installed) > 0;
+  } else if (!installed && latest) {
+    updateAvailable = true;
+  }
+
+  const stored = getStoredVersion();
+
+  return {
+    installed,
+    latest,
+    updateAvailable,
+    lastChecked: stored?.lastChecked || null,
+  };
+}
+
+// Compare semver versions: returns positive if a > b, negative if a < b, 0 if equal
+function compareVersions(a: string, b: string): number {
+  const partsA = a.split(".").map(n => parseInt(n, 10) || 0);
+  const partsB = b.split(".").map(n => parseInt(n, 10) || 0);
+
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const numA = partsA[i] || 0;
+    const numB = partsB[i] || 0;
+    if (numA > numB) return 1;
+    if (numA < numB) return -1;
+  }
+  return 0;
+}
+
+// Download and install latest binary
+export async function downloadLatestBinary(binDir: string): Promise<{
+  success: boolean;
+  version?: string;
+  error?: string;
+}> {
+  // Ensure bin directory exists
+  if (!existsSync(binDir)) {
+    mkdirSync(binDir, { recursive: true });
+  }
+
+  const binaryPath = getBinaryPath(binDir);
+  const url = getDownloadUrl();
+
+  console.log(`${c.gray}Downloading latest agent binary...${c.reset}`);
+
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const data = await downloadWithTimeout(url);
+
+      // Write binary
+      await Bun.write(binaryPath, data);
+
+      // Make executable on Unix
+      if (process.platform !== "win32") {
+        chmodSync(binaryPath, 0o755);
+      }
+
+      // Get and save version
+      const version = await getLatestNpmVersion();
+      if (version) {
+        saveVersion(version);
+      }
+
+      console.log(`${c.green}Downloaded agent v${version || "unknown"}${c.reset}`);
+
+      return {
+        success: true,
+        version: version || undefined,
+      };
+    } catch (err) {
+      lastErr = err as Error;
+      if (attempt < MAX_RETRIES - 1) {
+        await sleep(RETRY_DELAY * (attempt + 1));
+      }
+    }
+  }
+
+  return {
+    success: false,
+    error: lastErr?.message || "Download failed",
+  };
+}
+
+// Install via npm (preferred method)
+export async function installViaNpm(): Promise<{
+  success: boolean;
+  version?: string;
+  error?: string;
+}> {
+  const packageName = getNpmPackageName();
+
+  console.log(`${c.gray}Installing ${packageName}...${c.reset}`);
+
+  try {
+    const proc = Bun.spawn(["npm", "install", "-g", packageName], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const exitCode = await proc.exited;
+
+    if (exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      return {
+        success: false,
+        error: stderr || `npm install failed with code ${exitCode}`,
+      };
+    }
+
+    const version = await getLatestNpmVersion();
+    console.log(`${c.green}Installed agent v${version || "latest"}${c.reset}`);
+
+    return {
+      success: true,
+      version: version || undefined,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: (err as Error).message,
+    };
+  }
 }

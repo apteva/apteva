@@ -228,16 +228,18 @@ interface ProviderKeyCardProps {
 }
 
 interface VersionInfo {
-  current: string;
-  latest: string;
+  installed: string | null;
+  latest: string | null;
   updateAvailable: boolean;
-  updateCommand: string;
+  lastChecked: string | null;
 }
 
 function UpdatesSettings() {
   const [version, setVersion] = useState<VersionInfo | null>(null);
   const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const checkForUpdates = async () => {
@@ -254,16 +256,35 @@ function UpdatesSettings() {
     setChecking(false);
   };
 
+  const performUpdate = async () => {
+    setUpdating(true);
+    setError(null);
+    setUpdateSuccess(null);
+    try {
+      const res = await fetch("/api/version/update", { method: "POST" });
+      const data = await res.json();
+      if (!data.success) {
+        setError(data.error || "Update failed");
+      } else {
+        setUpdateSuccess(`Updated to v${data.version}! Restart apteva to use the new version.`);
+        await checkForUpdates();
+      }
+    } catch (e) {
+      setError("Failed to update");
+    }
+    setUpdating(false);
+  };
+
   useEffect(() => {
     checkForUpdates();
   }, []);
 
+  const updateCommand = "npm update @apteva/agent-linux-x64"; // Platform-specific in real impl
+
   const copyCommand = () => {
-    if (version?.updateCommand) {
-      navigator.clipboard.writeText(version.updateCommand);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    navigator.clipboard.writeText(updateCommand);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -271,27 +292,39 @@ function UpdatesSettings() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Updates</h1>
         <p className="text-[#666]">
-          Check for new versions of apteva.
+          Check for new versions of the agent binary.
         </p>
       </div>
 
       <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6">
         {checking && !version ? (
           <div className="text-[#666]">Checking for updates...</div>
-        ) : error ? (
+        ) : error && !version ? (
           <div className="text-red-400">{error}</div>
         ) : version ? (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm text-[#666]">Current version</div>
-                <div className="text-xl font-mono">v{version.current}</div>
+                <div className="text-sm text-[#666]">Installed version</div>
+                <div className="text-xl font-mono">v{version.installed || "unknown"}</div>
               </div>
               <div className="text-right">
                 <div className="text-sm text-[#666]">Latest version</div>
-                <div className="text-xl font-mono">v{version.latest}</div>
+                <div className="text-xl font-mono">v{version.latest || "unknown"}</div>
               </div>
             </div>
+
+            {updateSuccess && (
+              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-green-400">
+                {updateSuccess}
+              </div>
+            )}
+
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">
+                {error}
+              </div>
+            )}
 
             {version.updateAvailable ? (
               <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
@@ -302,11 +335,21 @@ function UpdatesSettings() {
                   Update available!
                 </div>
                 <p className="text-sm text-[#888] mb-3">
-                  A new version of apteva is available. Run this command to update:
+                  A new version of the agent binary is available.
                 </p>
+                <div className="flex items-center gap-2 mb-3">
+                  <button
+                    onClick={performUpdate}
+                    disabled={updating}
+                    className="px-4 py-2 bg-[#f97316] text-black rounded font-medium text-sm disabled:opacity-50"
+                  >
+                    {updating ? "Updating..." : "Update Now"}
+                  </button>
+                </div>
+                <p className="text-xs text-[#666] mb-2">Or update manually via npm:</p>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm">
-                    {version.updateCommand}
+                  <code className="flex-1 bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#888]">
+                    {updateCommand}
                   </code>
                   <button
                     onClick={copyCommand}
@@ -323,13 +366,20 @@ function UpdatesSettings() {
               </div>
             )}
 
-            <button
-              onClick={checkForUpdates}
-              disabled={checking}
-              className="text-sm text-[#666] hover:text-[#888] disabled:opacity-50"
-            >
-              {checking ? "Checking..." : "Check again"}
-            </button>
+            <div className="flex items-center justify-between">
+              <button
+                onClick={checkForUpdates}
+                disabled={checking}
+                className="text-sm text-[#666] hover:text-[#888] disabled:opacity-50"
+              >
+                {checking ? "Checking..." : "Check again"}
+              </button>
+              {version.lastChecked && (
+                <span className="text-xs text-[#444]">
+                  Last checked: {new Date(version.lastChecked).toLocaleString()}
+                </span>
+              )}
+            </div>
           </div>
         ) : null}
       </div>

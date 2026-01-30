@@ -5,7 +5,13 @@ import { mkdirSync, existsSync } from "fs";
 import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR } from "../server";
 import { AgentDB, McpServerDB, generateId, type Agent, type AgentFeatures, type McpServer } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
-import { binaryExists } from "../binary";
+import {
+  binaryExists,
+  checkForUpdates,
+  getInstalledVersion,
+  downloadLatestBinary,
+  installViaNpm,
+} from "../binary";
 import {
   startMcpProcess,
   stopMcpProcess,
@@ -576,9 +582,40 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
     return json(getBinaryStatus(BIN_DIR));
   }
 
+  // GET /api/version - Check agent binary version info
+  if (path === "/api/version" && method === "GET") {
+    const versionInfo = await checkForUpdates();
+    return json(versionInfo);
+  }
+
+  // POST /api/version/update - Download/install latest agent binary
+  if (path === "/api/version/update" && method === "POST") {
+    // Check if any agents are running
+    const runningAgents = AgentDB.findAll().filter(a => a.status === "running");
+    if (runningAgents.length > 0) {
+      return json(
+        { success: false, error: "Cannot update while agents are running. Stop all agents first." },
+        { status: 400 }
+      );
+    }
+
+    // Try npm install first, fall back to direct download
+    let result = await installViaNpm();
+    if (!result.success) {
+      // Fall back to direct download
+      result = await downloadLatestBinary(BIN_DIR);
+    }
+
+    if (result.success) {
+      return json({ success: true, version: result.version });
+    }
+    return json({ success: false, error: result.error }, { status: 500 });
+  }
+
   // GET /api/health - Health check
   if (path === "/api/health") {
     const binaryStatus = getBinaryStatus(BIN_DIR);
+    const installedVersion = getInstalledVersion();
     return json({
       status: "ok",
       timestamp: new Date().toISOString(),
@@ -590,6 +627,7 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
         available: binaryStatus.exists,
         platform: binaryStatus.platform,
         arch: binaryStatus.arch,
+        version: installedVersion,
       }
     });
   }
