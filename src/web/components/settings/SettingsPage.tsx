@@ -234,13 +234,18 @@ interface VersionInfo {
   lastChecked: string | null;
 }
 
+interface AllVersionInfo {
+  apteva: VersionInfo;
+  agent: VersionInfo;
+}
+
 function UpdatesSettings() {
-  const [version, setVersion] = useState<VersionInfo | null>(null);
+  const [versions, setVersions] = useState<AllVersionInfo | null>(null);
   const [checking, setChecking] = useState(false);
-  const [updating, setUpdating] = useState(false);
+  const [updatingAgent, setUpdatingAgent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   const checkForUpdates = async () => {
     setChecking(true);
@@ -249,15 +254,15 @@ function UpdatesSettings() {
       const res = await fetch("/api/version");
       if (!res.ok) throw new Error("Failed to check for updates");
       const data = await res.json();
-      setVersion(data);
+      setVersions(data);
     } catch (e) {
       setError("Failed to check for updates");
     }
     setChecking(false);
   };
 
-  const performUpdate = async () => {
-    setUpdating(true);
+  const updateAgent = async () => {
+    setUpdatingAgent(true);
     setError(null);
     setUpdateSuccess(null);
     try {
@@ -266,123 +271,148 @@ function UpdatesSettings() {
       if (!data.success) {
         setError(data.error || "Update failed");
       } else {
-        setUpdateSuccess(`Updated to v${data.version}! Restart apteva to use the new version.`);
+        setUpdateSuccess(`Agent updated to v${data.version}! Restart apteva to use it.`);
         await checkForUpdates();
       }
     } catch (e) {
-      setError("Failed to update");
+      setError("Failed to update agent");
     }
-    setUpdating(false);
+    setUpdatingAgent(false);
   };
 
   useEffect(() => {
     checkForUpdates();
   }, []);
 
-  const updateCommand = "npm update @apteva/agent-linux-x64"; // Platform-specific in real impl
-
-  const copyCommand = () => {
-    navigator.clipboard.writeText(updateCommand);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyCommand = (cmd: string, id: string) => {
+    navigator.clipboard.writeText(cmd);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
   };
+
+  const hasAnyUpdate = versions?.apteva.updateAvailable || versions?.agent.updateAvailable;
 
   return (
     <div className="max-w-2xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Updates</h1>
         <p className="text-[#666]">
-          Check for new versions of the agent binary.
+          Check for new versions of apteva and the agent binary.
         </p>
       </div>
 
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6">
-        {checking && !version ? (
-          <div className="text-[#666]">Checking for updates...</div>
-        ) : error && !version ? (
-          <div className="text-red-400">{error}</div>
-        ) : version ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
+      {checking && !versions ? (
+        <div className="text-[#666]">Checking for updates...</div>
+      ) : error && !versions ? (
+        <div className="text-red-400">{error}</div>
+      ) : versions ? (
+        <div className="space-y-6">
+          {updateSuccess && (
+            <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-green-400">
+              {updateSuccess}
+            </div>
+          )}
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">
+              {error}
+            </div>
+          )}
+
+          {/* Apteva App Version */}
+          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-5">
+            <div className="flex items-center justify-between mb-4">
               <div>
-                <div className="text-sm text-[#666]">Installed version</div>
-                <div className="text-xl font-mono">v{version.installed || "unknown"}</div>
+                <h3 className="font-medium text-lg">apteva</h3>
+                <p className="text-sm text-[#666]">The app you're running</p>
               </div>
               <div className="text-right">
-                <div className="text-sm text-[#666]">Latest version</div>
-                <div className="text-xl font-mono">v{version.latest || "unknown"}</div>
+                <div className="text-xl font-mono">v{versions.apteva.installed || "?"}</div>
+                {versions.apteva.updateAvailable && (
+                  <div className="text-sm text-[#f97316]">→ v{versions.apteva.latest}</div>
+                )}
               </div>
             </div>
 
-            {updateSuccess && (
-              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-green-400">
-                {updateSuccess}
-              </div>
-            )}
-
-            {error && (
-              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">
-                {error}
-              </div>
-            )}
-
-            {version.updateAvailable ? (
+            {versions.apteva.updateAvailable ? (
               <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
-                <div className="flex items-center gap-2 text-[#f97316] font-medium mb-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Update available!
-                </div>
                 <p className="text-sm text-[#888] mb-3">
-                  A new version of the agent binary is available.
+                  Update by running:
                 </p>
-                <div className="flex items-center gap-2 mb-3">
-                  <button
-                    onClick={performUpdate}
-                    disabled={updating}
-                    className="px-4 py-2 bg-[#f97316] text-black rounded font-medium text-sm disabled:opacity-50"
-                  >
-                    {updating ? "Updating..." : "Update Now"}
-                  </button>
-                </div>
-                <p className="text-xs text-[#666] mb-2">Or update manually via npm:</p>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#888]">
-                    {updateCommand}
+                    npx apteva@latest
                   </code>
                   <button
-                    onClick={copyCommand}
+                    onClick={() => copyCommand("npx apteva@latest", "apteva")}
                     className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded text-sm"
                   >
-                    {copied ? "Copied!" : "Copy"}
+                    {copied === "apteva" ? "Copied!" : "Copy"}
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 flex items-center gap-2 text-green-400">
-                <CheckIcon className="w-5 h-5" />
-                You're running the latest version!
+              <div className="flex items-center gap-2 text-green-400 text-sm">
+                <CheckIcon className="w-4 h-4" />
+                Up to date
               </div>
             )}
-
-            <div className="flex items-center justify-between">
-              <button
-                onClick={checkForUpdates}
-                disabled={checking}
-                className="text-sm text-[#666] hover:text-[#888] disabled:opacity-50"
-              >
-                {checking ? "Checking..." : "Check again"}
-              </button>
-              {version.lastChecked && (
-                <span className="text-xs text-[#444]">
-                  Last checked: {new Date(version.lastChecked).toLocaleString()}
-                </span>
-              )}
-            </div>
           </div>
-        ) : null}
-      </div>
+
+          {/* Agent Binary Version */}
+          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-medium text-lg">Agent Binary</h3>
+                <p className="text-sm text-[#666]">The Go binary that runs agents</p>
+              </div>
+              <div className="text-right">
+                <div className="text-xl font-mono">v{versions.agent.installed || "?"}</div>
+                {versions.agent.updateAvailable && (
+                  <div className="text-sm text-[#f97316]">→ v{versions.agent.latest}</div>
+                )}
+              </div>
+            </div>
+
+            {versions.agent.updateAvailable ? (
+              <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
+                <p className="text-sm text-[#888] mb-3">
+                  A new version is available. Stop all agents before updating.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={updateAgent}
+                    disabled={updatingAgent}
+                    className="px-4 py-2 bg-[#f97316] text-black rounded font-medium text-sm disabled:opacity-50"
+                  >
+                    {updatingAgent ? "Updating..." : "Update Agent"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-green-400 text-sm">
+                <CheckIcon className="w-4 h-4" />
+                Up to date
+              </div>
+            )}
+          </div>
+
+          {!hasAnyUpdate && (
+            <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 flex items-center gap-2 text-green-400">
+              <CheckIcon className="w-5 h-5" />
+              Everything is up to date!
+            </div>
+          )}
+
+          <button
+            onClick={checkForUpdates}
+            disabled={checking}
+            className="text-sm text-[#666] hover:text-[#888] disabled:opacity-50"
+          >
+            {checking ? "Checking..." : "Check for updates"}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

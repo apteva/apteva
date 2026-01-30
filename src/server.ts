@@ -13,6 +13,7 @@ import {
   initVersionTracking,
   checkForUpdates,
   getInstalledVersion,
+  getAptevaVersion,
   downloadLatestBinary,
 } from "./binary";
 
@@ -98,8 +99,9 @@ function link(url: string, text?: string): string {
 
 
 // Startup banner
+const aptevaVersion = getAptevaVersion();
 console.log(`
-  ${c.orange}${c.bold}>_ apteva${c.reset}
+  ${c.orange}${c.bold}>_ apteva${c.reset} ${c.gray}v${aptevaVersion}${c.reset}
   ${c.gray}Run AI agents locally${c.reset}
 `);
 
@@ -114,10 +116,18 @@ if (binaryResult.success && !binaryResult.downloaded) {
 }
 
 // Check for updates in background (don't block startup)
-checkForUpdates().then(versionInfo => {
-  if (versionInfo.updateAvailable) {
-    console.log(`\n  ${c.orange}Update available:${c.reset} v${versionInfo.installed || "?"} → v${versionInfo.latest}`);
-    console.log(`  ${c.gray}Run 'npm update @apteva/agent-*' or update from Settings${c.reset}\n`);
+checkForUpdates().then(versions => {
+  const updates: string[] = [];
+  if (versions.apteva.updateAvailable) {
+    updates.push(`apteva: v${versions.apteva.installed} → v${versions.apteva.latest}`);
+  }
+  if (versions.agent.updateAvailable) {
+    updates.push(`agent: v${versions.agent.installed || "?"} → v${versions.agent.latest}`);
+  }
+  if (updates.length > 0) {
+    console.log(`\n  ${c.orange}Updates available:${c.reset}`);
+    updates.forEach(u => console.log(`  ${c.gray}• ${u}${c.reset}`));
+    console.log(`  ${c.gray}Update from Settings or run: npx apteva@latest${c.reset}\n`);
   }
 }).catch(() => {
   // Silently ignore version check failures

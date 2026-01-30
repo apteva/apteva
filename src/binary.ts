@@ -251,11 +251,41 @@ export function getBinaryStatus(binDir: string): {
 
 // ============ Version Management ============
 
+// Get apteva app version from package.json
+export function getAptevaVersion(): string {
+  try {
+    const pkgPath = join(import.meta.dir, "../package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+// Check latest apteva version from npm
+export async function getLatestAptevaVersion(): Promise<string | null> {
+  try {
+    const response = await fetch(`${NPM_REGISTRY}/apteva/latest`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as { version?: string };
+    return data.version || null;
+  } catch {
+    return null;
+  }
+}
+
 export interface VersionInfo {
   installed: string | null;
   latest: string | null;
   updateAvailable: boolean;
   lastChecked: string | null;
+}
+
+export interface AllVersionInfo {
+  apteva: VersionInfo;
+  agent: VersionInfo;
 }
 
 // Initialize version file path
@@ -319,8 +349,8 @@ export function getInstalledVersion(): string | null {
   return stored?.version || null;
 }
 
-// Check for updates
-export async function checkForUpdates(): Promise<VersionInfo> {
+// Check for agent binary updates
+export async function checkForAgentUpdates(): Promise<VersionInfo> {
   const installed = getInstalledVersion();
   const latest = await getLatestNpmVersion();
 
@@ -339,6 +369,34 @@ export async function checkForUpdates(): Promise<VersionInfo> {
     updateAvailable,
     lastChecked: stored?.lastChecked || null,
   };
+}
+
+// Check for apteva app updates
+export async function checkForAptevaUpdates(): Promise<VersionInfo> {
+  const installed = getAptevaVersion();
+  const latest = await getLatestAptevaVersion();
+
+  let updateAvailable = false;
+  if (installed && latest && installed !== "unknown") {
+    updateAvailable = compareVersions(latest, installed) > 0;
+  }
+
+  return {
+    installed,
+    latest,
+    updateAvailable,
+    lastChecked: new Date().toISOString(),
+  };
+}
+
+// Check for all updates (apteva + agent)
+export async function checkForUpdates(): Promise<AllVersionInfo> {
+  const [apteva, agent] = await Promise.all([
+    checkForAptevaUpdates(),
+    checkForAgentUpdates(),
+  ]);
+
+  return { apteva, agent };
 }
 
 // Compare semver versions: returns positive if a > b, negative if a < b, 0 if equal

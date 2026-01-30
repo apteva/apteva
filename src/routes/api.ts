@@ -9,6 +9,7 @@ import {
   binaryExists,
   checkForUpdates,
   getInstalledVersion,
+  getAptevaVersion,
   downloadLatestBinary,
   installViaNpm,
 } from "../binary";
