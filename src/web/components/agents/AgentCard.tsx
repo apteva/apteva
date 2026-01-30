@@ -1,5 +1,6 @@
 import React from "react";
 import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon } from "../common/Icons";
+import { useAgentActivity } from "../../context";
 import type { Agent, AgentFeatures } from "../../types";
 
 interface AgentCardProps {
@@ -22,6 +23,7 @@ const FEATURE_ICONS: { key: keyof AgentFeatures; icon: React.ComponentType<{ cla
 export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: AgentCardProps) {
   const enabledFeatures = FEATURE_ICONS.filter(f => agent.features?.[f.key]);
   const mcpServers = agent.mcpServerDetails || [];
+  const { isActive, category, type } = useAgentActivity(agent.id);
 
   return (
     <div
@@ -33,14 +35,27 @@ export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: Age
       }`}
     >
       <div className="flex items-start justify-between mb-3">
-        <div>
-          <h3 className="font-semibold text-lg">{agent.name}</h3>
-          <p className="text-sm text-[#666]">
-            {agent.provider} / {agent.model}
-            {agent.port && <span className="text-[#444]"> · :{agent.port}</span>}
-          </p>
+        <div className="flex items-center gap-2">
+          {/* Activity indicator */}
+          {agent.status === "running" && (
+            <span
+              className={`w-2 h-2 rounded-full transition-all ${
+                isActive
+                  ? "bg-green-400 animate-pulse"
+                  : "bg-[#333]"
+              }`}
+              title={isActive ? `${category}: ${type}` : "Idle"}
+            />
+          )}
+          <div>
+            <h3 className="font-semibold text-lg">{agent.name}</h3>
+            <p className="text-sm text-[#666]">
+              {agent.provider} / {agent.model}
+              {agent.port && <span className="text-[#444]"> · :{agent.port}</span>}
+            </p>
+          </div>
         </div>
-        <StatusBadge status={agent.status} />
+        <StatusBadge status={agent.status} isActive={isActive && agent.status === "running"} activityType={type} />
       </div>
 
       {enabledFeatures.length > 0 && (
@@ -104,7 +119,15 @@ export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: Age
   );
 }
 
-function StatusBadge({ status }: { status: Agent["status"] }) {
+function StatusBadge({ status, isActive, activityType }: { status: Agent["status"]; isActive?: boolean; activityType?: string }) {
+  if (status === "running" && isActive && activityType) {
+    return (
+      <span className="px-2 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400 animate-pulse">
+        {activityType}
+      </span>
+    );
+  }
+
   return (
     <span
       className={`px-2 py-1 rounded text-xs font-medium ${

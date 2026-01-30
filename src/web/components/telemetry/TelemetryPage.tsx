@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Select } from "../common/Select";
+import { useTelemetryContext, type TelemetryEvent } from "../../context";
 
 interface TelemetryStats {
   total_events: number;
@@ -8,20 +9,6 @@ interface TelemetryStats {
   total_errors: number;
   total_input_tokens: number;
   total_output_tokens: number;
-}
-
-interface TelemetryEvent {
-  id: string;
-  agent_id: string;
-  timestamp: string;
-  category: string;
-  type: string;
-  level: string;
-  trace_id: string | null;
-  thread_id: string | null;
-  data: Record<string, unknown> | null;
-  duration_ms: number | null;
-  error: string | null;
 }
 
 interface UsageByAgent {
@@ -34,8 +21,9 @@ interface UsageByAgent {
 }
 
 export function TelemetryPage() {
+  const { connected, events: realtimeEvents } = useTelemetryContext();
   const [stats, setStats] = useState<TelemetryStats | null>(null);
-  const [events, setEvents] = useState<TelemetryEvent[]>([]);
+  const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
   const [usage, setUsage] = useState<UsageByAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({
@@ -60,7 +48,7 @@ export function TelemetryPage() {
     fetchAgents();
   }, []);
 
-  // Fetch telemetry data
+  // Fetch stats and historical data (less frequently now since we have real-time)
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -69,7 +57,7 @@ export function TelemetryPage() {
       const statsData = await statsRes.json();
       setStats(statsData.stats);
 
-      // Fetch events with filters
+      // Fetch historical events with filters
       const params = new URLSearchParams();
       if (filter.category) params.set("category", filter.category);
       if (filter.level) params.set("level", filter.level);
@@ -78,7 +66,7 @@ export function TelemetryPage() {
 
       const eventsRes = await fetch(`/api/telemetry/events?${params}`);
       const eventsData = await eventsRes.json();
-      setEvents(eventsData.events || []);
+      setHistoricalEvents(eventsData.events || []);
 
       // Fetch usage by agent
       const usageRes = await fetch("/api/telemetry/usage?group_by=agent");
@@ -92,10 +80,40 @@ export function TelemetryPage() {
 
   useEffect(() => {
     fetchData();
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
+    // Refresh stats every 60 seconds (events come in real-time)
+    const interval = setInterval(fetchData, 60000);
     return () => clearInterval(interval);
   }, [filter]);
+
+  // Merge real-time events with historical, filtering and deduping
+  const allEvents = React.useMemo(() => {
+    // Apply filters to real-time events
+    let filtered = realtimeEvents;
+    if (filter.agent_id) {
+      filtered = filtered.filter(e => e.agent_id === filter.agent_id);
+    }
+    if (filter.category) {
+      filtered = filtered.filter(e => e.category === filter.category);
+    }
+    if (filter.level) {
+      filtered = filtered.filter(e => e.level === filter.level);
+    }
+
+    // Merge with historical, dedupe by ID
+    const seen = new Set(filtered.map(e => e.id));
+    const merged = [...filtered];
+    for (const evt of historicalEvents) {
+      if (!seen.has(evt.id)) {
+        merged.push(evt);
+        seen.add(evt.id);
+      }
+    }
+
+    // Sort by timestamp descending
+    merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    return merged.slice(0, 100);
+  }, [realtimeEvents, historicalEvents, filter]);
 
   const getAgentName = (agentId: string) => {
     const agent = agents.find(a => a.id === agentId);
@@ -155,11 +173,21 @@ export function TelemetryPage() {
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-6xl">
         {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold mb-1">Telemetry</h1>
-          <p className="text-[#666]">
-            Monitor agent activity, token usage, and errors.
-          </p>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold mb-1">Telemetry</h1>
+            <p className="text-[#666]">
+              Monitor agent activity, token usage, and errors.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`}
+            />
+            <span className="text-xs text-[#666]">
+              {connected ? "Live" : "Reconnecting..."}
+            </span>
+          </div>
         </div>
 
         {/* Stats Cards */}
@@ -249,53 +277,68 @@ export function TelemetryPage() {
 
         {/* Events List */}
         <div className="bg-[#111] border border-[#1a1a1a] rounded-lg">
-          <div className="p-3 border-b border-[#1a1a1a]">
+          <div className="p-3 border-b border-[#1a1a1a] flex items-center justify-between">
             <h2 className="font-medium">Recent Events</h2>
+            {realtimeEvents.length > 0 && (
+              <span className="text-xs text-[#666]">
+                {realtimeEvents.length} new
+              </span>
+            )}
           </div>
 
-          {loading && events.length === 0 ? (
+          {loading && allEvents.length === 0 ? (
             <div className="p-8 text-center text-[#666]">Loading...</div>
-          ) : events.length === 0 ? (
+          ) : allEvents.length === 0 ? (
             <div className="p-8 text-center text-[#666]">
-              No telemetry events yet. Events will appear here once agents start sending data.
+              No telemetry events yet. Events will appear here in real-time once agents start sending data.
             </div>
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
-              {events.map((event) => (
-                <div
-                  key={event.id}
-                  className="p-3 hover:bg-[#0a0a0a] transition cursor-pointer"
-                  onClick={() => setExpandedEvent(expandedEvent === event.id ? null : event.id)}
-                >
-                  <div className="flex items-start gap-3">
-                    <span className={`px-2 py-0.5 rounded text-xs border ${categoryColors[event.category] || "bg-[#222] text-[#888] border-[#333]"}`}>
-                      {event.category}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">{event.type}</span>
-                        <span className={`text-xs ${levelColors[event.level] || "text-[#666]"}`}>
-                          {event.level}
-                        </span>
-                        {event.duration_ms && (
-                          <span className="text-xs text-[#555]">{event.duration_ms}ms</span>
+              {allEvents.map((event, index) => {
+                // Check if this is a new real-time event (in first few positions and recent)
+                const isNew = index < 3 && realtimeEvents.some(e => e.id === event.id);
+
+                return (
+                  <div
+                    key={event.id}
+                    className={`p-3 hover:bg-[#0a0a0a] transition cursor-pointer ${
+                      isNew ? "bg-[#0f1a0f]" : ""
+                    }`}
+                    onClick={() => setExpandedEvent(expandedEvent === event.id ? null : event.id)}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={`px-2 py-0.5 rounded text-xs border ${categoryColors[event.category] || "bg-[#222] text-[#888] border-[#333]"}`}>
+                        {event.category}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm">{event.type}</span>
+                          <span className={`text-xs ${levelColors[event.level] || "text-[#666]"}`}>
+                            {event.level}
+                          </span>
+                          {event.duration_ms && (
+                            <span className="text-xs text-[#555]">{event.duration_ms}ms</span>
+                          )}
+                          {isNew && (
+                            <span className="text-xs text-green-400">new</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-[#555] mt-1">
+                          {getAgentName(event.agent_id)} · {new Date(event.timestamp).toLocaleString()}
+                        </div>
+                        {event.error && (
+                          <div className="text-xs text-red-400 mt-1 font-mono">{event.error}</div>
+                        )}
+                        {expandedEvent === event.id && event.data && Object.keys(event.data).length > 0 && (
+                          <pre className="text-xs text-[#666] mt-2 p-2 bg-[#0a0a0a] rounded overflow-x-auto">
+                            {JSON.stringify(event.data, null, 2)}
+                          </pre>
                         )}
                       </div>
-                      <div className="text-xs text-[#555] mt-1">
-                        {getAgentName(event.agent_id)} · {new Date(event.timestamp).toLocaleString()}
-                      </div>
-                      {event.error && (
-                        <div className="text-xs text-red-400 mt-1 font-mono">{event.error}</div>
-                      )}
-                      {expandedEvent === event.id && event.data && Object.keys(event.data).length > 0 && (
-                        <pre className="text-xs text-[#666] mt-2 p-2 bg-[#0a0a0a] rounded overflow-x-auto">
-                          {JSON.stringify(event.data, null, 2)}
-                        </pre>
-                      )}
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

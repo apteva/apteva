@@ -6,6 +6,9 @@ import "@apteva/apteva-kit/styles.css";
 import type { Agent, Provider, Route, NewAgentForm } from "./types";
 import { DEFAULT_FEATURES } from "./types";
 
+// Context
+import { TelemetryProvider } from "./context";
+
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
 
@@ -253,4 +256,8 @@ function App() {
 
 // Mount the app
 const root = createRoot(document.getElementById("root")!);
-root.render(<App />);
+root.render(
+  <TelemetryProvider>
+    <App />
+  </TelemetryProvider>
+);

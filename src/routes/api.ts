@@ -2,7 +2,7 @@ import { spawn } from "bun";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
-import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR } from "../server";
+import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
 import { AgentDB, McpServerDB, TelemetryDB, generateId, type Agent, type AgentFeatures, type McpServer } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import {
@@ -1098,11 +1098,56 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       // Filter out debug events - too noisy
       const filteredEvents = body.events.filter(e => e.level !== "debug");
       const inserted = TelemetryDB.insertBatch(body.agent_id, filteredEvents);
+
+      // Broadcast to SSE clients
+      if (filteredEvents.length > 0) {
+        const broadcastEvents: TelemetryEvent[] = filteredEvents.map(e => ({
+          id: e.id,
+          agent_id: body.agent_id,
+          timestamp: e.timestamp,
+          category: e.category,
+          type: e.type,
+          level: e.level,
+          trace_id: e.trace_id,
+          thread_id: e.thread_id,
+          data: e.data,
+          duration_ms: e.duration_ms,
+          error: e.error,
+        }));
+        telemetryBroadcaster.broadcast(broadcastEvents);
+      }
+
       return json({ received: body.events.length, inserted });
     } catch (e) {
       console.error("Telemetry error:", e);
       return json({ error: "Invalid telemetry payload" }, 400);
     }
+  }
+
+  // GET /api/telemetry/stream - SSE stream for real-time telemetry
+  if (path === "/api/telemetry/stream" && method === "GET") {
+    let controller: ReadableStreamDefaultController<string>;
+
+    const stream = new ReadableStream<string>({
+      start(c) {
+        controller = c;
+        telemetryBroadcaster.addClient(controller);
+        // Send initial connection message
+        controller.enqueue("data: {\"connected\":true}\n\n");
+      },
+      cancel() {
+        telemetryBroadcaster.removeClient(controller);
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   }
 
   // GET /api/telemetry/events - Query telemetry events

@@ -18,6 +18,53 @@ import {
   downloadLatestBinary,
 } from "./binary";
 
+// ============ SSE Telemetry Broadcast ============
+export interface TelemetryEvent {
+  id: string;
+  agent_id: string;
+  timestamp: string;
+  category: string;
+  type: string;
+  level: string;
+  trace_id?: string;
+  thread_id?: string;
+  data?: Record<string, unknown>;
+  duration_ms?: number;
+  error?: string;
+}
+
+class TelemetryBroadcaster {
+  private clients: Set<ReadableStreamDefaultController<string>> = new Set();
+
+  addClient(controller: ReadableStreamDefaultController<string>) {
+    this.clients.add(controller);
+  }
+
+  removeClient(controller: ReadableStreamDefaultController<string>) {
+    this.clients.delete(controller);
+  }
+
+  broadcast(events: TelemetryEvent[]) {
+    if (this.clients.size === 0) return;
+
+    const data = `data: ${JSON.stringify(events)}\n\n`;
+    for (const controller of this.clients) {
+      try {
+        controller.enqueue(data);
+      } catch {
+        // Client disconnected, remove it
+        this.clients.delete(controller);
+      }
+    }
+  }
+
+  get clientCount() {
+    return this.clients.size;
+  }
+}
+
+export const telemetryBroadcaster = new TelemetryBroadcaster();
+
 const PORT = parseInt(process.env.PORT || "4280");
 
 // Use ~/.apteva for persistent data (survives npm updates)
