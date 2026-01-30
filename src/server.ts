@@ -38,23 +38,33 @@ class TelemetryBroadcaster {
 
   addClient(controller: ReadableStreamDefaultController<string>) {
     this.clients.add(controller);
+    console.log(`[SSE] Client connected (${this.clients.size} total)`);
   }
 
   removeClient(controller: ReadableStreamDefaultController<string>) {
     this.clients.delete(controller);
+    console.log(`[SSE] Client disconnected (${this.clients.size} remaining)`);
   }
 
   broadcast(events: TelemetryEvent[]) {
     if (this.clients.size === 0) return;
 
     const data = `data: ${JSON.stringify(events)}\n\n`;
-    for (const controller of this.clients) {
+    const failedClients: ReadableStreamDefaultController<string>[] = [];
+
+    // Iterate over a copy to avoid modification during iteration
+    for (const controller of Array.from(this.clients)) {
       try {
         controller.enqueue(data);
       } catch {
-        // Client disconnected, remove it
-        this.clients.delete(controller);
+        failedClients.push(controller);
       }
+    }
+
+    // Remove failed clients after iteration
+    for (const client of failedClients) {
+      this.clients.delete(client);
+      console.log(`[SSE] Removed failed client (${this.clients.size} remaining)`);
     }
   }
 
@@ -199,6 +209,7 @@ const server = Bun.serve({
   port: PORT,
   hostname: "0.0.0.0", // Listen on all interfaces
   development: false, // Suppress "Started server" message
+  idleTimeout: 255, // Max value - prevents SSE connections from timing out
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);

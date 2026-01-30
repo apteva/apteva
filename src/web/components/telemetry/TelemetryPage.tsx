@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Select } from "../common/Select";
 import { useTelemetryContext, type TelemetryEvent } from "../../context";
 
@@ -20,11 +20,34 @@ interface UsageByAgent {
   errors: number;
 }
 
+// Helper to extract stats from a single event
+function extractEventStats(event: TelemetryEvent): {
+  llm_calls: number;
+  tool_calls: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+} {
+  const isLlm = event.category === "LLM";
+  const isTool = event.category === "TOOL";
+  const isError = event.level === "error";
+  const inputTokens = (event.data?.input_tokens as number) || 0;
+  const outputTokens = (event.data?.output_tokens as number) || 0;
+
+  return {
+    llm_calls: isLlm ? 1 : 0,
+    tool_calls: isTool ? 1 : 0,
+    errors: isError ? 1 : 0,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+  };
+}
+
 export function TelemetryPage() {
-  const { connected, events: realtimeEvents } = useTelemetryContext();
-  const [stats, setStats] = useState<TelemetryStats | null>(null);
+  const { events: realtimeEvents } = useTelemetryContext();
+  const [fetchedStats, setFetchedStats] = useState<TelemetryStats | null>(null);
   const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
-  const [usage, setUsage] = useState<UsageByAgent[]>([]);
+  const [fetchedUsage, setFetchedUsage] = useState<UsageByAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({
     category: "",
@@ -33,6 +56,9 @@ export function TelemetryPage() {
   });
   const [agents, setAgents] = useState<Array<{ id: string; name: string }>>([]);
   const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
+
+  // Track IDs that were in the fetched stats to avoid double-counting
+  const countedEventIdsRef = useRef<Set<string>>(new Set());
 
   // Fetch agents for dropdown
   useEffect(() => {
@@ -55,7 +81,7 @@ export function TelemetryPage() {
       // Fetch stats
       const statsRes = await fetch("/api/telemetry/stats");
       const statsData = await statsRes.json();
-      setStats(statsData.stats);
+      setFetchedStats(statsData.stats);
 
       // Fetch historical events with filters
       const params = new URLSearchParams();
@@ -66,12 +92,16 @@ export function TelemetryPage() {
 
       const eventsRes = await fetch(`/api/telemetry/events?${params}`);
       const eventsData = await eventsRes.json();
-      setHistoricalEvents(eventsData.events || []);
+      const events = eventsData.events || [];
+      setHistoricalEvents(events);
+
+      // Mark all fetched event IDs as counted (stats already include them)
+      countedEventIdsRef.current = new Set(events.map((e: TelemetryEvent) => e.id));
 
       // Fetch usage by agent
       const usageRes = await fetch("/api/telemetry/usage?group_by=agent");
       const usageData = await usageRes.json();
-      setUsage(usageData.usage || []);
+      setFetchedUsage(usageData.usage || []);
     } catch (e) {
       console.error("Failed to fetch telemetry:", e);
     }
@@ -84,6 +114,75 @@ export function TelemetryPage() {
     const interval = setInterval(fetchData, 60000);
     return () => clearInterval(interval);
   }, [filter]);
+
+  // Compute real-time stats from new events (not already counted in fetched stats)
+  const stats = useMemo(() => {
+    if (!fetchedStats) return null;
+
+    // Calculate deltas from real-time events not in fetched data
+    let deltaEvents = 0;
+    let deltaLlmCalls = 0;
+    let deltaToolCalls = 0;
+    let deltaErrors = 0;
+    let deltaInputTokens = 0;
+    let deltaOutputTokens = 0;
+
+    for (const event of realtimeEvents) {
+      if (!countedEventIdsRef.current.has(event.id)) {
+        deltaEvents++;
+        const eventStats = extractEventStats(event);
+        deltaLlmCalls += eventStats.llm_calls;
+        deltaToolCalls += eventStats.tool_calls;
+        deltaErrors += eventStats.errors;
+        deltaInputTokens += eventStats.input_tokens;
+        deltaOutputTokens += eventStats.output_tokens;
+      }
+    }
+
+    return {
+      total_events: fetchedStats.total_events + deltaEvents,
+      total_llm_calls: fetchedStats.total_llm_calls + deltaLlmCalls,
+      total_tool_calls: fetchedStats.total_tool_calls + deltaToolCalls,
+      total_errors: fetchedStats.total_errors + deltaErrors,
+      total_input_tokens: fetchedStats.total_input_tokens + deltaInputTokens,
+      total_output_tokens: fetchedStats.total_output_tokens + deltaOutputTokens,
+    };
+  }, [fetchedStats, realtimeEvents]);
+
+  // Compute real-time usage by agent
+  const usage = useMemo(() => {
+    // Start with a copy of fetched usage as a map
+    const usageMap = new Map<string, UsageByAgent>();
+    for (const u of fetchedUsage) {
+      usageMap.set(u.agent_id, { ...u });
+    }
+
+    // Add deltas from real-time events
+    for (const event of realtimeEvents) {
+      if (!countedEventIdsRef.current.has(event.id)) {
+        const eventStats = extractEventStats(event);
+        const existing = usageMap.get(event.agent_id);
+        if (existing) {
+          existing.llm_calls += eventStats.llm_calls;
+          existing.tool_calls += eventStats.tool_calls;
+          existing.errors += eventStats.errors;
+          existing.input_tokens += eventStats.input_tokens;
+          existing.output_tokens += eventStats.output_tokens;
+        } else {
+          usageMap.set(event.agent_id, {
+            agent_id: event.agent_id,
+            llm_calls: eventStats.llm_calls,
+            tool_calls: eventStats.tool_calls,
+            errors: eventStats.errors,
+            input_tokens: eventStats.input_tokens,
+            output_tokens: eventStats.output_tokens,
+          });
+        }
+      }
+    }
+
+    return Array.from(usageMap.values());
+  }, [fetchedUsage, realtimeEvents]);
 
   // Merge real-time events with historical, filtering and deduping
   const allEvents = React.useMemo(() => {
@@ -173,21 +272,11 @@ export function TelemetryPage() {
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-6xl">
         {/* Header */}
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold mb-1">Telemetry</h1>
-            <p className="text-[#666]">
-              Monitor agent activity, token usage, and errors.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`}
-            />
-            <span className="text-xs text-[#666]">
-              {connected ? "Live" : "Reconnecting..."}
-            </span>
-          </div>
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold mb-1">Telemetry</h1>
+          <p className="text-[#666]">
+            Monitor agent activity, token usage, and errors.
+          </p>
         </div>
 
         {/* Stats Cards */}
@@ -294,16 +383,15 @@ export function TelemetryPage() {
             </div>
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
-              {allEvents.map((event, index) => {
-                // Check if this is a new real-time event (in first few positions and recent)
-                const isNew = index < 3 && realtimeEvents.some(e => e.id === event.id);
+              {allEvents.map((event) => {
+                // Only mark as new if event arrived in last 10 seconds
+                const eventTime = new Date(event.timestamp).getTime();
+                const isNew = Date.now() - eventTime < 10000;
 
                 return (
                   <div
                     key={event.id}
-                    className={`p-3 hover:bg-[#0a0a0a] transition cursor-pointer ${
-                      isNew ? "bg-[#0f1a0f]" : ""
-                    }`}
+                    className="p-3 hover:bg-[#0a0a0a] transition cursor-pointer"
                     onClick={() => setExpandedEvent(expandedEvent === event.id ? null : event.id)}
                   >
                     <div className="flex items-start gap-3">
@@ -320,7 +408,7 @@ export function TelemetryPage() {
                             <span className="text-xs text-[#555]">{event.duration_ms}ms</span>
                           )}
                           {isNew && (
-                            <span className="text-xs text-green-400">new</span>
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
                           )}
                         </div>
                         <div className="text-xs text-[#555] mt-1">

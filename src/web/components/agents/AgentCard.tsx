@@ -23,7 +23,7 @@ const FEATURE_ICONS: { key: keyof AgentFeatures; icon: React.ComponentType<{ cla
 export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: AgentCardProps) {
   const enabledFeatures = FEATURE_ICONS.filter(f => agent.features?.[f.key]);
   const mcpServers = agent.mcpServerDetails || [];
-  const { isActive, category, type } = useAgentActivity(agent.id);
+  const { isActive, type } = useAgentActivity(agent.id);
 
   return (
     <div
@@ -35,25 +35,12 @@ export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: Age
       }`}
     >
       <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2">
-          {/* Activity indicator */}
-          {agent.status === "running" && (
-            <span
-              className={`w-2 h-2 rounded-full transition-all ${
-                isActive
-                  ? "bg-green-400 animate-pulse"
-                  : "bg-[#333]"
-              }`}
-              title={isActive ? `${category}: ${type}` : "Idle"}
-            />
-          )}
-          <div>
-            <h3 className="font-semibold text-lg">{agent.name}</h3>
-            <p className="text-sm text-[#666]">
-              {agent.provider} / {agent.model}
-              {agent.port && <span className="text-[#444]"> · :{agent.port}</span>}
-            </p>
-          </div>
+        <div>
+          <h3 className="font-semibold text-lg">{agent.name}</h3>
+          <p className="text-sm text-[#666]">
+            {agent.provider} / {agent.model}
+            {agent.port && <span className="text-[#444]"> · :{agent.port}</span>}
+          </p>
         </div>
         <StatusBadge status={agent.status} isActive={isActive && agent.status === "running"} activityType={type} />
       </div>

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from "react";
 
 export interface TelemetryEvent {
   id: string;
@@ -18,6 +18,7 @@ interface TelemetryContextValue {
   connected: boolean;
   events: TelemetryEvent[];
   lastActivityByAgent: Record<string, { timestamp: string; category: string; type: string }>;
+  activeAgents: Record<string, { type: string; expiresAt: number }>;
   clearEvents: () => void;
 }
 
@@ -29,70 +30,111 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<TelemetryEvent[]>([]);
   const [lastActivityByAgent, setLastActivityByAgent] = useState<Record<string, { timestamp: string; category: string; type: string }>>({});
+  const [activeAgents, setActiveAgents] = useState<Record<string, { type: string; expiresAt: number }>>({});
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clean up expired active states
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setActiveAgents(prev => {
+        const updated: Record<string, { type: string; expiresAt: number }> = {};
+        for (const [agentId, state] of Object.entries(prev)) {
+          if (state.expiresAt > now) {
+            updated[agentId] = state;
+          }
+        }
+        return updated;
+      });
+    }, 500);
+    return () => clearInterval(interval);
+  }, []);
 
   const connect = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
 
-    const es = new EventSource("/api/telemetry/stream");
-    eventSourceRef.current = es;
+    try {
+      const es = new EventSource("/api/telemetry/stream");
+      eventSourceRef.current = es;
 
-    es.onopen = () => {
-      setConnected(true);
-    };
+      es.onopen = () => {
+        setConnected(true);
+      };
 
-    es.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
+      es.onmessage = (event) => {
+        // Ignore keepalive pings (comments starting with :)
+        if (!event.data || event.data.trim() === "") return;
 
-        // Handle connection message
-        if (data.connected) {
-          setConnected(true);
-          return;
-        }
+        try {
+          const data = JSON.parse(event.data);
 
-        // Handle array of events
-        if (Array.isArray(data)) {
-          setEvents(prev => {
-            const combined = [...data, ...prev];
-            return combined.slice(0, MAX_EVENTS);
-          });
+          // Handle connection message
+          if (data.connected) {
+            setConnected(true);
+            return;
+          }
 
-          // Update last activity per agent
-          setLastActivityByAgent(prev => {
-            const updated = { ...prev };
-            for (const evt of data) {
-              const existing = updated[evt.agent_id];
-              if (!existing || new Date(evt.timestamp) > new Date(existing.timestamp)) {
-                updated[evt.agent_id] = {
-                  timestamp: evt.timestamp,
-                  category: evt.category,
-                  type: evt.type,
-                };
+          // Handle array of events
+          if (Array.isArray(data)) {
+            setEvents(prev => {
+              const combined = [...data, ...prev];
+              return combined.slice(0, MAX_EVENTS);
+            });
+
+            // Update last activity per agent
+            setLastActivityByAgent(prev => {
+              const updated = { ...prev };
+              for (const evt of data) {
+                const existing = updated[evt.agent_id];
+                if (!existing || new Date(evt.timestamp) > new Date(existing.timestamp)) {
+                  updated[evt.agent_id] = {
+                    timestamp: evt.timestamp,
+                    category: evt.category,
+                    type: evt.type,
+                  };
+                }
               }
-            }
-            return updated;
-          });
+              return updated;
+            });
+
+            // Set agents as active for 3 seconds (tracked in context, not component)
+            setActiveAgents(prev => {
+              const updated = { ...prev };
+              const expiresAt = Date.now() + 3000;
+              for (const evt of data) {
+                updated[evt.agent_id] = { type: evt.type, expiresAt };
+              }
+              return updated;
+            });
+          }
+        } catch {
+          // Ignore parse errors (likely keepalive or empty message)
         }
-      } catch (e) {
-        console.error("Failed to parse telemetry event:", e);
-      }
-    };
+      };
 
-    es.onerror = () => {
+      es.onerror = () => {
+        setConnected(false);
+        es.close();
+        eventSourceRef.current = null;
+
+        // Reconnect after 2 seconds
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        reconnectTimeoutRef.current = setTimeout(connect, 2000);
+      };
+    } catch {
+      // Failed to create EventSource, retry
       setConnected(false);
-      es.close();
-      eventSourceRef.current = null;
-
-      // Reconnect after 3 seconds
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
-    };
+      reconnectTimeoutRef.current = setTimeout(connect, 2000);
+    }
   }, []);
 
   useEffect(() => {
@@ -113,7 +155,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <TelemetryContext.Provider value={{ connected, events, lastActivityByAgent, clearEvents }}>
+    <TelemetryContext.Provider value={{ connected, events, lastActivityByAgent, activeAgents, clearEvents }}>
       {children}
     </TelemetryContext.Provider>
   );
@@ -170,33 +212,13 @@ export function useTelemetry(filter?: {
   };
 }
 
-// Hook for agent activity indicator
+// Hook for agent activity indicator - uses context-level tracking
 export function useAgentActivity(agentId: string) {
-  const { lastActivityByAgent } = useTelemetryContext();
-  const [isActive, setIsActive] = useState(false);
-  const lastActivity = lastActivityByAgent[agentId];
-
-  useEffect(() => {
-    if (!lastActivity) {
-      setIsActive(false);
-      return;
-    }
-
-    // Set active when we get new activity
-    setIsActive(true);
-
-    // Clear active state after 3 seconds of no activity
-    const timeout = setTimeout(() => {
-      setIsActive(false);
-    }, 3000);
-
-    return () => clearTimeout(timeout);
-  }, [lastActivity?.timestamp]);
+  const { activeAgents } = useTelemetryContext();
+  const activity = activeAgents[agentId];
 
   return {
-    isActive,
-    lastActivity,
-    category: lastActivity?.category,
-    type: lastActivity?.type,
+    isActive: !!activity,
+    type: activity?.type,
   };
 }

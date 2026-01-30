@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { CheckIcon } from "../common/Icons";
 import type { Provider } from "../../types";
 
-type SettingsTab = "providers" | "updates";
+type SettingsTab = "providers" | "updates" | "data";
 
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("providers");
@@ -23,6 +23,11 @@ export function SettingsPage() {
             active={activeTab === "updates"}
             onClick={() => setActiveTab("updates")}
           />
+          <SettingsNavItem
+            label="Data"
+            active={activeTab === "data"}
+            onClick={() => setActiveTab("data")}
+          />
         </nav>
       </div>
 
@@ -30,6 +35,7 @@ export function SettingsPage() {
       <div className="flex-1 overflow-auto p-6">
         {activeTab === "providers" && <ProvidersSettings />}
         {activeTab === "updates" && <UpdatesSettings />}
+        {activeTab === "data" && <DataSettings />}
       </div>
     </div>
   );
@@ -625,6 +631,87 @@ function IntegrationKeyCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function DataSettings() {
+  const [clearing, setClearing] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [eventCount, setEventCount] = useState<number | null>(null);
+
+  const fetchStats = async () => {
+    try {
+      const res = await fetch("/api/telemetry/stats");
+      const data = await res.json();
+      setEventCount(data.stats?.total_events || 0);
+    } catch {
+      setEventCount(null);
+    }
+  };
+
+  useEffect(() => {
+    fetchStats();
+  }, []);
+
+  const clearTelemetry = async () => {
+    if (!confirm("Are you sure you want to delete all telemetry data? This cannot be undone.")) {
+      return;
+    }
+
+    setClearing(true);
+    setMessage(null);
+
+    try {
+      const res = await fetch("/api/telemetry/clear", { method: "POST" });
+      const data = await res.json();
+
+      if (res.ok) {
+        setMessage({ type: "success", text: `Cleared ${data.deleted || 0} telemetry events.` });
+        setEventCount(0);
+      } else {
+        setMessage({ type: "error", text: data.error || "Failed to clear telemetry" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to clear telemetry" });
+    }
+
+    setClearing(false);
+  };
+
+  return (
+    <div className="max-w-2xl">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold mb-1">Data Management</h1>
+        <p className="text-[#666]">Manage stored data and telemetry.</p>
+      </div>
+
+      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+        <h3 className="font-medium mb-2">Telemetry Data</h3>
+        <p className="text-sm text-[#666] mb-4">
+          {eventCount !== null
+            ? `${eventCount.toLocaleString()} events stored`
+            : "Loading..."}
+        </p>
+
+        {message && (
+          <div className={`mb-4 p-3 rounded text-sm ${
+            message.type === "success"
+              ? "bg-green-500/10 text-green-400 border border-green-500/30"
+              : "bg-red-500/10 text-red-400 border border-red-500/30"
+          }`}>
+            {message.text}
+          </div>
+        )}
+
+        <button
+          onClick={clearTelemetry}
+          disabled={clearing || eventCount === 0}
+          className="px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition"
+        >
+          {clearing ? "Clearing..." : "Clear All Telemetry"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -939,6 +939,15 @@ export const TelemetryDB = {
     return result.changes;
   },
 
+  // Delete all events for an agent
+  deleteByAgent(agentId: string): number {
+    const result = db.run(
+      "DELETE FROM telemetry_events WHERE agent_id = ?",
+      [agentId]
+    );
+    return result.changes;
+  },
+
   // Count events
   count(agentId?: string): number {
     if (agentId) {

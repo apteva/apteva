@@ -161,8 +161,8 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
     telemetry: {
       enabled: true,
       endpoint: `http://localhost:${process.env.PORT || 4280}/api/telemetry`,
-      batch_size: 10,
-      flush_interval: 30,
+      batch_size: 1,
+      flush_interval: 1, // Every 1 second
       categories: [], // Empty = all categories
     },
   };
@@ -424,6 +424,9 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       proc.kill();
       agentProcesses.delete(agentMatch[1]);
     }
+
+    // Delete agent's telemetry data
+    TelemetryDB.deleteByAgent(agentMatch[1]);
 
     AgentDB.delete(agentMatch[1]);
     return json({ success: true });
@@ -1143,9 +1146,9 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         "Connection": "keep-alive",
-        "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no",
       },
     });
   }
@@ -1184,6 +1187,12 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
     const agentId = url.searchParams.get("agent_id") || undefined;
     const stats = TelemetryDB.getStats(agentId);
     return json({ stats });
+  }
+
+  // POST /api/telemetry/clear - Clear all telemetry data
+  if (path === "/api/telemetry/clear" && method === "POST") {
+    const deleted = TelemetryDB.deleteOlderThan(0); // Delete all
+    return json({ deleted });
   }
 
   return json({ error: "Not found" }, 404);

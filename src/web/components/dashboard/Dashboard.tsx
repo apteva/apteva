@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useAgentActivity } from "../../context";
 import type { Agent, Provider, Route, DashboardStats, Task } from "../../types";
 
 interface DashboardProps {
@@ -74,21 +75,7 @@ export function Dashboard({
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
               {agents.slice(0, 5).map((agent) => (
-                <div
-                  key={agent.id}
-                  onClick={() => onSelectAgent(agent)}
-                  className="px-4 py-3 hover:bg-[#1a1a1a] cursor-pointer flex items-center justify-between"
-                >
-                  <div>
-                    <p className="font-medium">{agent.name}</p>
-                    <p className="text-sm text-[#666]">{agent.provider}</p>
-                  </div>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      agent.status === "running" ? "bg-[#3b82f6]" : "bg-[#444]"
-                    }`}
-                  />
-                </div>
+                <AgentListItem key={agent.id} agent={agent} onSelect={() => onSelectAgent(agent)} />
               ))}
             </div>
           )}
@@ -164,6 +151,31 @@ function DashboardCard({ title, actionLabel, onAction, children }: DashboardCard
         </button>
       </div>
       {children}
+    </div>
+  );
+}
+
+function AgentListItem({ agent, onSelect }: { agent: Agent; onSelect: () => void }) {
+  const { isActive } = useAgentActivity(agent.id);
+
+  return (
+    <div
+      onClick={onSelect}
+      className="px-4 py-3 hover:bg-[#1a1a1a] cursor-pointer flex items-center justify-between"
+    >
+      <div>
+        <p className="font-medium">{agent.name}</p>
+        <p className="text-sm text-[#666]">{agent.provider}</p>
+      </div>
+      <span
+        className={`w-2 h-2 rounded-full ${
+          agent.status === "running"
+            ? isActive
+              ? "bg-green-400 animate-pulse"
+              : "bg-[#3b82f6]"
+            : "bg-[#444]"
+        }`}
+      />
     </div>
   );
 }
