@@ -1,5 +1,23 @@
 // Shared types for the Apteva UI
 
+export interface AgentFeatures {
+  memory: boolean;
+  tasks: boolean;
+  vision: boolean;
+  operator: boolean;
+  mcp: boolean;
+  realtime: boolean;
+}
+
+export const DEFAULT_FEATURES: AgentFeatures = {
+  memory: true,
+  tasks: false,
+  vision: true,
+  operator: false,
+  mcp: false,
+  realtime: false,
+};
+
 export interface Agent {
   id: string;
   name: string;
@@ -8,6 +26,7 @@ export interface Agent {
   systemPrompt: string;
   status: "stopped" | "running";
   port?: number;
+  features: AgentFeatures;
   createdAt: string;
 }
 
@@ -40,4 +59,5 @@ export interface NewAgentForm {
   model: string;
   provider: string;
   systemPrompt: string;
+  features: AgentFeatures;
 }

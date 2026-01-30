@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import type { Agent } from "../types";
+import type { Agent, AgentFeatures } from "../types";
 
 export function useAgents(enabled: boolean) {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -23,6 +23,7 @@ export function useAgents(enabled: boolean) {
     model: string;
     provider: string;
     systemPrompt: string;
+    features: AgentFeatures;
   }) => {
     await fetch("/api/agents", {
       method: "POST",

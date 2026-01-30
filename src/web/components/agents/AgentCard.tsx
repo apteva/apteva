@@ -1,5 +1,6 @@
 import React from "react";
-import type { Agent } from "../../types";
+import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon } from "../common/Icons";
+import type { Agent, AgentFeatures } from "../../types";
 
 interface AgentCardProps {
   agent: Agent;
@@ -9,7 +10,18 @@ interface AgentCardProps {
   onDelete: (e?: React.MouseEvent) => void;
 }
 
+const FEATURE_ICONS: { key: keyof AgentFeatures; icon: React.ComponentType<{ className?: string }>; label: string }[] = [
+  { key: "memory", icon: MemoryIcon, label: "Memory" },
+  { key: "tasks", icon: TasksIcon, label: "Tasks" },
+  { key: "vision", icon: VisionIcon, label: "Vision" },
+  { key: "operator", icon: OperatorIcon, label: "Operator" },
+  { key: "mcp", icon: McpIcon, label: "MCP" },
+  { key: "realtime", icon: RealtimeIcon, label: "Realtime" },
+];
+
 export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: AgentCardProps) {
+  const enabledFeatures = FEATURE_ICONS.filter(f => agent.features?.[f.key]);
+
   return (
     <div
       onClick={onSelect}
@@ -29,6 +41,21 @@ export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: Age
         </div>
         <StatusBadge status={agent.status} />
       </div>
+
+      {enabledFeatures.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {enabledFeatures.map(({ key, icon: Icon, label }) => (
+            <span
+              key={key}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#1a1a1a] text-[#888] text-xs"
+              title={label}
+            >
+              <Icon className="w-3 h-3" />
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
 
       <p className="text-sm text-[#666] line-clamp-2 mb-4">
         {agent.systemPrompt}

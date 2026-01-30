@@ -3,6 +3,24 @@ import { join } from "path";
 import { mkdirSync, existsSync } from "fs";
 
 // Types
+export interface AgentFeatures {
+  memory: boolean;
+  tasks: boolean;
+  vision: boolean;
+  operator: boolean;
+  mcp: boolean;
+  realtime: boolean;
+}
+
+export const DEFAULT_FEATURES: AgentFeatures = {
+  memory: true,
+  tasks: false,
+  vision: true,
+  operator: false,
+  mcp: false,
+  realtime: false,
+};
+
 export interface Agent {
   id: string;
   name: string;
@@ -11,6 +29,7 @@ export interface Agent {
   system_prompt: string;
   status: "stopped" | "running";
   port: number | null;
+  features: AgentFeatures;
   created_at: string;
   updated_at: string;
 }
@@ -23,6 +42,7 @@ export interface AgentRow {
   system_prompt: string;
   status: string;
   port: number | null;
+  features: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -167,6 +187,12 @@ function runMigrations() {
         CREATE INDEX IF NOT EXISTS idx_provider_keys_provider ON provider_keys(provider_id);
       `,
     },
+    {
+      name: "006_add_agent_features",
+      sql: `
+        ALTER TABLE agents ADD COLUMN features TEXT DEFAULT '{"memory":true,"tasks":false,"vision":true,"operator":false,"mcp":false,"realtime":false}';
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -191,11 +217,12 @@ export const AgentDB = {
   // Create a new agent
   create(agent: Omit<Agent, "created_at" | "updated_at" | "status" | "port">): Agent {
     const now = new Date().toISOString();
+    const featuresJson = JSON.stringify(agent.features || DEFAULT_FEATURES);
     const stmt = db.prepare(`
-      INSERT INTO agents (id, name, model, provider, system_prompt, status, port, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'stopped', NULL, ?, ?)
+      INSERT INTO agents (id, name, model, provider, system_prompt, features, status, port, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'stopped', NULL, ?, ?)
     `);
-    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, now, now);
+    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, now, now);
     return this.findById(agent.id)!;
   },
 
@@ -242,6 +269,10 @@ export const AgentDB = {
     if (updates.port !== undefined) {
       fields.push("port = ?");
       values.push(updates.port);
+    }
+    if (updates.features !== undefined) {
+      fields.push("features = ?");
+      values.push(JSON.stringify(updates.features));
     }
 
     if (fields.length > 0) {
@@ -346,6 +377,14 @@ export const SettingsDB = {
 
 // Helper to convert DB row to Agent type
 function rowToAgent(row: AgentRow): Agent {
+  let features = DEFAULT_FEATURES;
+  if (row.features) {
+    try {
+      features = { ...DEFAULT_FEATURES, ...JSON.parse(row.features) };
+    } catch {
+      // Use defaults if parsing fails
+    }
+  }
   return {
     id: row.id,
     name: row.name,
@@ -354,6 +393,7 @@ function rowToAgent(row: AgentRow): Agent {
     system_prompt: row.system_prompt,
     status: row.status as "stopped" | "running",
     port: row.port,
+    features,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

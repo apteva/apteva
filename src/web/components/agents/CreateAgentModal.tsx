@@ -1,7 +1,8 @@
 import React from "react";
 import { Modal } from "../common/Modal";
 import { Select } from "../common/Select";
-import type { Provider, NewAgentForm } from "../../types";
+import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon } from "../common/Icons";
+import type { Provider, NewAgentForm, AgentFeatures } from "../../types";
 
 interface CreateAgentModalProps {
   form: NewAgentForm;
@@ -13,6 +14,15 @@ interface CreateAgentModalProps {
   onClose: () => void;
   onGoToSettings: () => void;
 }
+
+const FEATURE_CONFIG = [
+  { key: "memory" as keyof AgentFeatures, label: "Memory", description: "Remember information across conversations", icon: MemoryIcon },
+  { key: "tasks" as keyof AgentFeatures, label: "Tasks", description: "Create and execute scheduled tasks", icon: TasksIcon },
+  { key: "vision" as keyof AgentFeatures, label: "Vision", description: "Process images and PDFs", icon: VisionIcon },
+  { key: "operator" as keyof AgentFeatures, label: "Operator", description: "Browser automation (computer use)", icon: OperatorIcon },
+  { key: "mcp" as keyof AgentFeatures, label: "MCP", description: "Connect to external tools and services", icon: McpIcon },
+  { key: "realtime" as keyof AgentFeatures, label: "Realtime", description: "Voice conversations", icon: RealtimeIcon },
+];
 
 export function CreateAgentModal({
   form,
@@ -36,6 +46,16 @@ export function CreateAgentModal({
     label: m.label,
     recommended: m.recommended,
   })) || [];
+
+  const toggleFeature = (key: keyof AgentFeatures) => {
+    onFormChange({
+      ...form,
+      features: {
+        ...form.features,
+        [key]: !form.features[key],
+      },
+    });
+  };
 
   return (
     <Modal>
@@ -80,6 +100,31 @@ export function CreateAgentModal({
                 onChange={(e) => onFormChange({ ...form, systemPrompt: e.target.value })}
                 className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 h-24 resize-none focus:outline-none focus:border-[#f97316] text-[#e0e0e0]"
               />
+            </FormField>
+
+            <FormField label="Features">
+              <div className="grid grid-cols-2 gap-2">
+                {FEATURE_CONFIG.map(({ key, label, description, icon: Icon }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => toggleFeature(key)}
+                    className={`flex items-center gap-3 p-3 rounded border text-left transition ${
+                      form.features[key]
+                        ? "border-[#f97316] bg-[#f97316]/10"
+                        : "border-[#222] hover:border-[#333]"
+                    }`}
+                  >
+                    <Icon className={`w-5 h-5 ${form.features[key] ? "text-[#f97316]" : "text-[#666]"}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-sm font-medium ${form.features[key] ? "text-[#f97316]" : ""}`}>
+                        {label}
+                      </div>
+                      <div className="text-xs text-[#666] truncate">{description}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
             </FormField>
           </div>
 

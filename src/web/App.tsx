@@ -4,6 +4,7 @@ import "@apteva/apteva-kit/styles.css";
 
 // Types
 import type { Agent, Provider, Route, NewAgentForm } from "./types";
+import { DEFAULT_FEATURES } from "./types";
 
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
@@ -54,6 +55,7 @@ function App() {
     model: "",
     provider: "",
     systemPrompt: "You are a helpful assistant.",
+    features: { ...DEFAULT_FEATURES },
   });
 
   // Set default provider when providers are loaded
@@ -101,6 +103,7 @@ function App() {
       model: defaultModel,
       provider: defaultProvider?.id || "",
       systemPrompt: "You are a helpful assistant.",
+      features: { ...DEFAULT_FEATURES },
     });
     setShowCreate(false);
   };

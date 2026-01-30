@@ -29,6 +29,7 @@ function toApiAgent(agent: Agent) {
     systemPrompt: agent.system_prompt,
     status: agent.status,
     port: agent.port,
+    features: agent.features,
     createdAt: agent.created_at,
     updatedAt: agent.updated_at,
   };
@@ -47,18 +48,22 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
   if (path === "/api/agents" && method === "POST") {
     try {
       const body = await req.json();
-      const { name, model, provider, systemPrompt } = body;
+      const { name, model, provider, systemPrompt, features } = body;
 
       if (!name) {
         return json({ error: "Name is required" }, 400);
       }
 
+      // Import DEFAULT_FEATURES from db.ts
+      const { DEFAULT_FEATURES } = await import("../db");
+
       const agent = AgentDB.create({
         id: generateId(),
         name,
-        model: model || "claude-sonnet-4-20250514",
+        model: model || "claude-sonnet-4-5",
         provider: provider || "anthropic",
         system_prompt: systemPrompt || "You are a helpful assistant.",
+        features: features || DEFAULT_FEATURES,
       });
 
       return json({ agent: toApiAgent(agent) }, 201);
