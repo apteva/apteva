@@ -290,7 +290,28 @@ function ThreadsTab({ agent }: { agent: Agent }) {
                         : "bg-[#1a1a1a] text-[#e0e0e0]"
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    <div className="text-sm whitespace-pre-wrap">
+                      {typeof msg.content === "string"
+                        ? msg.content
+                        : Array.isArray(msg.content)
+                          ? msg.content.map((block: any, j: number) => (
+                              <div key={j}>
+                                {block.type === "text" && block.text}
+                                {block.type === "tool_use" && (
+                                  <div className="bg-[#222] p-2 rounded mt-1 text-xs text-[#888]">
+                                    🔧 Tool: {block.name}
+                                  </div>
+                                )}
+                                {block.type === "tool_result" && (
+                                  <div className="bg-[#222] p-2 rounded mt-1 text-xs text-[#888]">
+                                    📋 Result: {typeof block.content === "string" ? block.content.slice(0, 200) : "..."}
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          : JSON.stringify(msg.content)
+                      }
+                    </div>
                     <p className="text-xs text-[#666] mt-1">
                       {new Date(msg.created_at).toLocaleTimeString()}
                     </p>

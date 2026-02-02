@@ -96,25 +96,25 @@ function getDownloadUrl(): string {
   return `${BINARY_BASE_URL}/${filename}`;
 }
 
-// Check if binary exists (either from npm or downloaded)
+// Check if binary exists (downloaded or npm)
 export function binaryExists(binDir: string): boolean {
-  // First check npm package
-  const npmBinary = findNpmBinary();
-  if (npmBinary) return true;
+  // Check downloaded binary first
+  if (existsSync(getBinaryPath(binDir))) return true;
 
-  // Then check downloaded binary
-  return existsSync(getBinaryPath(binDir));
+  // Then check npm package
+  const npmBinary = findNpmBinary();
+  return !!npmBinary;
 }
 
-// Get the actual binary path (npm or downloaded)
+// Get the actual binary path (downloaded takes priority over npm)
 export function getActualBinaryPath(binDir: string): string | null {
-  // First check npm package
-  const npmBinary = findNpmBinary();
-  if (npmBinary) return npmBinary;
-
-  // Then check downloaded binary
+  // First check downloaded binary (takes priority - allows updates)
   const downloadedPath = getBinaryPath(binDir);
   if (existsSync(downloadedPath)) return downloadedPath;
+
+  // Fall back to npm package (initial install)
+  const npmBinary = findNpmBinary();
+  if (npmBinary) return npmBinary;
 
   return null;
 }
@@ -149,7 +149,7 @@ async function downloadWithTimeout(url: string): Promise<ArrayBuffer> {
   }
 }
 
-// Ensure binary exists - check npm first, then download
+// Ensure binary exists - check downloaded first (for updates), then npm
 export async function ensureBinary(binDir: string, silent = false): Promise<{
   success: boolean;
   path: string;
@@ -157,7 +157,24 @@ export async function ensureBinary(binDir: string, silent = false): Promise<{
   downloaded?: boolean;
   source?: "npm" | "download" | "cached";
 }> {
-  // First, check if binary is available from npm package
+  const binaryPath = getBinaryPath(binDir);
+
+  // Ensure bin directory exists
+  if (!existsSync(binDir)) {
+    mkdirSync(binDir, { recursive: true });
+  }
+
+  // First check downloaded binary (takes priority - allows updates)
+  if (existsSync(binaryPath)) {
+    return {
+      success: true,
+      path: binaryPath,
+      downloaded: false,
+      source: "cached"
+    };
+  }
+
+  // Fall back to npm package (initial install)
   const npmBinary = findNpmBinary();
   if (npmBinary) {
     return {
@@ -168,24 +185,7 @@ export async function ensureBinary(binDir: string, silent = false): Promise<{
     };
   }
 
-  const binaryPath = getBinaryPath(binDir);
-
-  // Ensure bin directory exists
-  if (!existsSync(binDir)) {
-    mkdirSync(binDir, { recursive: true });
-  }
-
-  // Check if already downloaded
-  if (existsSync(binaryPath)) {
-    return {
-      success: true,
-      path: binaryPath,
-      downloaded: false,
-      source: "cached"
-    };
-  }
-
-  // No npm package and no cached binary - show error
+  // No cached binary and no npm package - show error
   if (!silent) {
     console.log(`${c.red}not found${c.reset}`);
     console.log(`\n  Install the agent binary: npm install @apteva/agent-linux-x64`);
@@ -210,21 +210,7 @@ export function getBinaryStatus(binDir: string): {
 } {
   const { platform, arch } = getPlatformInfo();
 
-  // Check npm first
-  const npmBinary = findNpmBinary();
-  if (npmBinary) {
-    return {
-      exists: true,
-      path: npmBinary,
-      filename: getBinaryFilename(),
-      downloadUrl: getDownloadUrl(),
-      platform,
-      arch,
-      source: "npm",
-    };
-  }
-
-  // Check downloaded
+  // Check downloaded first (takes priority - allows updates)
   const downloadedPath = getBinaryPath(binDir);
   if (existsSync(downloadedPath)) {
     return {
@@ -235,6 +221,20 @@ export function getBinaryStatus(binDir: string): {
       platform,
       arch,
       source: "download",
+    };
+  }
+
+  // Fall back to npm package
+  const npmBinary = findNpmBinary();
+  if (npmBinary) {
+    return {
+      exists: true,
+      path: npmBinary,
+      filename: getBinaryFilename(),
+      downloadUrl: getDownloadUrl(),
+      platform,
+      arch,
+      source: "npm",
     };
   }
 

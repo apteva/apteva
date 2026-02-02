@@ -160,8 +160,13 @@ export function getBinaryPathForAgent(): string {
   if (process.env.AGENT_BINARY_PATH) {
     return process.env.AGENT_BINARY_PATH;
   }
-  // Otherwise use npm package or downloaded binary
-  return getActualBinaryPath(BIN_DIR) || getBinaryPath(BIN_DIR);
+  // Otherwise use downloaded or npm binary (getActualBinaryPath checks both)
+  const actualPath = getActualBinaryPath(BIN_DIR);
+  if (actualPath) {
+    return actualPath;
+  }
+  // No binary found - return expected path for error messages
+  return getBinaryPath(BIN_DIR);
 }
 
 // Export for legacy compatibility
