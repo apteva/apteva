@@ -489,7 +489,7 @@ export async function downloadLatestBinary(binDir: string): Promise<{
   };
 }
 
-// Install via npm (preferred method)
+// Install/update via npm (locally in project)
 export async function installViaNpm(): Promise<{
   success: boolean;
   version?: string;
@@ -497,12 +497,14 @@ export async function installViaNpm(): Promise<{
 }> {
   const packageName = getNpmPackageName();
 
-  console.log(`${c.gray}Installing ${packageName}...${c.reset}`);
+  console.log(`${c.gray}Updating ${packageName}...${c.reset}`);
 
   try {
-    const proc = Bun.spawn(["npm", "install", "-g", packageName], {
+    // Install locally (not globally) - updates the package in node_modules
+    const proc = Bun.spawn(["npm", "update", packageName], {
       stdout: "pipe",
       stderr: "pipe",
+      cwd: join(import.meta.dir, ".."), // Run in package root
     });
 
     const exitCode = await proc.exited;
@@ -511,7 +513,7 @@ export async function installViaNpm(): Promise<{
       const stderr = await new Response(proc.stderr).text();
       return {
         success: false,
-        error: stderr || `npm install failed with code ${exitCode}`,
+        error: stderr || `npm update failed with code ${exitCode}`,
       };
     }
 
@@ -519,7 +521,7 @@ export async function installViaNpm(): Promise<{
     if (version) {
       saveVersion(version);
     }
-    console.log(`${c.green}Installed agent v${version || "latest"}${c.reset}`);
+    console.log(`${c.green}Updated agent to v${version || "latest"}${c.reset}`);
 
     return {
       success: true,
