@@ -1,5 +1,5 @@
 import React from "react";
-import { DashboardIcon, AgentsIcon, TasksIcon, McpIcon, TelemetryIcon, SettingsIcon } from "../common/Icons";
+import { DashboardIcon, AgentsIcon, TasksIcon, McpIcon, TelemetryIcon, SettingsIcon, CloseIcon } from "../common/Icons";
 import type { Route } from "../../types";
 
 interface SidebarProps {
@@ -7,52 +7,90 @@ interface SidebarProps {
   agentCount: number;
   taskCount?: number;
   onNavigate: (route: Route) => void;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
-export function Sidebar({ route, agentCount, taskCount, onNavigate }: SidebarProps) {
+export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onClose }: SidebarProps) {
+  const handleNavigate = (newRoute: Route) => {
+    onNavigate(newRoute);
+    onClose?.();
+  };
+
   return (
-    <aside className="w-56 border-r border-[#1a1a1a] flex-shrink-0 p-4">
-      <nav className="space-y-1">
-        <NavButton
-          icon={<DashboardIcon />}
-          label="Dashboard"
-          active={route === "dashboard"}
-          onClick={() => onNavigate("dashboard")}
+    <>
+      {/* Mobile overlay backdrop */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40 md:hidden"
+          onClick={onClose}
         />
-        <NavButton
-          icon={<AgentsIcon />}
-          label="Agents"
-          active={route === "agents"}
-          onClick={() => onNavigate("agents")}
-          badge={agentCount > 0 ? String(agentCount) : undefined}
-        />
-        <NavButton
-          icon={<TasksIcon />}
-          label="Tasks"
-          active={route === "tasks"}
-          onClick={() => onNavigate("tasks")}
-          badge={taskCount && taskCount > 0 ? String(taskCount) : undefined}
-        />
-        <NavButton
-          icon={<McpIcon />}
-          label="MCP"
-          active={route === "mcp"}
-          onClick={() => onNavigate("mcp")}
-        />
-        <NavButton
-          icon={<TelemetryIcon />}
-          label="Telemetry"
-          active={route === "telemetry"}
-          onClick={() => onNavigate("telemetry")}
-        />
-        <NavButton
-          icon={<SettingsIcon />}
-          label="Settings"
-          active={route === "settings"}
-          onClick={() => onNavigate("settings")}
-        />
-      </nav>
-    </aside>
+      )}
+
+      {/* Sidebar - hidden on mobile unless open, always visible on md+ */}
+      <aside
+        className={`
+          fixed inset-y-0 left-0 z-50 w-64 bg-[#0a0a0a] border-r border-[#1a1a1a] p-4 transform transition-transform duration-200 ease-in-out
+          md:relative md:w-56 md:translate-x-0 md:z-auto
+          ${isOpen ? "translate-x-0" : "-translate-x-full"}
+        `}
+      >
+        {/* Mobile header with close button */}
+        <div className="flex items-center justify-between mb-4 md:hidden">
+          <div className="flex items-center gap-2">
+            <span className="text-[#f97316]">&gt;_</span>
+            <span className="text-lg tracking-wider">apteva</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 text-[#666] hover:text-[#e0e0e0] transition"
+          >
+            <CloseIcon />
+          </button>
+        </div>
+
+        <nav className="space-y-1">
+          <NavButton
+            icon={<DashboardIcon />}
+            label="Dashboard"
+            active={route === "dashboard"}
+            onClick={() => handleNavigate("dashboard")}
+          />
+          <NavButton
+            icon={<AgentsIcon />}
+            label="Agents"
+            active={route === "agents"}
+            onClick={() => handleNavigate("agents")}
+            badge={agentCount > 0 ? String(agentCount) : undefined}
+          />
+          <NavButton
+            icon={<TasksIcon />}
+            label="Tasks"
+            active={route === "tasks"}
+            onClick={() => handleNavigate("tasks")}
+            badge={taskCount && taskCount > 0 ? String(taskCount) : undefined}
+          />
+          <NavButton
+            icon={<McpIcon />}
+            label="MCP"
+            active={route === "mcp"}
+            onClick={() => handleNavigate("mcp")}
+          />
+          <NavButton
+            icon={<TelemetryIcon />}
+            label="Telemetry"
+            active={route === "telemetry"}
+            onClick={() => handleNavigate("telemetry")}
+          />
+          <NavButton
+            icon={<SettingsIcon />}
+            label="Settings"
+            active={route === "settings"}
+            onClick={() => handleNavigate("settings")}
+          />
+        </nav>
+      </aside>
+    </>
   );
 }
 

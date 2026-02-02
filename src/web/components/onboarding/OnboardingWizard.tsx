@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from "react";
 import { CheckIcon } from "../common/Icons";
+import { CreateAccountStep } from "../auth";
 import type { Provider } from "../../types";
 
 interface OnboardingWizardProps {
   onComplete: () => void;
+  needsAccount?: boolean; // Whether to show account creation step
 }
 
-export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
-  const [step, setStep] = useState(1);
+export function OnboardingWizard({ onComplete, needsAccount = false }: OnboardingWizardProps) {
+  // Step 0 = account creation (if needed), Step 1 = add keys, Step 2 = complete
+  const [step, setStep] = useState(needsAccount ? 0 : 1);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -15,16 +18,26 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [accountCreated, setAccountCreated] = useState(false);
+
+  // Get auth token from session storage (set during account creation)
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = sessionStorage.getItem("accessToken");
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
 
   useEffect(() => {
-    fetch("/api/providers")
+    // Don't fetch providers until after account is created (if needed)
+    if (needsAccount && !accountCreated && step === 0) return;
+
+    fetch("/api/providers", { headers: getAuthHeaders() })
       .then(res => res.json())
       .then(data => {
         // Only show LLM providers in onboarding, not integrations
         const llmProviders = (data.providers || []).filter((p: Provider) => p.type === "llm");
         setProviders(llmProviders);
       });
-  }, []);
+  }, [accountCreated, step, needsAccount]);
 
   const configuredProviders = providers.filter(p => p.hasKey);
 
@@ -38,7 +51,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       setTesting(true);
       const testRes = await fetch(`/api/keys/${selectedProvider}/test`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ key: apiKey }),
       });
       const testData = await testRes.json();
@@ -52,7 +65,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
       const saveRes = await fetch(`/api/keys/${selectedProvider}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ key: apiKey }),
       });
       const saveData = await saveRes.json();
@@ -62,7 +75,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       } else {
         setSuccess("API key saved successfully!");
         setApiKey("");
-        const res = await fetch("/api/providers");
+        const res = await fetch("/api/providers", { headers: getAuthHeaders() });
         const data = await res.json();
         setProviders(data.providers || []);
         setSelectedProvider(null);
@@ -74,9 +87,42 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   const completeOnboarding = async () => {
-    await fetch("/api/onboarding/complete", { method: "POST" });
+    // Create a default project for the user
+    try {
+      const projectRes = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        body: JSON.stringify({
+          name: "My Project",
+          description: "Default project for organizing agents",
+          color: "#f97316", // Orange - matches brand color
+        }),
+      });
+
+      if (projectRes.ok) {
+        const data = await projectRes.json();
+        // Set this project as the current project in localStorage
+        if (data.project?.id) {
+          localStorage.setItem("apteva_current_project", data.project.id);
+        }
+      }
+    } catch (e) {
+      // Don't block onboarding if project creation fails
+      console.error("Failed to create default project:", e);
+    }
+
+    await fetch("/api/onboarding/complete", { method: "POST", headers: getAuthHeaders() });
     onComplete();
   };
+
+  const handleAccountCreated = () => {
+    setAccountCreated(true);
+    setStep(1);
+  };
+
+  // Calculate total steps and current progress
+  const totalSteps = needsAccount ? 3 : 2;
+  const currentStep = needsAccount ? step : step - 1;
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex items-center justify-center p-8">
@@ -92,12 +138,22 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
         {/* Progress */}
         <div className="flex items-center justify-center gap-2 mb-8">
+          {needsAccount && (
+            <>
+              <div className={`w-3 h-3 rounded-full ${step >= 0 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
+              <div className={`w-16 h-0.5 ${step >= 1 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
+            </>
+          )}
           <div className={`w-3 h-3 rounded-full ${step >= 1 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
           <div className={`w-16 h-0.5 ${step >= 2 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
           <div className={`w-3 h-3 rounded-full ${step >= 2 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
         </div>
 
         <div className="bg-[#111] rounded-lg border border-[#1a1a1a] p-8">
+          {step === 0 && needsAccount && (
+            <CreateAccountStep onComplete={handleAccountCreated} />
+          )}
+
           {step === 1 && (
             <Step1AddKeys
               providers={providers}

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { CheckIcon } from "../common/Icons";
+import { CheckIcon, CloseIcon, PlusIcon } from "../common/Icons";
+import { Modal } from "../common/Modal";
+import { useProjects, useAuth, type Project } from "../../context";
 import type { Provider } from "../../types";
 
-type SettingsTab = "providers" | "updates" | "data";
+type SettingsTab = "providers" | "projects" | "updates" | "data";
 
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("providers");
@@ -17,6 +19,11 @@ export function SettingsPage() {
             label="Providers"
             active={activeTab === "providers"}
             onClick={() => setActiveTab("providers")}
+          />
+          <SettingsNavItem
+            label="Projects"
+            active={activeTab === "projects"}
+            onClick={() => setActiveTab("projects")}
           />
           <SettingsNavItem
             label="Updates"
@@ -34,6 +41,7 @@ export function SettingsPage() {
       {/* Settings Content */}
       <div className="flex-1 overflow-auto p-6">
         {activeTab === "providers" && <ProvidersSettings />}
+        {activeTab === "projects" && <ProjectsSettings />}
         {activeTab === "updates" && <UpdatesSettings />}
         {activeTab === "data" && <DataSettings />}
       </div>
@@ -65,6 +73,7 @@ function SettingsNavItem({
 }
 
 function ProvidersSettings() {
+  const { authFetch } = useAuth();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -74,7 +83,7 @@ function ProvidersSettings() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const fetchProviders = async () => {
-    const res = await fetch("/api/providers");
+    const res = await authFetch("/api/providers");
     const data = await res.json();
     setProviders(data.providers || []);
   };
@@ -91,7 +100,7 @@ function ProvidersSettings() {
 
     try {
       setTesting(true);
-      const testRes = await fetch(`/api/keys/${selectedProvider}/test`, {
+      const testRes = await authFetch(`/api/keys/${selectedProvider}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: apiKey }),
@@ -105,7 +114,7 @@ function ProvidersSettings() {
         return;
       }
 
-      const saveRes = await fetch(`/api/keys/${selectedProvider}`, {
+      const saveRes = await authFetch(`/api/keys/${selectedProvider}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: apiKey }),
@@ -128,7 +137,7 @@ function ProvidersSettings() {
 
   const deleteKey = async (providerId: string) => {
     if (!confirm("Are you sure you want to remove this API key?")) return;
-    await fetch(`/api/keys/${providerId}`, { method: "DELETE" });
+    await authFetch(`/api/keys/${providerId}`, { method: "DELETE" });
     fetchProviders();
   };
 
@@ -138,7 +147,7 @@ function ProvidersSettings() {
   const intConfiguredCount = integrations.filter(p => p.hasKey).length;
 
   return (
-    <div className="max-w-4xl space-y-10">
+    <div className="space-y-10">
       {/* AI Providers Section */}
       <div>
         <div className="mb-6">
@@ -148,7 +157,7 @@ function ProvidersSettings() {
           </p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {llmProviders.map(provider => (
             <ProviderKeyCard
               key={provider.id}
@@ -186,7 +195,7 @@ function ProvidersSettings() {
           </p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {integrations.map(provider => (
             <IntegrationKeyCard
               key={provider.id}
@@ -218,6 +227,225 @@ function ProvidersSettings() {
   );
 }
 
+const DEFAULT_PROJECT_COLORS = [
+  "#f97316", // orange
+  "#6366f1", // indigo
+  "#22c55e", // green
+  "#ef4444", // red
+  "#3b82f6", // blue
+  "#a855f7", // purple
+  "#14b8a6", // teal
+  "#f59e0b", // amber
+];
+
+function ProjectsSettings() {
+  const { projects, createProject, updateProject, deleteProject } = useProjects();
+  const [showModal, setShowModal] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this project? Agents in this project will become unassigned.")) {
+      return;
+    }
+    await deleteProject(id);
+  };
+
+  const openCreate = () => {
+    setEditingProject(null);
+    setShowModal(true);
+  };
+
+  const openEdit = (project: Project) => {
+    setEditingProject(project);
+    setShowModal(true);
+  };
+
+  const closeModal = () => {
+    setShowModal(false);
+    setEditingProject(null);
+  };
+
+  return (
+    <div className="max-w-4xl w-full">
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold mb-1">Projects</h1>
+          <p className="text-[#666]">
+            Organize agents into projects for better management.
+          </p>
+        </div>
+        <button
+          onClick={openCreate}
+          className="flex items-center gap-2 bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition flex-shrink-0"
+        >
+          <PlusIcon className="w-4 h-4" />
+          New Project
+        </button>
+      </div>
+
+      {/* Project List */}
+      {projects.length === 0 ? (
+        <div className="text-center py-12 text-[#666]">
+          <p className="text-lg mb-2">No projects yet</p>
+          <p className="text-sm">Create a project to organize your agents.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {projects.map(project => (
+            <div
+              key={project.id}
+              className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 flex items-center gap-4"
+            >
+              <div
+                className="w-4 h-4 rounded-full flex-shrink-0"
+                style={{ backgroundColor: project.color }}
+              />
+              <div className="flex-1 min-w-0">
+                <h3 className="font-medium">{project.name}</h3>
+                {project.description && (
+                  <p className="text-sm text-[#666] truncate">{project.description}</p>
+                )}
+                <p className="text-xs text-[#666] mt-1">
+                  {project.agentCount} agent{project.agentCount !== 1 ? "s" : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openEdit(project)}
+                  className="text-sm text-[#888] hover:text-[#e0e0e0] px-2 py-1"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => handleDelete(project.id)}
+                  className="text-sm text-red-400 hover:text-red-300 px-2 py-1"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Project Modal */}
+      {showModal && (
+        <ProjectModal
+          project={editingProject}
+          onSave={async (data) => {
+            if (editingProject) {
+              const result = await updateProject(editingProject.id, data);
+              if (result) closeModal();
+              return !!result;
+            } else {
+              const result = await createProject(data);
+              if (result) closeModal();
+              return !!result;
+            }
+          }}
+          onClose={closeModal}
+        />
+      )}
+    </div>
+  );
+}
+
+interface ProjectModalProps {
+  project: Project | null;
+  onSave: (data: { name: string; description?: string; color: string }) => Promise<boolean>;
+  onClose: () => void;
+}
+
+function ProjectModal({ project, onSave, onClose }: ProjectModalProps) {
+  const [name, setName] = useState(project?.name || "");
+  const [description, setDescription] = useState(project?.description || "");
+  const [color, setColor] = useState(
+    project?.color || DEFAULT_PROJECT_COLORS[Math.floor(Math.random() * DEFAULT_PROJECT_COLORS.length)]
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    if (!name.trim()) {
+      setError("Name is required");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const success = await onSave({ name, description: description || undefined, color });
+    setSaving(false);
+    if (!success) {
+      setError(project ? "Failed to update project" : "Failed to create project");
+    }
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <h2 className="text-xl font-semibold mb-6">{project ? "Edit Project" : "Create New Project"}</h2>
+
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm text-[#666] mb-1">Name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            placeholder="My Project"
+            autoFocus
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm text-[#666] mb-1">Description (optional)</label>
+          <input
+            type="text"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            placeholder="A short description"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm text-[#666] mb-1">Color</label>
+          <div className="flex gap-3 flex-wrap">
+            {DEFAULT_PROJECT_COLORS.map(c => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setColor(c)}
+                className={`w-10 h-10 rounded-full transition ${
+                  color === c ? "ring-2 ring-white ring-offset-2 ring-offset-[#111]" : "hover:scale-110"
+                }`}
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {error && <p className="text-red-400 text-sm">{error}</p>}
+      </div>
+
+      <div className="flex gap-3 mt-6">
+        <button
+          onClick={onClose}
+          className="flex-1 border border-[#333] hover:border-[#f97316] hover:text-[#f97316] px-4 py-2 rounded font-medium transition"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSubmit}
+          disabled={saving || !name.trim()}
+          className="flex-1 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+        >
+          {saving ? "Saving..." : project ? "Update" : "Create"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 interface ProviderKeyCardProps {
   provider: Provider;
   isEditing: boolean;
@@ -243,9 +471,11 @@ interface VersionInfo {
 interface AllVersionInfo {
   apteva: VersionInfo;
   agent: VersionInfo;
+  isDocker?: boolean;
 }
 
 function UpdatesSettings() {
+  const { authFetch } = useAuth();
   const [versions, setVersions] = useState<AllVersionInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [updatingAgent, setUpdatingAgent] = useState(false);
@@ -257,7 +487,7 @@ function UpdatesSettings() {
     setChecking(true);
     setError(null);
     try {
-      const res = await fetch("/api/version");
+      const res = await authFetch("/api/version");
       if (!res.ok) throw new Error("Failed to check for updates");
       const data = await res.json();
       setVersions(data);
@@ -272,7 +502,7 @@ function UpdatesSettings() {
     setError(null);
     setUpdateSuccess(null);
     try {
-      const res = await fetch("/api/version/update", { method: "POST" });
+      const res = await authFetch("/api/version/update", { method: "POST" });
       const data = await res.json();
       if (!data.success) {
         setError(data.error || "Update failed");
@@ -299,7 +529,7 @@ function UpdatesSettings() {
   const hasAnyUpdate = versions?.apteva.updateAvailable || versions?.agent.updateAvailable;
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Updates</h1>
         <p className="text-[#666]">
@@ -308,10 +538,74 @@ function UpdatesSettings() {
       </div>
 
       {checking && !versions ? (
-        <div className="text-[#666]">Checking for updates...</div>
+        <div className="text-[#666]">Checking version info...</div>
       ) : error && !versions ? (
         <div className="text-red-400">{error}</div>
+      ) : versions?.isDocker ? (
+        /* Docker Environment */
+        <div className="space-y-6">
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+            <div className="flex items-center gap-2 text-blue-400 mb-2">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.186.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.186.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.186.186 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.186.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.185-.186H5.136a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/>
+              </svg>
+              <span className="font-medium">Docker Environment</span>
+            </div>
+            <p className="text-sm text-[#888]">
+              Updates are automatic when you pull a new image version.
+            </p>
+          </div>
+
+          {/* Current Version */}
+          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-medium text-lg">Current Version</h3>
+                <p className="text-sm text-[#666]">apteva + agent binary</p>
+              </div>
+              <div className="text-right">
+                <div className="text-xl font-mono">v{versions.apteva.installed || "?"}</div>
+              </div>
+            </div>
+
+            {hasAnyUpdate ? (
+              <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
+                <p className="text-sm text-[#888] mb-3">
+                  A newer version (v{versions.apteva.latest}) is available. To update:
+                </p>
+                <div className="space-y-2">
+                  <code className="block bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#888]">
+                    docker pull apteva/apteva:latest
+                  </code>
+                  <code className="block bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#888]">
+                    docker compose up -d
+                  </code>
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText("docker pull apteva/apteva:latest && docker compose up -d");
+                    setCopied("docker");
+                    setTimeout(() => setCopied(null), 2000);
+                  }}
+                  className="mt-3 px-3 py-1.5 bg-[#1a1a1a] hover:bg-[#222] rounded text-sm"
+                >
+                  {copied === "docker" ? "Copied!" : "Copy commands"}
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-green-400 text-sm">
+                <CheckIcon className="w-4 h-4" />
+                Up to date
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-[#555]">
+            Your data is stored in a Docker volume and persists across updates.
+          </p>
+        </div>
       ) : versions ? (
+        /* Non-Docker Environment */
         <div className="space-y-6">
           {updateSuccess && (
             <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-green-400">
@@ -441,18 +735,22 @@ function ProviderKeyCard({
     <div className={`bg-[#111] border rounded-lg p-4 ${
       provider.hasKey ? 'border-green-500/20' : 'border-[#1a1a1a]'
     }`}>
-      <div className="flex items-center justify-between mb-2">
-        <div>
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="min-w-0">
           <h3 className="font-medium">{provider.name}</h3>
-          <p className="text-sm text-[#666]">{provider.models.length} models</p>
+          <p className="text-sm text-[#666] truncate">
+            {provider.type === "integration"
+              ? (provider.description || "MCP integration")
+              : `${provider.models.length} models`}
+          </p>
         </div>
         {provider.hasKey ? (
-          <span className="text-green-400 text-xs flex items-center gap-1 bg-green-500/10 px-2 py-1 rounded">
+          <span className="text-green-400 text-xs flex items-center gap-1 bg-green-500/10 px-2 py-1 rounded whitespace-nowrap flex-shrink-0">
             <CheckIcon className="w-3 h-3" />
             {provider.keyHint}
           </span>
         ) : (
-          <span className="text-[#666] text-xs bg-[#1a1a1a] px-2 py-1 rounded">
+          <span className="text-[#666] text-xs bg-[#1a1a1a] px-2 py-1 rounded whitespace-nowrap flex-shrink-0">
             Not configured
           </span>
         )}
@@ -636,13 +934,14 @@ function IntegrationKeyCard({
 }
 
 function DataSettings() {
+  const { authFetch } = useAuth();
   const [clearing, setClearing] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [eventCount, setEventCount] = useState<number | null>(null);
 
   const fetchStats = async () => {
     try {
-      const res = await fetch("/api/telemetry/stats");
+      const res = await authFetch("/api/telemetry/stats");
       const data = await res.json();
       setEventCount(data.stats?.total_events || 0);
     } catch {
@@ -663,7 +962,7 @@ function DataSettings() {
     setMessage(null);
 
     try {
-      const res = await fetch("/api/telemetry/clear", { method: "POST" });
+      const res = await authFetch("/api/telemetry/clear", { method: "POST" });
       const data = await res.json();
 
       if (res.ok) {
@@ -680,7 +979,7 @@ function DataSettings() {
   };
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Data Management</h1>
         <p className="text-[#666]">Manage stored data and telemetry.</p>

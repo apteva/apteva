@@ -1,6 +1,6 @@
 import React from "react";
-import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon } from "../common/Icons";
-import { useAgentActivity } from "../../context";
+import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon } from "../common/Icons";
+import { useAgentActivity, useProjects } from "../../context";
 import type { Agent, AgentFeatures } from "../../types";
 
 interface AgentCardProps {
@@ -8,22 +8,26 @@ interface AgentCardProps {
   selected: boolean;
   onSelect: () => void;
   onToggle: (e?: React.MouseEvent) => void;
-  onDelete: (e?: React.MouseEvent) => void;
+  showProject?: boolean;
 }
 
 const FEATURE_ICONS: { key: keyof AgentFeatures; icon: React.ComponentType<{ className?: string }>; label: string }[] = [
   { key: "memory", icon: MemoryIcon, label: "Memory" },
   { key: "tasks", icon: TasksIcon, label: "Tasks" },
+  { key: "files", icon: FilesIcon, label: "Files" },
   { key: "vision", icon: VisionIcon, label: "Vision" },
   { key: "operator", icon: OperatorIcon, label: "Operator" },
   { key: "mcp", icon: McpIcon, label: "MCP" },
   { key: "realtime", icon: RealtimeIcon, label: "Realtime" },
+  { key: "agents", icon: MultiAgentIcon, label: "Multi-Agent" },
 ];
 
-export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: AgentCardProps) {
+export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: AgentCardProps) {
   const enabledFeatures = FEATURE_ICONS.filter(f => agent.features?.[f.key]);
   const mcpServers = agent.mcpServerDetails || [];
   const { isActive, type } = useAgentActivity(agent.id);
+  const { projects } = useProjects();
+  const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
 
   return (
     <div
@@ -41,6 +45,12 @@ export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: Age
             {agent.provider} / {agent.model}
             {agent.port && <span className="text-[#444]"> · :{agent.port}</span>}
           </p>
+          {showProject && project && (
+            <p className="text-sm text-[#666] flex items-center gap-1.5 mt-1">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
+              {project.name}
+            </p>
+          )}
         </div>
         <StatusBadge status={agent.status} isActive={isActive && agent.status === "running"} activityType={type} />
       </div>
@@ -84,24 +94,16 @@ export function AgentCard({ agent, selected, onSelect, onToggle, onDelete }: Age
         {agent.systemPrompt}
       </p>
 
-      <div className="flex gap-2">
-        <button
-          onClick={onToggle}
-          className={`flex-1 px-3 py-1.5 rounded text-sm font-medium transition ${
-            agent.status === "running"
-              ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
-              : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
-          }`}
-        >
-          {agent.status === "running" ? "Stop" : "Start"}
-        </button>
-        <button
-          onClick={onDelete}
-          className="px-3 py-1.5 rounded text-sm font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
-        >
-          Delete
-        </button>
-      </div>
+      <button
+        onClick={onToggle}
+        className={`w-full px-3 py-1.5 rounded text-sm font-medium transition ${
+          agent.status === "running"
+            ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
+            : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
+        }`}
+      >
+        {agent.status === "running" ? "Stop" : "Start"}
+      </button>
     </div>
   );
 }

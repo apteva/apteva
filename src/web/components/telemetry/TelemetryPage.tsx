@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Select } from "../common/Select";
-import { useTelemetryContext, type TelemetryEvent } from "../../context";
+import { useTelemetryContext, useProjects, useAuth, type TelemetryEvent } from "../../context";
 
 interface TelemetryStats {
   total_events: number;
@@ -45,26 +45,33 @@ function extractEventStats(event: TelemetryEvent): {
 
 export function TelemetryPage() {
   const { events: realtimeEvents } = useTelemetryContext();
+  const { currentProjectId, currentProject } = useProjects();
+  const { authFetch } = useAuth();
   const [fetchedStats, setFetchedStats] = useState<TelemetryStats | null>(null);
   const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
   const [fetchedUsage, setFetchedUsage] = useState<UsageByAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({
-    category: "",
     level: "",
     agent_id: "",
   });
-  const [agents, setAgents] = useState<Array<{ id: string; name: string }>>([]);
+  // Categories to hide (DATABASE hidden by default)
+  const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set(["DATABASE"]));
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; projectId: string | null }>>([]);
   const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
 
   // Track IDs that were in the fetched stats to avoid double-counting
   const countedEventIdsRef = useRef<Set<string>>(new Set());
 
+  // Track which events are "new" (for animation) - stores event IDs with their arrival time
+  const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
+
   // Fetch agents for dropdown
   useEffect(() => {
     const fetchAgents = async () => {
       try {
-        const res = await fetch("/api/agents");
+        const res = await authFetch("/api/agents");
         const data = await res.json();
         setAgents(data.agents || []);
       } catch (e) {
@@ -72,25 +79,40 @@ export function TelemetryPage() {
       }
     };
     fetchAgents();
-  }, []);
+  }, [authFetch]);
+
+  // Filter agents by project
+  const filteredAgents = useMemo(() => {
+    if (currentProjectId === null) return agents;
+    if (currentProjectId === "unassigned") return agents.filter(a => !a.projectId);
+    return agents.filter(a => a.projectId === currentProjectId);
+  }, [agents, currentProjectId]);
+
+  // Get agent IDs for the current project
+  const projectAgentIds = useMemo(() => new Set(filteredAgents.map(a => a.id)), [filteredAgents]);
 
   // Fetch stats and historical data (less frequently now since we have real-time)
   const fetchData = async () => {
     setLoading(true);
     try {
+      // Build project filter param
+      const projectParam = currentProjectId === "unassigned" ? "null" : currentProjectId || "";
+
       // Fetch stats
-      const statsRes = await fetch("/api/telemetry/stats");
+      const statsParams = new URLSearchParams();
+      if (projectParam) statsParams.set("project_id", projectParam);
+      const statsRes = await authFetch(`/api/telemetry/stats${statsParams.toString() ? `?${statsParams}` : ""}`);
       const statsData = await statsRes.json();
       setFetchedStats(statsData.stats);
 
       // Fetch historical events with filters
       const params = new URLSearchParams();
-      if (filter.category) params.set("category", filter.category);
       if (filter.level) params.set("level", filter.level);
       if (filter.agent_id) params.set("agent_id", filter.agent_id);
-      params.set("limit", "50");
+      if (projectParam) params.set("project_id", projectParam);
+      params.set("limit", "100"); // Fetch more since we filter client-side
 
-      const eventsRes = await fetch(`/api/telemetry/events?${params}`);
+      const eventsRes = await authFetch(`/api/telemetry/events?${params}`);
       const eventsData = await eventsRes.json();
       const events = eventsData.events || [];
       setHistoricalEvents(events);
@@ -99,7 +121,10 @@ export function TelemetryPage() {
       countedEventIdsRef.current = new Set(events.map((e: TelemetryEvent) => e.id));
 
       // Fetch usage by agent
-      const usageRes = await fetch("/api/telemetry/usage?group_by=agent");
+      const usageParams = new URLSearchParams();
+      usageParams.set("group_by", "agent");
+      if (projectParam) usageParams.set("project_id", projectParam);
+      const usageRes = await authFetch(`/api/telemetry/usage?${usageParams}`);
       const usageData = await usageRes.json();
       setFetchedUsage(usageData.usage || []);
     } catch (e) {
@@ -113,7 +138,7 @@ export function TelemetryPage() {
     // Refresh stats every 60 seconds (events come in real-time)
     const interval = setInterval(fetchData, 60000);
     return () => clearInterval(interval);
-  }, [filter]);
+  }, [filter, currentProjectId, authFetch]);
 
   // Compute real-time stats from new events (not already counted in fetched stats)
   const stats = useMemo(() => {
@@ -188,20 +213,33 @@ export function TelemetryPage() {
   const allEvents = React.useMemo(() => {
     // Apply filters to real-time events
     let filtered = realtimeEvents;
+
+    // Filter by project (for real-time events)
+    if (currentProjectId !== null) {
+      filtered = filtered.filter(e => projectAgentIds.has(e.agent_id));
+    }
+
     if (filter.agent_id) {
       filtered = filtered.filter(e => e.agent_id === filter.agent_id);
     }
-    if (filter.category) {
-      filtered = filtered.filter(e => e.category === filter.category);
+    // Filter out hidden categories
+    if (hiddenCategories.size > 0) {
+      filtered = filtered.filter(e => !hiddenCategories.has(e.category));
     }
     if (filter.level) {
       filtered = filtered.filter(e => e.level === filter.level);
     }
 
+    // Filter historical events too
+    let filteredHistorical = historicalEvents;
+    if (hiddenCategories.size > 0) {
+      filteredHistorical = filteredHistorical.filter(e => !hiddenCategories.has(e.category));
+    }
+
     // Merge with historical, dedupe by ID
     const seen = new Set(filtered.map(e => e.id));
     const merged = [...filtered];
-    for (const evt of historicalEvents) {
+    for (const evt of filteredHistorical) {
       if (!seen.has(evt.id)) {
         merged.push(evt);
         seen.add(evt.id);
@@ -212,7 +250,35 @@ export function TelemetryPage() {
     merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     return merged.slice(0, 100);
-  }, [realtimeEvents, historicalEvents, filter]);
+  }, [realtimeEvents, historicalEvents, filter, hiddenCategories, currentProjectId, projectAgentIds]);
+
+  // Track new events for animation - mark events as "new" when they first appear
+  useEffect(() => {
+    const newIds: string[] = [];
+    for (const event of realtimeEvents) {
+      if (!seenEventIdsRef.current.has(event.id)) {
+        seenEventIdsRef.current.add(event.id);
+        newIds.push(event.id);
+      }
+    }
+
+    if (newIds.length > 0) {
+      setNewEventIds(prev => {
+        const updated = new Set(prev);
+        newIds.forEach(id => updated.add(id));
+        return updated;
+      });
+
+      // Remove "new" status after 5 seconds
+      setTimeout(() => {
+        setNewEventIds(prev => {
+          const updated = new Set(prev);
+          newIds.forEach(id => updated.delete(id));
+          return updated;
+        });
+      }, 5000);
+    }
+  }, [realtimeEvents]);
 
   const getAgentName = (agentId: string) => {
     const agent = agents.find(a => a.id === agentId);
@@ -241,23 +307,26 @@ export function TelemetryPage() {
     TASK: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
     MEMORY: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
     MCP: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+    DATABASE: "bg-pink-500/20 text-pink-400 border-pink-500/30",
+  };
+
+  const allCategories = ["LLM", "TOOL", "CHAT", "TASK", "MEMORY", "MCP", "SYSTEM", "DATABASE", "ERROR"];
+
+  const toggleCategory = (category: string) => {
+    setHiddenCategories(prev => {
+      const updated = new Set(prev);
+      if (updated.has(category)) {
+        updated.delete(category);
+      } else {
+        updated.add(category);
+      }
+      return updated;
+    });
   };
 
   const agentOptions = [
     { value: "", label: "All Agents" },
-    ...agents.map(a => ({ value: a.id, label: a.name })),
-  ];
-
-  const categoryOptions = [
-    { value: "", label: "All Categories" },
-    { value: "LLM", label: "LLM" },
-    { value: "TOOL", label: "Tool" },
-    { value: "CHAT", label: "Chat" },
-    { value: "TASK", label: "Task" },
-    { value: "MEMORY", label: "Memory" },
-    { value: "MCP", label: "MCP" },
-    { value: "SYSTEM", label: "System" },
-    { value: "ERROR", label: "Error" },
+    ...filteredAgents.map(a => ({ value: a.id, label: a.name })),
   ];
 
   const levelOptions = [
@@ -270,10 +339,24 @@ export function TelemetryPage() {
 
   return (
     <div className="flex-1 overflow-auto p-6">
-      <div className="max-w-6xl">
+      <div>
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl font-semibold mb-1">Telemetry</h1>
+          <div className="flex items-center gap-3 mb-1">
+            {currentProject && (
+              <span
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: currentProject.color }}
+              />
+            )}
+            <h1 className="text-2xl font-semibold">
+              {currentProjectId === null
+                ? "Telemetry"
+                : currentProjectId === "unassigned"
+                ? "Telemetry - Unassigned"
+                : `Telemetry - ${currentProject?.name || ""}`}
+            </h1>
+          </div>
           <p className="text-[#666]">
             Monitor agent activity, token usage, and errors.
           </p>
@@ -331,8 +414,8 @@ export function TelemetryPage() {
         )}
 
         {/* Filters */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-56">
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <div className="w-44">
             <Select
               value={filter.agent_id}
               options={agentOptions}
@@ -340,28 +423,42 @@ export function TelemetryPage() {
               placeholder="All Agents"
             />
           </div>
-          <div className="w-48">
-            <Select
-              value={filter.category}
-              options={categoryOptions}
-              onChange={(value) => setFilter({ ...filter, category: value })}
-              placeholder="All Categories"
-            />
+          {/* Category toggles */}
+          <div className="flex flex-wrap items-center gap-1.5 flex-1">
+            {allCategories.map((cat) => {
+              const isHidden = hiddenCategories.has(cat);
+              const colorClass = categoryColors[cat] || "bg-[#222] text-[#888] border-[#333]";
+              return (
+                <button
+                  key={cat}
+                  onClick={() => toggleCategory(cat)}
+                  className={`px-2 py-0.5 rounded text-xs border transition-all ${
+                    isHidden
+                      ? "bg-[#1a1a1a] text-[#555] border-[#333] opacity-50"
+                      : colorClass
+                  }`}
+                >
+                  {cat}
+                </button>
+              );
+            })}
           </div>
-          <div className="w-40">
-            <Select
-              value={filter.level}
-              options={levelOptions}
-              onChange={(value) => setFilter({ ...filter, level: value })}
-              placeholder="All Levels"
-            />
+          <div className="flex items-center gap-2">
+            <div className="w-36">
+              <Select
+                value={filter.level}
+                options={levelOptions}
+                onChange={(value) => setFilter({ ...filter, level: value })}
+                placeholder="All Levels"
+              />
+            </div>
+            <button
+              onClick={fetchData}
+              className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] border border-[#333] rounded text-sm transition"
+            >
+              Refresh
+            </button>
           </div>
-          <button
-            onClick={fetchData}
-            className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] border border-[#333] rounded text-sm transition"
-          >
-            Refresh
-          </button>
         </div>
 
         {/* Events List */}
@@ -384,18 +481,21 @@ export function TelemetryPage() {
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
               {allEvents.map((event) => {
-                // Only mark as new if event arrived in last 10 seconds
-                const eventTime = new Date(event.timestamp).getTime();
-                const isNew = Date.now() - eventTime < 10000;
+                const isNew = newEventIds.has(event.id);
 
                 return (
                   <div
                     key={event.id}
-                    className="p-3 hover:bg-[#0a0a0a] transition cursor-pointer"
+                    className={`p-3 hover:bg-[#0a0a0a] cursor-pointer transition-all duration-500 ${
+                      isNew ? "bg-green-500/5" : ""
+                    }`}
+                    style={{
+                      animation: isNew ? "slideIn 0.3s ease-out" : undefined,
+                    }}
                     onClick={() => setExpandedEvent(expandedEvent === event.id ? null : event.id)}
                   >
                     <div className="flex items-start gap-3">
-                      <span className={`px-2 py-0.5 rounded text-xs border ${categoryColors[event.category] || "bg-[#222] text-[#888] border-[#333]"}`}>
+                      <span className={`px-2 py-0.5 rounded text-xs border transition-colors duration-300 ${categoryColors[event.category] || "bg-[#222] text-[#888] border-[#333]"}`}>
                         {event.category}
                       </span>
                       <div className="flex-1 min-w-0">
@@ -407,9 +507,11 @@ export function TelemetryPage() {
                           {event.duration_ms && (
                             <span className="text-xs text-[#555]">{event.duration_ms}ms</span>
                           )}
-                          {isNew && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                          )}
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full bg-green-400 transition-opacity duration-1000 ${
+                              isNew ? "opacity-100" : "opacity-0"
+                            }`}
+                          />
                         </div>
                         <div className="text-xs text-[#555] mt-1">
                           {getAgentName(event.agent_id)} · {new Date(event.timestamp).toLocaleString()}

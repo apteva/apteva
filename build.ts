@@ -47,6 +47,10 @@ await $`bunx tailwindcss -i ./src/web/styles.css -o ${outdir}/styles.css --minif
 console.log("\n📦 Copying apteva-kit styles...");
 await $`cp ./node_modules/@apteva/apteva-kit/dist/styles.css ${outdir}/apteva-kit.css`;
 
+// Copy icon
+console.log("\n🎨 Copying icon...");
+await $`cp ./src/web/icon.png ${outdir}/icon.png`;
+
 // Create index.html with correct script reference
 console.log("\n📄 Creating index.html...");
 const html = `<!DOCTYPE html>
@@ -55,6 +59,8 @@ const html = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>apteva</title>
+  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="apple-touch-icon" href="/icon.png">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/apteva-kit.css">
 </head>

@@ -1,6 +1,6 @@
 {
   "name": "apteva",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Run AI agents locally. Multi-provider support for Claude, GPT, Gemini, Llama, and more.",
   "type": "module",
   "main": "./dist/index.js",

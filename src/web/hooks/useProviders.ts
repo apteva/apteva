@@ -1,14 +1,24 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Provider } from "../types";
+import { useAuth } from "../context";
 
 export function useProviders(enabled: boolean) {
+  const { accessToken } = useAuth();
   const [providers, setProviders] = useState<Provider[]>([]);
 
+  const getHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+    }
+    return headers;
+  }, [accessToken]);
+
   const fetchProviders = useCallback(async () => {
-    const res = await fetch("/api/providers");
+    const res = await fetch("/api/providers", { headers: getHeaders() });
     const data = await res.json();
     setProviders(data.providers || []);
-  }, []);
+  }, [getHeaders]);
 
   useEffect(() => {
     if (enabled) {
@@ -25,7 +35,7 @@ export function useProviders(enabled: boolean) {
     // First test the key
     const testRes = await fetch(`/api/keys/${providerId}/test`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders(),
       body: JSON.stringify({ key: apiKey }),
     });
     const testData = await testRes.json();
@@ -37,7 +47,7 @@ export function useProviders(enabled: boolean) {
     // Save the key
     const saveRes = await fetch(`/api/keys/${providerId}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders(),
       body: JSON.stringify({ key: apiKey }),
     });
 
@@ -51,7 +61,7 @@ export function useProviders(enabled: boolean) {
   };
 
   const deleteKey = async (providerId: string) => {
-    await fetch(`/api/keys/${providerId}`, { method: "DELETE" });
+    await fetch(`/api/keys/${providerId}`, { method: "DELETE", headers: getHeaders() });
     await fetchProviders();
   };
 

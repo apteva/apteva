@@ -39,3 +39,15 @@ html, body {
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* Telemetry event slide-in animation */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

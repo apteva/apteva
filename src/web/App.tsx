@@ -7,7 +7,7 @@ import type { Agent, Provider, Route, NewAgentForm } from "./types";
 import { DEFAULT_FEATURES } from "./types";
 
 // Context
-import { TelemetryProvider } from "./context";
+import { TelemetryProvider, AuthProvider, ProjectProvider, useAuth, useProjects } from "./context";
 
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
@@ -26,13 +26,25 @@ import {
   TasksPage,
   McpPage,
   TelemetryPage,
+  LoginPage,
 } from "./components";
 
-function App() {
+function AppContent() {
+  // Auth state
+  const { isAuthenticated, isLoading: authLoading, hasUsers, accessToken, checkAuth } = useAuth();
+  const { refreshProjects } = useProjects();
+
   // Onboarding state
   const { isComplete: onboardingComplete, setIsComplete: setOnboardingComplete } = useOnboarding();
 
-  // Data hooks
+  // Helper to get auth headers
+  const getAuthHeaders = (): Record<string, string> => {
+    return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+  };
+
+  // Data hooks - only fetch when authenticated and onboarding complete
+  const shouldFetchData = isAuthenticated && onboardingComplete === true;
+
   const {
     agents,
     loading,
@@ -42,13 +54,13 @@ function App() {
     updateAgent,
     deleteAgent,
     toggleAgent,
-  } = useAgents(onboardingComplete === true);
+  } = useAgents(shouldFetchData);
 
   const {
     providers,
     configuredProviders,
     fetchProviders,
-  } = useProviders(onboardingComplete === true);
+  } = useProviders(shouldFetchData);
 
   // UI state
   const [showCreate, setShowCreate] = useState(false);
@@ -56,14 +68,15 @@ function App() {
   const [route, setRoute] = useState<Route>("dashboard");
   const [startError, setStartError] = useState<string | null>(null);
   const [taskCount, setTaskCount] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Fetch task count periodically
   useEffect(() => {
-    if (onboardingComplete !== true) return;
+    if (!shouldFetchData) return;
 
     const fetchTaskCount = async () => {
       try {
-        const res = await fetch("/api/tasks?status=pending");
+        const res = await fetch("/api/tasks?status=pending", { headers: getAuthHeaders() });
         if (res.ok) {
           const data = await res.json();
           setTaskCount(data.count || 0);
@@ -76,7 +89,7 @@ function App() {
     fetchTaskCount();
     const interval = setInterval(fetchTaskCount, 15000);
     return () => clearInterval(interval);
-  }, [onboardingComplete]);
+  }, [shouldFetchData, accessToken]);
 
   // Form state
   const [newAgent, setNewAgent] = useState<NewAgentForm>({
@@ -125,6 +138,7 @@ function App() {
   const handleCreateAgent = async () => {
     if (!newAgent.name) return;
     await createAgent(newAgent);
+    await refreshProjects(); // Refresh project agent counts
     const defaultProvider = configuredProviders[0];
     const defaultModel = defaultProvider?.models.find(m => m.recommended)?.value || defaultProvider?.models[0]?.value || "";
     setNewAgent({
@@ -152,6 +166,7 @@ function App() {
       setSelectedAgent(null);
     }
     await deleteAgent(id);
+    await refreshProjects(); // Refresh project agent counts
   };
 
   const handleSelectAgent = (agent: Agent) => {
@@ -168,24 +183,38 @@ function App() {
   const handleOnboardingComplete = () => {
     setOnboardingComplete(true);
     fetchProviders();
+    // Refresh auth to pick up new state
+    checkAuth();
   };
+
+  // Show loading while checking auth
+  if (authLoading || hasUsers === null) {
+    return <LoadingSpinner fullScreen />;
+  }
+
+  // No users exist - show onboarding with account creation
+  if (!hasUsers) {
+    return <OnboardingWizard onComplete={handleOnboardingComplete} needsAccount={true} />;
+  }
+
+  // Users exist but not authenticated - show login
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
 
   // Show loading while checking onboarding
   if (onboardingComplete === null) {
     return <LoadingSpinner fullScreen />;
   }
 
-  // Show onboarding if not complete
+  // Show onboarding if not complete (but already has account)
   if (!onboardingComplete) {
-    return <OnboardingWizard onComplete={handleOnboardingComplete} />;
+    return <OnboardingWizard onComplete={handleOnboardingComplete} needsAccount={false} />;
   }
 
   return (
     <div className="h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex flex-col overflow-hidden">
-      <Header
-        onNewAgent={() => setShowCreate(true)}
-        canCreateAgent={configuredProviders.length > 0}
-      />
+      <Header onMenuClick={() => setMobileMenuOpen(true)} />
 
       {startError && (
         <ErrorBanner message={startError} onDismiss={() => setStartError(null)} />
@@ -197,6 +226,8 @@ function App() {
           agentCount={agents.length}
           taskCount={taskCount}
           onNavigate={handleNavigate}
+          isOpen={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
         />
 
         <main className="flex-1 overflow-hidden flex">
@@ -213,6 +244,8 @@ function App() {
               onToggleAgent={handleToggleAgent}
               onDeleteAgent={handleDeleteAgent}
               onUpdateAgent={updateAgent}
+              onNewAgent={() => setShowCreate(true)}
+              canCreateAgent={configuredProviders.length > 0}
             />
           )}
 
@@ -254,10 +287,19 @@ function App() {
   );
 }
 
+// Wrapper component that provides all contexts
+function App() {
+  return (
+    <AuthProvider>
+      <ProjectProvider>
+        <TelemetryProvider>
+          <AppContent />
+        </TelemetryProvider>
+      </ProjectProvider>
+    </AuthProvider>
+  );
+}
+
 // Mount the app
 const root = createRoot(document.getElementById("root")!);
-root.render(
-  <TelemetryProvider>
-    <App />
-  </TelemetryProvider>
-);
+root.render(<App />);

@@ -11,6 +11,8 @@ export interface AgentFeatures {
   operator: boolean;
   mcp: boolean;
   realtime: boolean;
+  files: boolean;
+  agents: boolean;
 }
 
 export const DEFAULT_FEATURES: AgentFeatures = {
@@ -20,6 +22,8 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   operator: false,
   mcp: false,
   realtime: false,
+  files: false,
+  agents: false,
 };
 
 export interface Agent {
@@ -32,6 +36,25 @@ export interface Agent {
   port: number | null;
   features: AgentFeatures;
   mcp_servers: string[]; // Array of MCP server IDs
+  project_id: string | null; // Optional project grouping
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string; // Hex color for UI display
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string;
   created_at: string;
   updated_at: string;
 }
@@ -46,6 +69,7 @@ export interface AgentRow {
   port: number | null;
   features: string | null;
   mcp_servers: string | null;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -272,6 +296,58 @@ function runMigrations() {
         CREATE INDEX IF NOT EXISTS idx_telemetry_trace ON telemetry_events(trace_id);
       `,
     },
+    {
+      name: "010_create_users",
+      sql: `
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          username TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          email TEXT,
+          role TEXT NOT NULL DEFAULT 'user',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_login_at TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);
+      `,
+    },
+    {
+      name: "011_create_sessions",
+      sql: `
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          refresh_token_hash TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+      `,
+    },
+    {
+      name: "012_create_projects",
+      sql: `
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          color TEXT NOT NULL DEFAULT '#6366f1',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+      `,
+    },
+    {
+      name: "013_add_agent_project_id",
+      sql: `
+        ALTER TABLE agents ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id);
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -289,6 +365,57 @@ function runMigrations() {
       db.run("INSERT INTO migrations (name) VALUES (?)", [migration.name]);
     }
   }
+
+  // Schema upgrade migrations (check actual table structure)
+  runSchemaUpgrades();
+}
+
+// Handle schema changes that require checking actual table structure
+function runSchemaUpgrades() {
+  // Check if users table needs migration from email-based to username-based
+  const tableInfo = db.query("PRAGMA table_info(users)").all() as { name: string }[];
+  const columns = new Set(tableInfo.map(c => c.name));
+
+  // Old schema has 'email' as required + 'name', new schema has 'username' + optional 'email'
+  if (columns.has("name") && !columns.has("username")) {
+    console.log("[db] Migrating users table from email-based to username-based auth...");
+
+    // Get existing users
+    const existingUsers = db.query("SELECT * FROM users").all() as any[];
+
+    // Drop old table and indexes
+    db.run("DROP INDEX IF EXISTS idx_users_email");
+    db.run("DROP TABLE users");
+
+    // Create new schema
+    db.run(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        email TEXT,
+        role TEXT NOT NULL DEFAULT 'user',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_login_at TEXT
+      )
+    `);
+    db.run("CREATE UNIQUE INDEX idx_users_username ON users(username)");
+
+    // Migrate existing users (use part before @ in email as username)
+    for (const user of existingUsers) {
+      const username = user.email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 20);
+      db.run(
+        `INSERT INTO users (id, username, password_hash, email, role, created_at, updated_at, last_login_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [user.id, username, user.password_hash, user.email, user.role, user.created_at, user.updated_at, user.last_login_at]
+      );
+    }
+
+    if (existingUsers.length > 0) {
+      console.log(`[db] Migrated ${existingUsers.length} user(s). Usernames derived from email addresses.`);
+    }
+  }
 }
 
 // Agent CRUD operations
@@ -299,10 +426,10 @@ export const AgentDB = {
     const featuresJson = JSON.stringify(agent.features || DEFAULT_FEATURES);
     const mcpServersJson = JSON.stringify(agent.mcp_servers || []);
     const stmt = db.prepare(`
-      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, status, port, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?, ?)
+      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, project_id, status, port, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?, ?)
     `);
-    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, now, now);
+    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, agent.project_id || null, now, now);
     return this.findById(agent.id)!;
   },
 
@@ -364,6 +491,10 @@ export const AgentDB = {
       fields.push("mcp_servers = ?");
       values.push(JSON.stringify(updates.mcp_servers));
     }
+    if (updates.project_id !== undefined) {
+      fields.push("project_id = ?");
+      values.push(updates.project_id);
+    }
 
     if (fields.length > 0) {
       fields.push("updated_at = ?");
@@ -374,6 +505,16 @@ export const AgentDB = {
     }
 
     return this.findById(id);
+  },
+
+  // Find agents by project
+  findByProject(projectId: string | null): Agent[] {
+    if (projectId === null) {
+      const rows = db.query("SELECT * FROM agents WHERE project_id IS NULL ORDER BY created_at DESC").all() as AgentRow[];
+      return rows.map(rowToAgent);
+    }
+    const rows = db.query("SELECT * FROM agents WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as AgentRow[];
+    return rows.map(rowToAgent);
   },
 
   // Delete agent
@@ -404,6 +545,107 @@ export const AgentDB = {
     return row.count;
   },
 };
+
+// Project CRUD operations
+export const ProjectDB = {
+  // Create a new project
+  create(project: { name: string; description?: string | null; color?: string }): Project {
+    const id = generateId();
+    const now = new Date().toISOString();
+    const color = project.color || "#6366f1";
+
+    db.run(
+      `INSERT INTO projects (id, name, description, color, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, project.name, project.description || null, color, now, now]
+    );
+
+    return this.findById(id)!;
+  },
+
+  // Find project by ID
+  findById(id: string): Project | null {
+    const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as ProjectRow | null;
+    return row ? rowToProject(row) : null;
+  },
+
+  // Get all projects
+  findAll(): Project[] {
+    const rows = db.query("SELECT * FROM projects ORDER BY name ASC").all() as ProjectRow[];
+    return rows.map(rowToProject);
+  },
+
+  // Update project
+  update(id: string, updates: Partial<Omit<Project, "id" | "created_at">>): Project | null {
+    const project = this.findById(id);
+    if (!project) return null;
+
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.name !== undefined) {
+      fields.push("name = ?");
+      values.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      fields.push("description = ?");
+      values.push(updates.description);
+    }
+    if (updates.color !== undefined) {
+      fields.push("color = ?");
+      values.push(updates.color);
+    }
+
+    if (fields.length > 0) {
+      fields.push("updated_at = ?");
+      values.push(new Date().toISOString());
+      values.push(id);
+
+      db.run(`UPDATE projects SET ${fields.join(", ")} WHERE id = ?`, values);
+    }
+
+    return this.findById(id);
+  },
+
+  // Delete project (agents will have project_id set to NULL)
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM projects WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+
+  // Count projects
+  count(): number {
+    const row = db.query("SELECT COUNT(*) as count FROM projects").get() as { count: number };
+    return row.count;
+  },
+
+  // Get agent count per project
+  getAgentCounts(): Map<string | null, number> {
+    const rows = db.query(`
+      SELECT project_id, COUNT(*) as count
+      FROM agents
+      GROUP BY project_id
+    `).all() as { project_id: string | null; count: number }[];
+
+    const counts = new Map<string | null, number>();
+    for (const row of rows) {
+      counts.set(row.project_id, row.count);
+    }
+    return counts;
+  },
+};
+
+// Helper to convert DB row to Project type
+function rowToProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    color: row.color,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
 
 // Thread CRUD operations
 export const ThreadDB = {
@@ -493,6 +735,7 @@ function rowToAgent(row: AgentRow): Agent {
     port: row.port,
     features,
     mcp_servers,
+    project_id: row.project_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -695,6 +938,45 @@ function rowToMcpServer(row: McpServerRow): McpServer {
 }
 
 // Telemetry Event types
+// User types
+export interface User {
+  id: string;
+  username: string;
+  password_hash: string;
+  email: string | null; // Optional, for password recovery only
+  role: "admin" | "user";
+  created_at: string;
+  updated_at: string;
+  last_login_at: string | null;
+}
+
+export interface UserRow {
+  id: string;
+  username: string;
+  password_hash: string;
+  email: string | null;
+  role: string;
+  created_at: string;
+  updated_at: string;
+  last_login_at: string | null;
+}
+
+export interface Session {
+  id: string;
+  user_id: string;
+  refresh_token_hash: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface SessionRow {
+  id: string;
+  user_id: string;
+  refresh_token_hash: string;
+  expires_at: string;
+  created_at: string;
+}
+
 export interface TelemetryEvent {
   id: string;
   agent_id: string;
@@ -779,6 +1061,7 @@ export const TelemetryDB = {
   // Query events with filters
   query(filters: {
     agent_id?: string;
+    project_id?: string | null; // Filter by project (null = unassigned agents)
     category?: string;
     level?: string;
     trace_id?: string;
@@ -791,27 +1074,35 @@ export const TelemetryDB = {
     const params: unknown[] = [];
 
     if (filters.agent_id) {
-      conditions.push("agent_id = ?");
+      conditions.push("t.agent_id = ?");
       params.push(filters.agent_id);
     }
+    if (filters.project_id !== undefined) {
+      if (filters.project_id === null) {
+        conditions.push("a.project_id IS NULL");
+      } else {
+        conditions.push("a.project_id = ?");
+        params.push(filters.project_id);
+      }
+    }
     if (filters.category) {
-      conditions.push("category = ?");
+      conditions.push("t.category = ?");
       params.push(filters.category);
     }
     if (filters.level) {
-      conditions.push("level = ?");
+      conditions.push("t.level = ?");
       params.push(filters.level);
     }
     if (filters.trace_id) {
-      conditions.push("trace_id = ?");
+      conditions.push("t.trace_id = ?");
       params.push(filters.trace_id);
     }
     if (filters.since) {
-      conditions.push("timestamp >= ?");
+      conditions.push("t.timestamp >= ?");
       params.push(filters.since);
     }
     if (filters.until) {
-      conditions.push("timestamp <= ?");
+      conditions.push("t.timestamp <= ?");
       params.push(filters.until);
     }
 
@@ -819,7 +1110,11 @@ export const TelemetryDB = {
     const limit = filters.limit || 100;
     const offset = filters.offset || 0;
 
-    const sql = `SELECT * FROM telemetry_events ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+    // Join with agents table when filtering by project
+    const needsJoin = filters.project_id !== undefined;
+    const sql = needsJoin
+      ? `SELECT t.* FROM telemetry_events t JOIN agents a ON t.agent_id = a.id ${where} ORDER BY t.timestamp DESC LIMIT ? OFFSET ?`
+      : `SELECT * FROM telemetry_events t ${where} ORDER BY t.timestamp DESC LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
     const rows = db.query(sql).all(...params) as TelemetryEventRow[];
@@ -829,6 +1124,7 @@ export const TelemetryDB = {
   // Get usage stats
   getUsage(filters: {
     agent_id?: string;
+    project_id?: string | null;
     since?: string;
     until?: string;
     group_by?: "agent" | "day";
@@ -843,17 +1139,26 @@ export const TelemetryDB = {
   }> {
     const conditions: string[] = [];
     const params: unknown[] = [];
+    const needsJoin = filters.project_id !== undefined;
 
     if (filters.agent_id) {
-      conditions.push("agent_id = ?");
+      conditions.push("t.agent_id = ?");
       params.push(filters.agent_id);
     }
+    if (filters.project_id !== undefined) {
+      if (filters.project_id === null) {
+        conditions.push("a.project_id IS NULL");
+      } else {
+        conditions.push("a.project_id = ?");
+        params.push(filters.project_id);
+      }
+    }
     if (filters.since) {
-      conditions.push("timestamp >= ?");
+      conditions.push("t.timestamp >= ?");
       params.push(filters.since);
     }
     if (filters.until) {
-      conditions.push("timestamp <= ?");
+      conditions.push("t.timestamp <= ?");
       params.push(filters.until);
     }
 
@@ -863,22 +1168,26 @@ export const TelemetryDB = {
     let selectFields = "";
 
     if (filters.group_by === "day") {
-      groupBy = "GROUP BY date(timestamp)";
-      selectFields = "date(timestamp) as date,";
+      groupBy = "GROUP BY date(t.timestamp)";
+      selectFields = "date(t.timestamp) as date,";
     } else if (filters.group_by === "agent") {
-      groupBy = "GROUP BY agent_id";
-      selectFields = "agent_id,";
+      groupBy = "GROUP BY t.agent_id";
+      selectFields = "t.agent_id as agent_id,";
     }
+
+    const fromClause = needsJoin
+      ? "FROM telemetry_events t JOIN agents a ON t.agent_id = a.id"
+      : "FROM telemetry_events t";
 
     const sql = `
       SELECT
         ${selectFields}
-        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.input_tokens') ELSE 0 END), 0) as input_tokens,
-        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.output_tokens') ELSE 0 END), 0) as output_tokens,
-        COALESCE(SUM(CASE WHEN category = 'LLM' THEN 1 ELSE 0 END), 0) as llm_calls,
-        COALESCE(SUM(CASE WHEN category = 'TOOL' THEN 1 ELSE 0 END), 0) as tool_calls,
-        COALESCE(SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END), 0) as errors
-      FROM telemetry_events
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.input_tokens') ELSE 0 END), 0) as input_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.output_tokens') ELSE 0 END), 0) as output_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN 1 ELSE 0 END), 0) as llm_calls,
+        COALESCE(SUM(CASE WHEN t.category = 'TOOL' THEN 1 ELSE 0 END), 0) as tool_calls,
+        COALESCE(SUM(CASE WHEN t.level = 'error' THEN 1 ELSE 0 END), 0) as errors
+      ${fromClause}
       ${where}
       ${groupBy}
     `;
@@ -895,7 +1204,7 @@ export const TelemetryDB = {
   },
 
   // Get summary stats
-  getStats(agentId?: string): {
+  getStats(filters: { agentId?: string; projectId?: string | null } = {}): {
     total_events: number;
     total_llm_calls: number;
     total_tool_calls: number;
@@ -903,18 +1212,37 @@ export const TelemetryDB = {
     total_input_tokens: number;
     total_output_tokens: number;
   } {
-    const where = agentId ? "WHERE agent_id = ?" : "";
-    const params = agentId ? [agentId] : [];
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    const needsJoin = filters.projectId !== undefined;
+
+    if (filters.agentId) {
+      conditions.push("t.agent_id = ?");
+      params.push(filters.agentId);
+    }
+    if (filters.projectId !== undefined) {
+      if (filters.projectId === null) {
+        conditions.push("a.project_id IS NULL");
+      } else {
+        conditions.push("a.project_id = ?");
+        params.push(filters.projectId);
+      }
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const fromClause = needsJoin
+      ? "FROM telemetry_events t JOIN agents a ON t.agent_id = a.id"
+      : "FROM telemetry_events t";
 
     const sql = `
       SELECT
         COUNT(*) as total_events,
-        COALESCE(SUM(CASE WHEN category = 'LLM' THEN 1 ELSE 0 END), 0) as total_llm_calls,
-        COALESCE(SUM(CASE WHEN category = 'TOOL' THEN 1 ELSE 0 END), 0) as total_tool_calls,
-        COALESCE(SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END), 0) as total_errors,
-        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.input_tokens') ELSE 0 END), 0) as total_input_tokens,
-        COALESCE(SUM(CASE WHEN category = 'LLM' THEN json_extract(data, '$.output_tokens') ELSE 0 END), 0) as total_output_tokens
-      FROM telemetry_events
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN 1 ELSE 0 END), 0) as total_llm_calls,
+        COALESCE(SUM(CASE WHEN t.category = 'TOOL' THEN 1 ELSE 0 END), 0) as total_tool_calls,
+        COALESCE(SUM(CASE WHEN t.level = 'error' THEN 1 ELSE 0 END), 0) as total_errors,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.input_tokens') ELSE 0 END), 0) as total_input_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.output_tokens') ELSE 0 END), 0) as total_output_tokens
+      ${fromClause}
       ${where}
     `;
 
@@ -975,6 +1303,207 @@ function rowToTelemetryEvent(row: TelemetryEventRow): TelemetryEvent {
     duration_ms: row.duration_ms,
     error: row.error,
     received_at: row.received_at,
+  };
+}
+
+// User operations
+export const UserDB = {
+  // Create a new user
+  create(user: { username: string; password_hash: string; email?: string | null; role?: "admin" | "user" }): User {
+    const id = generateId();
+    const now = new Date().toISOString();
+    const role = user.role || "user";
+
+    db.run(
+      `INSERT INTO users (id, username, password_hash, email, role, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, user.username.toLowerCase(), user.password_hash, user.email || null, role, now, now]
+    );
+
+    return this.findById(id)!;
+  },
+
+  // Find user by ID
+  findById(id: string): User | null {
+    const row = db.query("SELECT * FROM users WHERE id = ?").get(id) as UserRow | null;
+    return row ? rowToUser(row) : null;
+  },
+
+  // Find user by username
+  findByUsername(username: string): User | null {
+    const row = db.query("SELECT * FROM users WHERE username = ?").get(username.toLowerCase()) as UserRow | null;
+    return row ? rowToUser(row) : null;
+  },
+
+  // Find user by email (for password recovery)
+  findByEmail(email: string): User | null {
+    const row = db.query("SELECT * FROM users WHERE email = ?").get(email.toLowerCase()) as UserRow | null;
+    return row ? rowToUser(row) : null;
+  },
+
+  // Get all users
+  findAll(): User[] {
+    const rows = db.query("SELECT * FROM users ORDER BY created_at DESC").all() as UserRow[];
+    return rows.map(rowToUser);
+  },
+
+  // Update user
+  update(id: string, updates: Partial<Omit<User, "id" | "created_at">>): User | null {
+    const user = this.findById(id);
+    if (!user) return null;
+
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.username !== undefined) {
+      fields.push("username = ?");
+      values.push(updates.username.toLowerCase());
+    }
+    if (updates.password_hash !== undefined) {
+      fields.push("password_hash = ?");
+      values.push(updates.password_hash);
+    }
+    if (updates.email !== undefined) {
+      fields.push("email = ?");
+      values.push(updates.email);
+    }
+    if (updates.role !== undefined) {
+      fields.push("role = ?");
+      values.push(updates.role);
+    }
+    if (updates.last_login_at !== undefined) {
+      fields.push("last_login_at = ?");
+      values.push(updates.last_login_at);
+    }
+
+    if (fields.length > 0) {
+      fields.push("updated_at = ?");
+      values.push(new Date().toISOString());
+      values.push(id);
+
+      db.run(`UPDATE users SET ${fields.join(", ")} WHERE id = ?`, values);
+    }
+
+    return this.findById(id);
+  },
+
+  // Delete user
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM users WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+
+  // Update last login
+  updateLastLogin(id: string): void {
+    db.run("UPDATE users SET last_login_at = ? WHERE id = ?", [new Date().toISOString(), id]);
+  },
+
+  // Count users
+  count(): number {
+    const row = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number };
+    return row.count;
+  },
+
+  // Check if any users exist
+  hasUsers(): boolean {
+    return this.count() > 0;
+  },
+
+  // Count admins
+  countAdmins(): number {
+    const row = db.query("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as { count: number };
+    return row.count;
+  },
+};
+
+// Helper to convert DB row to User type
+function rowToUser(row: UserRow): User {
+  return {
+    id: row.id,
+    username: row.username,
+    password_hash: row.password_hash,
+    email: row.email,
+    role: row.role as "admin" | "user",
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_login_at: row.last_login_at,
+  };
+}
+
+// Session operations
+export const SessionDB = {
+  // Create a new session
+  create(session: { user_id: string; refresh_token_hash: string; expires_at: string }): Session {
+    const id = generateId();
+    const now = new Date().toISOString();
+
+    db.run(
+      `INSERT INTO sessions (id, user_id, refresh_token_hash, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id, session.user_id, session.refresh_token_hash, session.expires_at, now]
+    );
+
+    return this.findById(id)!;
+  },
+
+  // Find session by ID
+  findById(id: string): Session | null {
+    const row = db.query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | null;
+    return row ? rowToSession(row) : null;
+  },
+
+  // Find session by refresh token hash
+  findByTokenHash(tokenHash: string): Session | null {
+    const row = db.query("SELECT * FROM sessions WHERE refresh_token_hash = ?").get(tokenHash) as SessionRow | null;
+    return row ? rowToSession(row) : null;
+  },
+
+  // Get all sessions for a user
+  findByUser(userId: string): Session[] {
+    const rows = db.query("SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC").all(userId) as SessionRow[];
+    return rows.map(rowToSession);
+  },
+
+  // Delete session
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM sessions WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+
+  // Delete session by token hash
+  deleteByTokenHash(tokenHash: string): boolean {
+    const result = db.run("DELETE FROM sessions WHERE refresh_token_hash = ?", [tokenHash]);
+    return result.changes > 0;
+  },
+
+  // Delete all sessions for a user
+  deleteByUser(userId: string): number {
+    const result = db.run("DELETE FROM sessions WHERE user_id = ?", [userId]);
+    return result.changes;
+  },
+
+  // Delete expired sessions
+  deleteExpired(): number {
+    const result = db.run("DELETE FROM sessions WHERE expires_at < ?", [new Date().toISOString()]);
+    return result.changes;
+  },
+
+  // Check if session is valid (exists and not expired)
+  isValid(id: string): boolean {
+    const session = this.findById(id);
+    if (!session) return false;
+    return new Date(session.expires_at) > new Date();
+  },
+};
+
+// Helper to convert DB row to Session type
+function rowToSession(row: SessionRow): Session {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    refresh_token_hash: row.refresh_token_hash,
+    expires_at: row.expires_at,
+    created_at: row.created_at,
   };
 }
 

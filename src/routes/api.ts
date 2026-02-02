@@ -1,10 +1,12 @@
 import { spawn } from "bun";
 import { join } from "path";
 import { homedir } from "os";
-import { mkdirSync, existsSync } from "fs";
+import { mkdirSync, existsSync, rmSync } from "fs";
 import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
-import { AgentDB, McpServerDB, TelemetryDB, generateId, type Agent, type AgentFeatures, type McpServer } from "../db";
+import { AgentDB, McpServerDB, TelemetryDB, UserDB, ProjectDB, generateId, type Agent, type AgentFeatures, type McpServer, type Project } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
+import { createUser, hashPassword, validatePassword } from "../auth";
+import type { AuthContext } from "../auth/middleware";
 import {
   binaryExists,
   checkForUpdates,
@@ -35,6 +37,11 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+const isDev = process.env.NODE_ENV !== "production";
+function debug(...args: unknown[]) {
+  if (isDev) console.log("[api]", ...args);
+}
+
 // Wait for agent to be healthy (with timeout)
 async function waitForAgentHealth(port: number, maxAttempts = 30, delayMs = 200): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
@@ -57,17 +64,37 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
   const features = agent.features;
 
   // Get MCP server details for the agent's selected servers
-  // All MCP servers are accessed via HTTP proxy (apteva manages the stdio processes)
-  const mcpServers = (agent.mcp_servers || [])
-    .map(id => McpServerDB.findById(id))
-    .filter((s): s is NonNullable<typeof s> => s !== null && s.status === "running" && s.port)
-    .map(s => ({
-      name: s.name,
-      type: "http" as const,
-      url: `http://localhost:${s.port}/mcp`,
-      headers: {},
-      enabled: true,
-    }));
+  // Supports both local servers and Composio configs (prefixed with "composio:")
+  const mcpServers: Array<{ name: string; type: "http"; url: string; headers: Record<string, string>; enabled: boolean }> = [];
+
+  for (const id of agent.mcp_servers || []) {
+    // Check if this is a Composio config
+    if (id.startsWith("composio:")) {
+      const configId = id.slice(9); // Remove "composio:" prefix
+      const composioKey = ProviderKeys.getDecrypted("composio");
+      if (composioKey) {
+        mcpServers.push({
+          name: `composio-${configId.slice(0, 8)}`,
+          type: "http",
+          url: `https://backend.composio.dev/v3/mcp/${configId}`,
+          headers: { "x-api-key": composioKey },
+          enabled: true,
+        });
+      }
+    } else {
+      // Local MCP server
+      const server = McpServerDB.findById(id);
+      if (server && server.status === "running" && server.port) {
+        mcpServers.push({
+          name: server.name,
+          type: "http",
+          url: `http://localhost:${server.port}/mcp`,
+          headers: {},
+          enabled: true,
+        });
+      }
+    }
+  }
 
   return {
     id: agent.id,
@@ -319,13 +346,38 @@ function toApiAgent(agent: Agent) {
     features: agent.features,
     mcpServers: agent.mcp_servers, // Keep IDs for backwards compatibility
     mcpServerDetails, // Include full details
+    projectId: agent.project_id,
     createdAt: agent.created_at,
     updatedAt: agent.updated_at,
   };
 }
 
-export async function handleApiRequest(req: Request, path: string): Promise<Response> {
+// Transform DB project to API response format
+function toApiProject(project: Project) {
+  return {
+    id: project.id,
+    name: project.name,
+    description: project.description,
+    color: project.color,
+    createdAt: project.created_at,
+    updatedAt: project.updated_at,
+  };
+}
+
+export async function handleApiRequest(req: Request, path: string, authContext?: AuthContext): Promise<Response> {
   const method = req.method;
+  const user = authContext?.user;
+
+  // GET /api/health - Health check endpoint (no auth required, handled before middleware in server.ts)
+  if (path === "/api/health" && method === "GET") {
+    const agentCount = AgentDB.count();
+    const runningAgents = AgentDB.findRunning().length;
+    return json({
+      status: "ok",
+      version: getAptevaVersion(),
+      agents: { total: agentCount, running: runningAgents },
+    });
+  }
 
   // GET /api/agents - List all agents
   if (path === "/api/agents" && method === "GET") {
@@ -337,7 +389,7 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
   if (path === "/api/agents" && method === "POST") {
     try {
       const body = await req.json();
-      const { name, model, provider, systemPrompt, features } = body;
+      const { name, model, provider, systemPrompt, features, projectId } = body;
 
       if (!name) {
         return json({ error: "Name is required" }, 400);
@@ -354,6 +406,7 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
         system_prompt: systemPrompt || "You are a helpful assistant.",
         features: features || DEFAULT_FEATURES,
         mcp_servers: body.mcpServers || [],
+        project_id: projectId || null,
       });
 
       return json({ agent: toApiAgent(agent) }, 201);
@@ -390,6 +443,7 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       if (body.systemPrompt !== undefined) updates.system_prompt = body.systemPrompt;
       if (body.features !== undefined) updates.features = body.features;
       if (body.mcpServers !== undefined) updates.mcp_servers = body.mcpServers;
+      if (body.projectId !== undefined) updates.project_id = body.projectId;
 
       const updated = AgentDB.update(agentMatch[1], updates);
 
@@ -413,22 +467,34 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
 
   // DELETE /api/agents/:id - Delete an agent
   if (agentMatch && method === "DELETE") {
-    const agent = AgentDB.findById(agentMatch[1]);
+    const agentId = agentMatch[1];
+    const agent = AgentDB.findById(agentId);
     if (!agent) {
       return json({ error: "Agent not found" }, 404);
     }
 
     // Stop the agent if running
-    const proc = agentProcesses.get(agentMatch[1]);
+    const proc = agentProcesses.get(agentId);
     if (proc) {
       proc.kill();
-      agentProcesses.delete(agentMatch[1]);
+      agentProcesses.delete(agentId);
     }
 
     // Delete agent's telemetry data
-    TelemetryDB.deleteByAgent(agentMatch[1]);
+    TelemetryDB.deleteByAgent(agentId);
 
-    AgentDB.delete(agentMatch[1]);
+    // Delete agent's data directory (contains threads, messages, etc.)
+    const agentDataDir = join(AGENTS_DATA_DIR, agentId);
+    if (existsSync(agentDataDir)) {
+      try {
+        rmSync(agentDataDir, { recursive: true, force: true });
+        console.log(`Deleted agent data directory: ${agentDataDir}`);
+      } catch (err) {
+        console.error(`Failed to delete agent data directory: ${err}`);
+      }
+    }
+
+    AgentDB.delete(agentId);
     return json({ success: true });
   }
 
@@ -514,6 +580,432 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
     }
   }
 
+  // ==================== THREAD & MESSAGE PROXY ====================
+
+  // GET /api/agents/:id/threads - List threads for an agent
+  const threadsListMatch = path.match(/^\/api\/agents\/([^/]+)\/threads$/);
+  if (threadsListMatch && method === "GET") {
+    const agent = AgentDB.findById(threadsListMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const agentUrl = `http://localhost:${agent.port}/threads`;
+      const response = await fetch(agentUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`Threads list proxy error: ${err}`);
+      return json({ error: `Failed to fetch threads: ${err}` }, 500);
+    }
+  }
+
+  // POST /api/agents/:id/threads - Create a new thread
+  if (threadsListMatch && method === "POST") {
+    const agent = AgentDB.findById(threadsListMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const body = await req.json().catch(() => ({}));
+      const agentUrl = `http://localhost:${agent.port}/threads`;
+      const response = await fetch(agentUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data, 201);
+    } catch (err) {
+      console.error(`Thread create proxy error: ${err}`);
+      return json({ error: `Failed to create thread: ${err}` }, 500);
+    }
+  }
+
+  // GET /api/agents/:id/threads/:threadId - Get a specific thread
+  const threadDetailMatch = path.match(/^\/api\/agents\/([^/]+)\/threads\/([^/]+)$/);
+  if (threadDetailMatch && method === "GET") {
+    const agent = AgentDB.findById(threadDetailMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const threadId = threadDetailMatch[2];
+      const agentUrl = `http://localhost:${agent.port}/threads/${threadId}`;
+      const response = await fetch(agentUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`Thread detail proxy error: ${err}`);
+      return json({ error: `Failed to fetch thread: ${err}` }, 500);
+    }
+  }
+
+  // DELETE /api/agents/:id/threads/:threadId - Delete a thread
+  if (threadDetailMatch && method === "DELETE") {
+    const agent = AgentDB.findById(threadDetailMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const threadId = threadDetailMatch[2];
+      const agentUrl = `http://localhost:${agent.port}/threads/${threadId}`;
+      const response = await fetch(agentUrl, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      return json({ success: true });
+    } catch (err) {
+      console.error(`Thread delete proxy error: ${err}`);
+      return json({ error: `Failed to delete thread: ${err}` }, 500);
+    }
+  }
+
+  // GET /api/agents/:id/threads/:threadId/messages - Get messages in a thread
+  const threadMessagesMatch = path.match(/^\/api\/agents\/([^/]+)\/threads\/([^/]+)\/messages$/);
+  if (threadMessagesMatch && method === "GET") {
+    const agent = AgentDB.findById(threadMessagesMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const threadId = threadMessagesMatch[2];
+      const agentUrl = `http://localhost:${agent.port}/threads/${threadId}/messages`;
+      const response = await fetch(agentUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`Thread messages proxy error: ${err}`);
+      return json({ error: `Failed to fetch messages: ${err}` }, 500);
+    }
+  }
+
+  // ==================== MEMORY PROXY ====================
+
+  // GET /api/agents/:id/memories - List memories for an agent
+  const memoriesMatch = path.match(/^\/api\/agents\/([^/]+)\/memories$/);
+  if (memoriesMatch && method === "GET") {
+    const agent = AgentDB.findById(memoriesMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const url = new URL(req.url);
+      const threadId = url.searchParams.get("thread_id") || "";
+      const agentUrl = `http://localhost:${agent.port}/memories${threadId ? `?thread_id=${threadId}` : ""}`;
+      const response = await fetch(agentUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`Memories list proxy error: ${err}`);
+      return json({ error: `Failed to fetch memories: ${err}` }, 500);
+    }
+  }
+
+  // DELETE /api/agents/:id/memories - Clear all memories for an agent
+  if (memoriesMatch && method === "DELETE") {
+    const agent = AgentDB.findById(memoriesMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const agentUrl = `http://localhost:${agent.port}/memories`;
+      const response = await fetch(agentUrl, { method: "DELETE" });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      return json({ success: true });
+    } catch (err) {
+      console.error(`Memories clear proxy error: ${err}`);
+      return json({ error: `Failed to clear memories: ${err}` }, 500);
+    }
+  }
+
+  // DELETE /api/agents/:id/memories/:memoryId - Delete a specific memory
+  const memoryDeleteMatch = path.match(/^\/api\/agents\/([^/]+)\/memories\/([^/]+)$/);
+  if (memoryDeleteMatch && method === "DELETE") {
+    const agent = AgentDB.findById(memoryDeleteMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const memoryId = memoryDeleteMatch[2];
+      const agentUrl = `http://localhost:${agent.port}/memories/${memoryId}`;
+      const response = await fetch(agentUrl, { method: "DELETE" });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      return json({ success: true });
+    } catch (err) {
+      console.error(`Memory delete proxy error: ${err}`);
+      return json({ error: `Failed to delete memory: ${err}` }, 500);
+    }
+  }
+
+  // ==================== FILES PROXY ====================
+
+  // GET /api/agents/:id/files - List files for an agent
+  const filesMatch = path.match(/^\/api\/agents\/([^/]+)\/files$/);
+  if (filesMatch && method === "GET") {
+    const agent = AgentDB.findById(filesMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const url = new URL(req.url);
+      const params = new URLSearchParams();
+      if (url.searchParams.get("thread_id")) params.set("thread_id", url.searchParams.get("thread_id")!);
+      if (url.searchParams.get("limit")) params.set("limit", url.searchParams.get("limit")!);
+
+      const agentUrl = `http://localhost:${agent.port}/files${params.toString() ? `?${params}` : ""}`;
+      const response = await fetch(agentUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`Files list proxy error: ${err}`);
+      return json({ error: `Failed to fetch files: ${err}` }, 500);
+    }
+  }
+
+  // GET /api/agents/:id/files/:fileId - Get a specific file
+  const fileGetMatch = path.match(/^\/api\/agents\/([^/]+)\/files\/([^/]+)$/);
+  if (fileGetMatch && method === "GET") {
+    const agent = AgentDB.findById(fileGetMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const fileId = fileGetMatch[2];
+      const agentUrl = `http://localhost:${agent.port}/files/${fileId}`;
+      const response = await fetch(agentUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`File get proxy error: ${err}`);
+      return json({ error: `Failed to fetch file: ${err}` }, 500);
+    }
+  }
+
+  // DELETE /api/agents/:id/files/:fileId - Delete a specific file
+  if (fileGetMatch && method === "DELETE") {
+    const agent = AgentDB.findById(fileGetMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const fileId = fileGetMatch[2];
+      const agentUrl = `http://localhost:${agent.port}/files/${fileId}`;
+      const response = await fetch(agentUrl, { method: "DELETE" });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      return json({ success: true });
+    } catch (err) {
+      console.error(`File delete proxy error: ${err}`);
+      return json({ error: `Failed to delete file: ${err}` }, 500);
+    }
+  }
+
+  // GET /api/agents/:id/files/:fileId/download - Download a file
+  const fileDownloadMatch = path.match(/^\/api\/agents\/([^/]+)\/files\/([^/]+)\/download$/);
+  if (fileDownloadMatch && method === "GET") {
+    const agent = AgentDB.findById(fileDownloadMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const fileId = fileDownloadMatch[2];
+      const agentUrl = `http://localhost:${agent.port}/files/${fileId}/download`;
+      const response = await fetch(agentUrl);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      // Pass through the file response
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          "Content-Type": response.headers.get("Content-Type") || "application/octet-stream",
+          "Content-Disposition": response.headers.get("Content-Disposition") || "attachment",
+          "Content-Length": response.headers.get("Content-Length") || "",
+        },
+      });
+    } catch (err) {
+      console.error(`File download proxy error: ${err}`);
+      return json({ error: `Failed to download file: ${err}` }, 500);
+    }
+  }
+
+  // ==================== DISCOVERY/PEERS PROXY ====================
+
+  // GET /api/agents/:id/peers - Get discovered peer agents
+  const peersMatch = path.match(/^\/api\/agents\/([^/]+)\/peers$/);
+  if (peersMatch && method === "GET") {
+    const agent = AgentDB.findById(peersMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const agentUrl = `http://localhost:${agent.port}/discovery/agents`;
+      const response = await fetch(agentUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`Peers list proxy error: ${err}`);
+      return json({ error: `Failed to fetch peers: ${err}` }, 500);
+    }
+  }
+
   // GET /api/providers - List supported providers and models with key status
   if (path === "/api/providers" && method === "GET") {
     const providers = getProvidersWithStatus();
@@ -536,6 +1028,274 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
   // POST /api/onboarding/reset - Reset onboarding (for testing)
   if (path === "/api/onboarding/reset" && method === "POST") {
     Onboarding.reset();
+    return json({ success: true });
+  }
+
+  // POST /api/onboarding/user - Create first user during onboarding
+  // This endpoint only works when no users exist (enforced by middleware)
+  if (path === "/api/onboarding/user" && method === "POST") {
+    debug("POST /api/onboarding/user");
+    // Double-check no users exist
+    if (UserDB.hasUsers()) {
+      debug("Users already exist");
+      return json({ error: "Users already exist" }, 403);
+    }
+
+    try {
+      const body = await req.json();
+      debug("Onboarding body:", JSON.stringify(body));
+      const { username, password, email } = body;
+
+      if (!username || !password) {
+        debug("Missing username or password");
+        return json({ error: "Username and password are required" }, 400);
+      }
+
+      // Create first user as admin
+      debug("Creating user:", username);
+      const result = await createUser({
+        username,
+        password,
+        email: email || undefined, // Optional, for password recovery
+        role: "admin",
+      });
+      debug("Create user result:", result.success, result.error);
+
+      if (!result.success) {
+        return json({ error: result.error }, 400);
+      }
+
+      return json({
+        success: true,
+        user: {
+          id: result.user!.id,
+          username: result.user!.username,
+          role: result.user!.role,
+        },
+      }, 201);
+    } catch (e) {
+      debug("Onboarding error:", e);
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // ==================== USER MANAGEMENT (Admin only) ====================
+
+  // GET /api/users - List all users
+  if (path === "/api/users" && method === "GET") {
+    const users = UserDB.findAll().map(u => ({
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      role: u.role,
+      createdAt: u.created_at,
+      lastLoginAt: u.last_login_at,
+    }));
+    return json({ users });
+  }
+
+  // POST /api/users - Create a new user
+  if (path === "/api/users" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { username, password, email, role } = body;
+
+      if (!username || !password) {
+        return json({ error: "Username and password are required" }, 400);
+      }
+
+      const result = await createUser({
+        username,
+        password,
+        email: email || undefined,
+        role: role || "user",
+      });
+
+      if (!result.success) {
+        return json({ error: result.error }, 400);
+      }
+
+      return json({
+        user: {
+          id: result.user!.id,
+          username: result.user!.username,
+          email: result.user!.email,
+          role: result.user!.role,
+          createdAt: result.user!.created_at,
+        },
+      }, 201);
+    } catch (e) {
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // GET /api/users/:id - Get a specific user
+  const userMatch = path.match(/^\/api\/users\/([^/]+)$/);
+  if (userMatch && method === "GET") {
+    const targetUser = UserDB.findById(userMatch[1]);
+    if (!targetUser) {
+      return json({ error: "User not found" }, 404);
+    }
+    return json({
+      user: {
+        id: targetUser.id,
+        username: targetUser.username,
+        email: targetUser.email,
+        role: targetUser.role,
+        createdAt: targetUser.created_at,
+        lastLoginAt: targetUser.last_login_at,
+      },
+    });
+  }
+
+  // PUT /api/users/:id - Update a user
+  if (userMatch && method === "PUT") {
+    const targetUser = UserDB.findById(userMatch[1]);
+    if (!targetUser) {
+      return json({ error: "User not found" }, 404);
+    }
+
+    try {
+      const body = await req.json();
+      const updates: Parameters<typeof UserDB.update>[1] = {};
+
+      if (body.email !== undefined) updates.email = body.email;
+      if (body.role !== undefined) {
+        // Prevent removing last admin
+        if (targetUser.role === "admin" && body.role !== "admin") {
+          if (UserDB.countAdmins() <= 1) {
+            return json({ error: "Cannot remove the last admin" }, 400);
+          }
+        }
+        updates.role = body.role;
+      }
+      if (body.password !== undefined) {
+        const validation = validatePassword(body.password);
+        if (!validation.valid) {
+          return json({ error: validation.errors.join(". ") }, 400);
+        }
+        updates.password_hash = await hashPassword(body.password);
+      }
+
+      const updated = UserDB.update(userMatch[1], updates);
+      return json({
+        user: updated ? {
+          id: updated.id,
+          username: updated.username,
+          email: updated.email,
+          role: updated.role,
+          createdAt: updated.created_at,
+          lastLoginAt: updated.last_login_at,
+        } : null,
+      });
+    } catch (e) {
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // DELETE /api/users/:id - Delete a user
+  if (userMatch && method === "DELETE") {
+    const targetUser = UserDB.findById(userMatch[1]);
+    if (!targetUser) {
+      return json({ error: "User not found" }, 404);
+    }
+
+    // Prevent deleting yourself
+    if (user && targetUser.id === user.id) {
+      return json({ error: "Cannot delete your own account" }, 400);
+    }
+
+    // Prevent deleting last admin
+    if (targetUser.role === "admin" && UserDB.countAdmins() <= 1) {
+      return json({ error: "Cannot delete the last admin" }, 400);
+    }
+
+    UserDB.delete(userMatch[1]);
+    return json({ success: true });
+  }
+
+  // ==================== PROJECTS ====================
+
+  // GET /api/projects - List all projects
+  if (path === "/api/projects" && method === "GET") {
+    const projects = ProjectDB.findAll();
+    const agentCounts = ProjectDB.getAgentCounts();
+    return json({
+      projects: projects.map(p => ({
+        ...toApiProject(p),
+        agentCount: agentCounts.get(p.id) || 0,
+      })),
+      unassignedCount: agentCounts.get(null) || 0,
+    });
+  }
+
+  // POST /api/projects - Create a new project
+  if (path === "/api/projects" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { name, description, color } = body;
+
+      if (!name) {
+        return json({ error: "Name is required" }, 400);
+      }
+
+      const project = ProjectDB.create({
+        name,
+        description: description || null,
+        color: color || "#6366f1",
+      });
+
+      return json({ project: toApiProject(project) }, 201);
+    } catch (e) {
+      console.error("Create project error:", e);
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // GET /api/projects/:id - Get a specific project
+  const projectMatch = path.match(/^\/api\/projects\/([^/]+)$/);
+  if (projectMatch && method === "GET") {
+    const project = ProjectDB.findById(projectMatch[1]);
+    if (!project) {
+      return json({ error: "Project not found" }, 404);
+    }
+    const agents = AgentDB.findByProject(project.id);
+    return json({
+      project: toApiProject(project),
+      agents: agents.map(toApiAgent),
+    });
+  }
+
+  // PUT /api/projects/:id - Update a project
+  if (projectMatch && method === "PUT") {
+    const project = ProjectDB.findById(projectMatch[1]);
+    if (!project) {
+      return json({ error: "Project not found" }, 404);
+    }
+
+    try {
+      const body = await req.json();
+      const updates: Partial<Project> = {};
+
+      if (body.name !== undefined) updates.name = body.name;
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.color !== undefined) updates.color = body.color;
+
+      const updated = ProjectDB.update(projectMatch[1], updates);
+      return json({ project: updated ? toApiProject(updated) : null });
+    } catch (e) {
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // DELETE /api/projects/:id - Delete a project
+  if (projectMatch && method === "DELETE") {
+    const project = ProjectDB.findById(projectMatch[1]);
+    if (!project) {
+      return json({ error: "Project not found" }, 404);
+    }
+
+    ProjectDB.delete(projectMatch[1]);
     return json({ success: true });
   }
 
@@ -833,24 +1593,122 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
       }
       const data = await res.json();
 
-      // Transform to simpler format
-      const servers = (data.servers || []).map((item: any) => {
-        const s = item.server;
-        const pkg = s.packages?.find((p: any) => p.registryType === "npm");
-        return {
-          name: s.name,
-          description: s.description,
-          version: s.version,
-          repository: s.repository?.url,
-          npmPackage: pkg?.identifier,
-          transport: pkg?.transport?.type || "stdio",
-          envVars: pkg?.environmentVariables || [],
-        };
-      }).filter((s: any) => s.npmPackage); // Only show npm packages for now
+      // Transform to simpler format - dedupe by name
+      const seen = new Set<string>();
+      const servers = (data.servers || [])
+        .map((item: any) => {
+          const s = item.server;
+          const pkg = s.packages?.find((p: any) => p.registryType === "npm");
+          const remote = s.remotes?.[0];
+
+          // Extract a short display name from the full name
+          // e.g., "ai.smithery/smithery-ai-github" -> "github"
+          // e.g., "io.github.user/my-server" -> "my-server"
+          const fullName = s.name || "";
+          const shortName = fullName.split("/").pop()?.replace(/-mcp$/, "").replace(/^mcp-/, "") || fullName;
+
+          return {
+            id: fullName, // Use full name as unique ID
+            name: shortName,
+            fullName: fullName,
+            description: s.description,
+            version: s.version,
+            repository: s.repository?.url,
+            npmPackage: pkg?.identifier || null,
+            remoteUrl: remote?.url || null,
+            transport: pkg?.transport?.type || (remote ? "http" : "stdio"),
+          };
+        })
+        .filter((s: any) => {
+          // Dedupe by fullName
+          if (seen.has(s.fullName)) return false;
+          seen.add(s.fullName);
+          // Only show servers with npm package or remote URL
+          return s.npmPackage || s.remoteUrl;
+        });
 
       return json({ servers });
     } catch (e) {
       return json({ error: "Failed to search registry" }, 500);
+    }
+  }
+
+  // ============ Composio Integration ============
+
+  // GET /api/integrations/composio/configs - List Composio MCP configs
+  if (path === "/api/integrations/composio/configs" && method === "GET") {
+    const apiKey = ProviderKeys.getDecrypted("composio");
+    if (!apiKey) {
+      return json({ error: "Composio API key not configured", configs: [] }, 200);
+    }
+
+    try {
+      const res = await fetch("https://backend.composio.dev/api/v3/mcp/servers?limit=50", {
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("Composio API error:", res.status, text);
+        return json({ error: "Failed to fetch Composio configs" }, 500);
+      }
+
+      const data = await res.json();
+
+      // Transform to our format
+      const configs = (data.items || data.servers || []).map((item: any) => ({
+        id: item.id,
+        name: item.name || item.id,
+        toolkits: item.toolkits || item.apps || [],
+        toolsCount: item.toolsCount || item.tools?.length || 0,
+        createdAt: item.createdAt || item.created_at,
+        // Build the MCP URL for this config
+        mcpUrl: `https://backend.composio.dev/v3/mcp/${item.id}`,
+      }));
+
+      return json({ configs });
+    } catch (e) {
+      console.error("Composio fetch error:", e);
+      return json({ error: "Failed to connect to Composio" }, 500);
+    }
+  }
+
+  // GET /api/integrations/composio/configs/:id - Get single Composio config details
+  const composioConfigMatch = path.match(/^\/api\/integrations\/composio\/configs\/([^/]+)$/);
+  if (composioConfigMatch && method === "GET") {
+    const configId = composioConfigMatch[1];
+    const apiKey = ProviderKeys.getDecrypted("composio");
+    if (!apiKey) {
+      return json({ error: "Composio API key not configured" }, 401);
+    }
+
+    try {
+      const res = await fetch(`https://backend.composio.dev/api/v3/mcp/${configId}`, {
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        return json({ error: "Config not found" }, 404);
+      }
+
+      const data = await res.json();
+      return json({
+        config: {
+          id: data.id,
+          name: data.name || data.id,
+          toolkits: data.toolkits || data.apps || [],
+          tools: data.tools || [],
+          mcpUrl: `https://backend.composio.dev/v3/mcp/${data.id}`,
+        }
+      });
+    } catch (e) {
+      return json({ error: "Failed to fetch config" }, 500);
     }
   }
 
@@ -1156,8 +2014,10 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
   // GET /api/telemetry/events - Query telemetry events
   if (path === "/api/telemetry/events" && method === "GET") {
     const url = new URL(req.url);
+    const projectIdParam = url.searchParams.get("project_id");
     const events = TelemetryDB.query({
       agent_id: url.searchParams.get("agent_id") || undefined,
+      project_id: projectIdParam === "null" ? null : projectIdParam || undefined,
       category: url.searchParams.get("category") || undefined,
       level: url.searchParams.get("level") || undefined,
       trace_id: url.searchParams.get("trace_id") || undefined,
@@ -1172,8 +2032,10 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
   // GET /api/telemetry/usage - Get usage statistics
   if (path === "/api/telemetry/usage" && method === "GET") {
     const url = new URL(req.url);
+    const projectIdParam = url.searchParams.get("project_id");
     const usage = TelemetryDB.getUsage({
       agent_id: url.searchParams.get("agent_id") || undefined,
+      project_id: projectIdParam === "null" ? null : projectIdParam || undefined,
       since: url.searchParams.get("since") || undefined,
       until: url.searchParams.get("until") || undefined,
       group_by: (url.searchParams.get("group_by") as "agent" | "day") || undefined,
@@ -1185,7 +2047,11 @@ export async function handleApiRequest(req: Request, path: string): Promise<Resp
   if (path === "/api/telemetry/stats" && method === "GET") {
     const url = new URL(req.url);
     const agentId = url.searchParams.get("agent_id") || undefined;
-    const stats = TelemetryDB.getStats(agentId);
+    const projectIdParam = url.searchParams.get("project_id");
+    const stats = TelemetryDB.getStats({
+      agentId,
+      projectId: projectIdParam === "null" ? null : projectIdParam || undefined,
+    });
     return json({ stats });
   }
 

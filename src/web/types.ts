@@ -7,6 +7,8 @@ export interface AgentFeatures {
   operator: boolean;
   mcp: boolean;
   realtime: boolean;
+  files: boolean;
+  agents: boolean;
 }
 
 export const DEFAULT_FEATURES: AgentFeatures = {
@@ -16,6 +18,8 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   operator: false,
   mcp: false,
   realtime: false,
+  files: false,
+  agents: false,
 };
 
 export interface McpServerSummary {
@@ -37,6 +41,7 @@ export interface Agent {
   features: AgentFeatures;
   mcpServers: string[]; // Array of MCP server IDs
   mcpServerDetails?: McpServerSummary[]; // Full details included from API
+  projectId: string | null; // Optional project grouping
   createdAt: string;
 }
 
@@ -134,4 +139,5 @@ export interface NewAgentForm {
   systemPrompt: string;
   features: AgentFeatures;
   mcpServers: string[];
+  projectId?: string | null;
 }

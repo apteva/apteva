@@ -286,6 +286,24 @@ export interface VersionInfo {
 export interface AllVersionInfo {
   apteva: VersionInfo;
   agent: VersionInfo;
+  isDocker: boolean;
+}
+
+// Detect if running in Docker
+export function isRunningInDocker(): boolean {
+  // Check for /.dockerenv file (standard Docker indicator)
+  if (existsSync("/.dockerenv")) {
+    return true;
+  }
+  // Check for DATA_DIR=/data (our Docker convention)
+  if (process.env.DATA_DIR === "/data") {
+    return true;
+  }
+  // Check for DOCKER env var we could set
+  if (process.env.DOCKER === "true") {
+    return true;
+  }
+  return false;
 }
 
 // Initialize version file path
@@ -399,7 +417,7 @@ export async function checkForUpdates(): Promise<AllVersionInfo> {
     checkForAgentUpdates(),
   ]);
 
-  return { apteva, agent };
+  return { apteva, agent, isDocker: isRunningInDocker() };
 }
 
 // Compare semver versions: returns positive if a > b, negative if a < b, 0 if equal

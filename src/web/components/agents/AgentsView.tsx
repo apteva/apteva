@@ -1,7 +1,8 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { AgentCard } from "./AgentCard";
 import { AgentPanel } from "./AgentPanel";
 import { LoadingSpinner } from "../common/LoadingSpinner";
+import { useProjects } from "../../context";
 import type { Agent, Provider } from "../../types";
 
 interface AgentsViewProps {
@@ -14,6 +15,8 @@ interface AgentsViewProps {
   onToggleAgent: (agent: Agent, e?: React.MouseEvent) => void;
   onDeleteAgent: (id: string, e?: React.MouseEvent) => void;
   onUpdateAgent: (id: string, updates: Partial<Agent>) => Promise<{ error?: string }>;
+  onNewAgent?: () => void;
+  canCreateAgent?: boolean;
 }
 
 export function AgentsView({
@@ -26,25 +29,76 @@ export function AgentsView({
   onToggleAgent,
   onDeleteAgent,
   onUpdateAgent,
+  onNewAgent,
+  canCreateAgent = true,
 }: AgentsViewProps) {
+  const { currentProjectId, currentProject } = useProjects();
+
+  // Filter agents by current project
+  const filteredAgents = useMemo(() => {
+    if (currentProjectId === null) {
+      // "All Projects" - show all agents
+      return agents;
+    }
+    if (currentProjectId === "unassigned") {
+      // Show only agents without a project
+      return agents.filter(a => !a.projectId);
+    }
+    // Show only agents in the selected project
+    return agents.filter(a => a.projectId === currentProjectId);
+  }, [agents, currentProjectId]);
+
+  const headerTitle = currentProjectId === null
+    ? "Agents"
+    : currentProjectId === "unassigned"
+    ? "Unassigned Agents"
+    : currentProject?.name || "Agents";
+
   return (
     <div className="flex-1 flex overflow-hidden relative">
       {/* Agents list */}
       <div className="flex-1 overflow-auto p-6">
+        {/* Header with create button */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            {currentProject && (
+              <span
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: currentProject.color }}
+              />
+            )}
+            <h1 className="text-xl font-semibold">{headerTitle}</h1>
+            {currentProjectId !== null && (
+              <span className="text-sm text-[#666]">
+                ({filteredAgents.length} agent{filteredAgents.length !== 1 ? "s" : ""})
+              </span>
+            )}
+          </div>
+          {onNewAgent && (
+            <button
+              onClick={onNewAgent}
+              disabled={!canCreateAgent}
+              className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
+            >
+              + New Agent
+            </button>
+          )}
+        </div>
+
         {loading ? (
           <LoadingSpinner message="Loading agents..." />
-        ) : agents.length === 0 ? (
-          <EmptyState />
+        ) : filteredAgents.length === 0 ? (
+          <EmptyState onNewAgent={onNewAgent} canCreateAgent={canCreateAgent} hasProjectFilter={currentProjectId !== null} />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {agents.map((agent) => (
+            {filteredAgents.map((agent) => (
               <AgentCard
                 key={agent.id}
                 agent={agent}
                 selected={selectedAgent?.id === agent.id}
                 onSelect={() => onSelectAgent(agent)}
                 onToggle={(e) => onToggleAgent(agent, e)}
-                onDelete={(e) => onDeleteAgent(agent.id, e)}
+                showProject={currentProjectId === null}
               />
             ))}
           </div>
@@ -61,7 +115,7 @@ export function AgentsView({
 
       {/* Agent Panel - slides in from right */}
       {selectedAgent && (
-        <div className="absolute right-0 top-0 bottom-0 w-[600px] z-20">
+        <div className="absolute right-0 top-0 bottom-0 w-full sm:w-[500px] lg:w-[600px] xl:w-[700px] z-20">
           <AgentPanel
             agent={selectedAgent}
             providers={providers}
@@ -76,11 +130,29 @@ export function AgentsView({
   );
 }
 
-function EmptyState() {
+function EmptyState({ onNewAgent, canCreateAgent, hasProjectFilter }: { onNewAgent?: () => void; canCreateAgent?: boolean; hasProjectFilter?: boolean }) {
   return (
     <div className="text-center py-20 text-[#666]">
-      <p className="text-lg">No agents yet</p>
-      <p className="text-sm mt-1">Create your first agent to get started</p>
+      {hasProjectFilter ? (
+        <>
+          <p className="text-lg">No agents in this project</p>
+          <p className="text-sm mt-1">Create an agent or assign existing agents to this project</p>
+        </>
+      ) : (
+        <>
+          <p className="text-lg">No agents yet</p>
+          <p className="text-sm mt-1">Create your first agent to get started</p>
+        </>
+      )}
+      {onNewAgent && (
+        <button
+          onClick={onNewAgent}
+          disabled={!canCreateAgent}
+          className="mt-4 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
+        >
+          + New Agent
+        </button>
+      )}
     </div>
   );
 }

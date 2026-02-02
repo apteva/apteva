@@ -1,0 +1,31 @@
+# Apteva Docker Compose
+# Usage: docker compose -f docker/docker-compose.yml up -d
+
+services:
+  apteva:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: apteva/apteva:latest
+    container_name: apteva
+    ports:
+      - "3000:3000"
+    volumes:
+      - apteva_data:/data
+    environment:
+      # Optional: Custom auth secret (auto-generated if not set)
+      # - AUTH_SECRET=${AUTH_SECRET:-}
+
+      # Optional: CORS origins (comma-separated, defaults to localhost)
+      # - CORS_ORIGINS=${CORS_ORIGINS:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  apteva_data:
+    name: apteva_data

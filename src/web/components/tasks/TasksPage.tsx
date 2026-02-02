@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { TasksIcon } from "../common/Icons";
+import { useAuth } from "../../context";
 import type { Task } from "../../types";
 
 interface TasksPageProps {
@@ -7,20 +8,14 @@ interface TasksPageProps {
 }
 
 export function TasksPage({ onSelectAgent }: TasksPageProps) {
+  const { authFetch } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
 
-  useEffect(() => {
-    fetchTasks();
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchTasks, 10000);
-    return () => clearInterval(interval);
-  }, [filter]);
-
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
     try {
-      const res = await fetch(`/api/tasks?status=${filter}`);
+      const res = await authFetch(`/api/tasks?status=${filter}`);
       const data = await res.json();
       setTasks(data.tasks || []);
     } catch (e) {
@@ -28,7 +23,14 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [authFetch, filter]);
+
+  useEffect(() => {
+    fetchTasks();
+    // Refresh every 10 seconds
+    const interval = setInterval(fetchTasks, 10000);
+    return () => clearInterval(interval);
+  }, [fetchTasks]);
 
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-500/20 text-yellow-400",
@@ -47,21 +49,21 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
   ];
 
   return (
-    <div className="flex-1 p-6 overflow-auto">
+    <div className="flex-1 p-4 md:p-6 overflow-auto">
       <div className="max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-semibold mb-1">Tasks</h1>
-            <p className="text-[#666]">
+        <div className="mb-6">
+          <div className="mb-4">
+            <h1 className="text-xl md:text-2xl font-semibold mb-1">Tasks</h1>
+            <p className="text-sm text-[#666]">
               View tasks from all running agents
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
             {filterOptions.map(opt => (
               <button
                 key={opt.value}
                 onClick={() => setFilter(opt.value)}
-                className={`px-3 py-1.5 rounded text-sm transition ${
+                className={`px-3 py-1.5 rounded text-sm transition whitespace-nowrap ${
                   filter === opt.value
                     ? "bg-[#f97316] text-black"
                     : "bg-[#1a1a1a] hover:bg-[#222]"
@@ -113,7 +115,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
                   </p>
                 )}
 
-                <div className="flex items-center gap-4 text-xs text-[#555]">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#555]">
                   <span>Type: {task.type}</span>
                   <span>Priority: {task.priority}</span>
                   {task.recurrence && <span>Recurrence: {task.recurrence}</span>}

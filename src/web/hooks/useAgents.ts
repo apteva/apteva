@@ -1,16 +1,26 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Agent, AgentFeatures } from "../types";
+import { useAuth } from "../context";
 
 export function useAgents(enabled: boolean) {
+  const { accessToken } = useAuth();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const getHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+    }
+    return headers;
+  }, [accessToken]);
+
   const fetchAgents = useCallback(async () => {
-    const res = await fetch("/api/agents");
+    const res = await fetch("/api/agents", { headers: getHeaders() });
     const data = await res.json();
     setAgents(data.agents || []);
     setLoading(false);
-  }, []);
+  }, [getHeaders]);
 
   useEffect(() => {
     if (enabled) {
@@ -25,17 +35,18 @@ export function useAgents(enabled: boolean) {
     systemPrompt: string;
     features: AgentFeatures;
     mcpServers?: string[];
+    projectId?: string | null;
   }) => {
     await fetch("/api/agents", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders(),
       body: JSON.stringify(agent),
     });
     await fetchAgents();
   };
 
   const deleteAgent = async (id: string) => {
-    await fetch(`/api/agents/${id}`, { method: "DELETE" });
+    await fetch(`/api/agents/${id}`, { method: "DELETE", headers: getHeaders() });
     await fetchAgents();
   };
 
@@ -46,10 +57,11 @@ export function useAgents(enabled: boolean) {
     systemPrompt?: string;
     features?: AgentFeatures;
     mcpServers?: string[];
+    projectId?: string | null;
   }): Promise<{ error?: string }> => {
     const res = await fetch(`/api/agents/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders(),
       body: JSON.stringify(updates),
     });
     const data = await res.json();
@@ -62,7 +74,7 @@ export function useAgents(enabled: boolean) {
 
   const toggleAgent = async (agent: Agent): Promise<{ error?: string }> => {
     const action = agent.status === "running" ? "stop" : "start";
-    const res = await fetch(`/api/agents/${agent.id}/${action}`, { method: "POST" });
+    const res = await fetch(`/api/agents/${agent.id}/${action}`, { method: "POST", headers: getHeaders() });
     const data = await res.json();
     await fetchAgents();
     if (!res.ok && data.error) {

@@ -1,10 +1,12 @@
 import { type Server, type Subprocess } from "bun";
 import { handleApiRequest } from "./routes/api";
+import { handleAuthRequest } from "./routes/auth";
 import { serveStatic } from "./routes/static";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
 import { initDatabase, AgentDB, ProviderKeysDB, McpServerDB, type McpServer, type Agent } from "./db";
+import { authMiddleware, type AuthContext } from "./auth/middleware";
 import { startMcpProcess } from "./mcp-client";
 import {
   ensureBinary,
@@ -215,11 +217,23 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // CORS headers
+    // Dev mode route logging
+    if (process.env.NODE_ENV !== "production" && path.startsWith("/api/")) {
+      const params = url.search ? url.search : "";
+      console.log(`[${req.method}] ${path}${params}`);
+    }
+
+    // CORS headers - configurable origins
+    const origin = req.headers.get("Origin") || "";
+    const allowedOrigins = process.env.CORS_ORIGINS?.split(",") || [];
+    const isLocalhost = origin.includes("localhost") || origin.includes("127.0.0.1");
+    const allowOrigin = allowedOrigins.includes(origin) || isLocalhost || allowedOrigins.length === 0 ? origin || "*" : "";
+
     const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Credentials": "true",
     };
 
     // Handle preflight
@@ -229,8 +243,35 @@ const server = Bun.serve({
 
     // API routes
     if (path.startsWith("/api/")) {
-      const response = await handleApiRequest(req, path);
-      // Add CORS headers to response
+      // Auth routes handled separately (before middleware)
+      if (path.startsWith("/api/auth/")) {
+        const response = await handleAuthRequest(req, path);
+        Object.entries(corsHeaders).forEach(([key, value]) => {
+          response.headers.set(key, value);
+        });
+        return response;
+      }
+
+      // Health check endpoint (no auth required for Docker health checks)
+      if (path === "/api/health") {
+        const response = await handleApiRequest(req, path);
+        Object.entries(corsHeaders).forEach(([key, value]) => {
+          response.headers.set(key, value);
+        });
+        return response;
+      }
+
+      // Apply auth middleware
+      const { response: authResponse, context } = await authMiddleware(req, path);
+      if (authResponse) {
+        Object.entries(corsHeaders).forEach(([key, value]) => {
+          authResponse.headers.set(key, value);
+        });
+        return authResponse;
+      }
+
+      // Pass auth context to API handler
+      const response = await handleApiRequest(req, path, context);
       Object.entries(corsHeaders).forEach(([key, value]) => {
         response.headers.set(key, value);
       });

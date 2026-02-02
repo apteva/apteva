@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { McpIcon } from "../common/Icons";
+import { useAuth } from "../../context";
 import type { McpTool, McpToolCallResult } from "../../types";
 
 interface McpServer {
@@ -16,24 +17,28 @@ interface McpServer {
 }
 
 interface RegistryServer {
+  id: string;
   name: string;
+  fullName: string;
   description: string;
-  vendor: string;
-  sourceUrl: string;
+  version?: string;
+  repository?: string;
   npmPackage: string | null;
-  githubStars: number | null;
+  remoteUrl: string | null;
+  transport: string;
 }
 
 export function McpPage() {
+  const { authFetch } = useAuth();
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
-  const [activeTab, setActiveTab] = useState<"servers" | "registry">("servers");
+  const [activeTab, setActiveTab] = useState<"servers" | "hosted" | "registry">("servers");
 
   const fetchServers = async () => {
     try {
-      const res = await fetch("/api/mcp/servers");
+      const res = await authFetch("/api/mcp/servers");
       const data = await res.json();
       setServers(data.servers || []);
     } catch (e) {
@@ -44,11 +49,11 @@ export function McpPage() {
 
   useEffect(() => {
     fetchServers();
-  }, []);
+  }, [authFetch]);
 
   const startServer = async (id: string) => {
     try {
-      await fetch(`/api/mcp/servers/${id}/start`, { method: "POST" });
+      await authFetch(`/api/mcp/servers/${id}/start`, { method: "POST" });
       fetchServers();
     } catch (e) {
       console.error("Failed to start server:", e);
@@ -57,7 +62,7 @@ export function McpPage() {
 
   const stopServer = async (id: string) => {
     try {
-      await fetch(`/api/mcp/servers/${id}/stop`, { method: "POST" });
+      await authFetch(`/api/mcp/servers/${id}/stop`, { method: "POST" });
       fetchServers();
     } catch (e) {
       console.error("Failed to stop server:", e);
@@ -67,7 +72,7 @@ export function McpPage() {
   const deleteServer = async (id: string) => {
     if (!confirm("Delete this MCP server?")) return;
     try {
-      await fetch(`/api/mcp/servers/${id}`, { method: "DELETE" });
+      await authFetch(`/api/mcp/servers/${id}`, { method: "DELETE" });
       if (selectedServer?.id === id) {
         setSelectedServer(null);
       }
@@ -109,6 +114,16 @@ export function McpPage() {
             }`}
           >
             My Servers
+          </button>
+          <button
+            onClick={() => setActiveTab("hosted")}
+            className={`px-4 py-2 rounded text-sm font-medium transition ${
+              activeTab === "hosted"
+                ? "bg-[#1a1a1a] text-white"
+                : "text-[#666] hover:text-[#888]"
+            }`}
+          >
+            Hosted Services
           </button>
           <button
             onClick={() => setActiveTab("registry")}
@@ -186,6 +201,11 @@ export function McpPage() {
               </div>
             )}
           </>
+        )}
+
+        {/* Hosted Services Tab */}
+        {activeTab === "hosted" && (
+          <HostedServices />
         )}
 
         {/* Browse Registry Tab */}
@@ -313,6 +333,7 @@ function ToolsPanel({
   server: McpServer;
   onClose: () => void;
 }) {
+  const { authFetch } = useAuth();
   const [tools, setTools] = useState<McpTool[]>([]);
   const [serverInfo, setServerInfo] = useState<{ name: string; version: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -324,7 +345,7 @@ function ToolsPanel({
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/mcp/servers/${server.id}/tools`);
+        const res = await authFetch(`/api/mcp/servers/${server.id}/tools`);
         const data = await res.json();
         if (!res.ok) {
           setError(data.error || "Failed to fetch tools");
@@ -340,7 +361,7 @@ function ToolsPanel({
     };
 
     fetchTools();
-  }, [server.id]);
+  }, [server.id, authFetch]);
 
   return (
     <div className="bg-[#111] border border-[#1a1a1a] rounded-lg overflow-hidden">
@@ -414,6 +435,7 @@ function ToolTester({
   tool: McpTool;
   onBack: () => void;
 }) {
+  const { authFetch } = useAuth();
   const [args, setArgs] = useState<string>("{}");
   const [result, setResult] = useState<McpToolCallResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -451,7 +473,7 @@ function ToolTester({
 
     try {
       const parsedArgs = JSON.parse(args);
-      const res = await fetch(`/api/mcp/servers/${serverId}/tools/${encodeURIComponent(tool.name)}/call`, {
+      const res = await authFetch(`/api/mcp/servers/${serverId}/tools/${encodeURIComponent(tool.name)}/call`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ arguments: parsedArgs }),
@@ -564,6 +586,7 @@ function RegistryBrowser({
 }: {
   onInstall: (server: RegistryServer) => void;
 }) {
+  const { authFetch } = useAuth();
   const [search, setSearch] = useState("");
   const [servers, setServers] = useState<RegistryServer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -575,7 +598,7 @@ function RegistryBrowser({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/mcp/registry?search=${encodeURIComponent(query)}&limit=20`);
+      const res = await authFetch(`/api/mcp/registry?search=${encodeURIComponent(query)}&limit=20`);
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Failed to search registry");
@@ -610,11 +633,11 @@ function RegistryBrowser({
       return;
     }
 
-    setInstalling(server.name);
+    setInstalling(server.id);
     setError(null);
 
     try {
-      const res = await fetch("/api/mcp/servers", {
+      const res = await authFetch("/api/mcp/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -676,7 +699,7 @@ function RegistryBrowser({
         <div className="grid gap-4 md:grid-cols-2">
           {servers.map((server) => (
             <div
-              key={server.name}
+              key={server.id}
               className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 hover:border-[#333] transition"
             >
               <div className="flex items-start justify-between gap-3">
@@ -685,37 +708,37 @@ function RegistryBrowser({
                   <p className="text-sm text-[#666] mt-1 line-clamp-2">
                     {server.description || "No description"}
                   </p>
-                  <div className="flex items-center gap-3 mt-2 text-xs text-[#555]">
-                    {server.vendor && <span>by {server.vendor}</span>}
-                    {server.githubStars !== null && server.githubStars > 0 && (
-                      <span>★ {server.githubStars.toLocaleString()}</span>
-                    )}
+                  <div className="flex items-center gap-2 mt-2 text-xs text-[#555]">
+                    {server.version && <span>v{server.version}</span>}
+                    <span className={`px-1.5 py-0.5 rounded ${
+                      server.npmPackage ? "bg-green-500/10 text-green-400" : "bg-blue-500/10 text-blue-400"
+                    }`}>
+                      {server.npmPackage ? "npm" : "remote"}
+                    </span>
                   </div>
-                  {server.npmPackage && (
-                    <code className="text-xs text-[#666] bg-[#0a0a0a] px-2 py-0.5 rounded mt-2 inline-block truncate max-w-full">
-                      {server.npmPackage}
-                    </code>
-                  )}
+                  <code className="text-xs text-[#555] bg-[#0a0a0a] px-2 py-0.5 rounded mt-2 inline-block truncate max-w-full">
+                    {server.npmPackage || server.fullName}
+                  </code>
                 </div>
                 <div className="flex-shrink-0">
                   {server.npmPackage ? (
                     <button
                       onClick={() => installServer(server)}
-                      disabled={installing === server.name}
+                      disabled={installing === server.id}
                       className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition disabled:opacity-50"
                     >
-                      {installing === server.name ? "Adding..." : "Add"}
+                      {installing === server.id ? "Adding..." : "Add"}
                     </button>
-                  ) : (
+                  ) : server.repository ? (
                     <a
-                      href={server.sourceUrl}
+                      href={server.repository}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-sm text-[#666] hover:text-[#f97316] transition"
                     >
                       View →
                     </a>
-                  )}
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -744,6 +767,211 @@ function RegistryBrowser({
           </a>
           . Not all servers have npm packages - some require manual setup.
         </p>
+      </div>
+    </div>
+  );
+}
+
+// Hosted MCP Services (Composio, Smithery, etc.)
+interface ComposioConfig {
+  id: string;
+  name: string;
+  toolkits: string[];
+  toolsCount: number;
+  mcpUrl: string;
+  createdAt?: string;
+}
+
+function HostedServices() {
+  const { authFetch } = useAuth();
+  const [composioConnected, setComposioConnected] = useState(false);
+  const [smitheryConnected, setSmitheryConnected] = useState(false);
+  const [composioConfigs, setComposioConfigs] = useState<ComposioConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingConfigs, setLoadingConfigs] = useState(false);
+
+  const fetchStatus = async () => {
+    try {
+      const res = await authFetch("/api/providers");
+      const data = await res.json();
+      const providers = data.providers || [];
+      const composio = providers.find((p: any) => p.id === "composio");
+      const smithery = providers.find((p: any) => p.id === "smithery");
+      setComposioConnected(composio?.hasKey || false);
+      setSmitheryConnected(smithery?.hasKey || false);
+
+      if (composio?.hasKey) {
+        fetchComposioConfigs();
+      }
+    } catch (e) {
+      console.error("Failed to fetch providers:", e);
+    }
+    setLoading(false);
+  };
+
+  const fetchComposioConfigs = async () => {
+    setLoadingConfigs(true);
+    try {
+      const res = await authFetch("/api/integrations/composio/configs");
+      const data = await res.json();
+      setComposioConfigs(data.configs || []);
+    } catch (e) {
+      console.error("Failed to fetch Composio configs:", e);
+    }
+    setLoadingConfigs(false);
+  };
+
+  useEffect(() => {
+    fetchStatus();
+  }, [authFetch]);
+
+  if (loading) {
+    return <div className="text-center py-8 text-[#666]">Loading...</div>;
+  }
+
+  const hasAnyConnection = composioConnected || smitheryConnected;
+
+  if (!hasAnyConnection) {
+    return (
+      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
+        <p className="text-[#888] mb-2">No hosted MCP services connected</p>
+        <p className="text-sm text-[#666] mb-4">
+          Connect Composio or Smithery in Settings to access cloud-based MCP servers.
+        </p>
+        <a
+          href="/settings"
+          className="inline-block bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-4 py-2 rounded text-sm font-medium transition"
+        >
+          Go to Settings →
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Composio MCP Configs */}
+      {composioConnected && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <h2 className="font-medium">Composio</h2>
+              <span className="text-xs text-green-400">Connected</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={fetchComposioConfigs}
+                disabled={loadingConfigs}
+                className="text-xs text-[#666] hover:text-[#888] transition"
+              >
+                {loadingConfigs ? "Loading..." : "Refresh"}
+              </button>
+              <a
+                href="https://app.composio.dev/mcp_configs"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-[#666] hover:text-[#f97316] transition"
+              >
+                Create Config →
+              </a>
+            </div>
+          </div>
+
+          {loadingConfigs ? (
+            <div className="text-center py-6 text-[#666]">Loading configs...</div>
+          ) : composioConfigs.length === 0 ? (
+            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
+              <p className="text-sm text-[#666]">No MCP configs found</p>
+              <a
+                href="https://app.composio.dev/mcp_configs"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-[#f97316] hover:text-[#fb923c] mt-1 inline-block"
+              >
+                Create one in Composio →
+              </a>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {composioConfigs.map((config) => (
+                <div
+                  key={config.id}
+                  className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 hover:border-[#333] transition flex items-center justify-between"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{config.name}</span>
+                      <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
+                    </div>
+                    {config.toolkits.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {config.toolkits.slice(0, 4).map((toolkit) => (
+                          <span
+                            key={toolkit}
+                            className="text-xs bg-[#1a1a1a] text-[#666] px-1.5 py-0.5 rounded"
+                          >
+                            {toolkit}
+                          </span>
+                        ))}
+                        {config.toolkits.length > 4 && (
+                          <span className="text-xs text-[#555]">+{config.toolkits.length - 4}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 ml-3">
+                    <button
+                      onClick={() => navigator.clipboard.writeText(`composio:${config.id}`)}
+                      className="text-xs text-[#666] hover:text-[#f97316] px-2 py-1 transition"
+                      title="Copy config ID"
+                    >
+                      Copy ID
+                    </button>
+                    <a
+                      href={`https://app.composio.dev/mcp_configs/${config.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-[#666] hover:text-[#888] transition"
+                    >
+                      Edit
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Smithery - placeholder for when we have API support */}
+      {smitheryConnected && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <h2 className="font-medium">Smithery</h2>
+              <span className="text-xs text-green-400">Connected</span>
+            </div>
+            <a
+              href="https://smithery.ai/servers"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-[#666] hover:text-[#f97316] transition"
+            >
+              View Servers →
+            </a>
+          </div>
+          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
+            <p className="text-sm text-[#666]">
+              Smithery servers can be added from the Registry tab.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="p-3 bg-[#0a0a0a] border border-[#222] rounded text-xs text-[#666]">
+        <strong className="text-[#888]">Tip:</strong> Copy a config ID (e.g., <code className="bg-[#111] px-1 rounded">composio:abc123</code>) and add it to your agent's MCP servers.
+        {" · "}
+        <a href="/settings" className="text-[#f97316] hover:text-[#fb923c]">Add more providers in Settings</a>
       </div>
     </div>
   );
@@ -810,6 +1038,7 @@ function AddServerModal({
   onClose: () => void;
   onAdded: () => void;
 }) {
+  const { authFetch } = useAuth();
   const [mode, setMode] = useState<"npm" | "command">("npm");
   const [name, setName] = useState("");
   const [pkg, setPkg] = useState("");
@@ -941,7 +1170,7 @@ function AddServerModal({
         body.env = env;
       }
 
-      const res = await fetch("/api/mcp/servers", {
+      const res = await authFetch("/api/mcp/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

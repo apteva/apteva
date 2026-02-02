@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { useAgentActivity } from "../../context";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { useAgentActivity, useAuth, useProjects } from "../../context";
 import type { Agent, Provider, Route, DashboardStats, Task } from "../../types";
 
 interface DashboardProps {
@@ -19,20 +19,32 @@ export function Dashboard({
   onNavigate,
   onSelectAgent,
 }: DashboardProps) {
+  const { authFetch } = useAuth();
+  const { currentProjectId } = useProjects();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
 
-  useEffect(() => {
-    fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 10000);
-    return () => clearInterval(interval);
-  }, []);
+  // Filter agents by current project
+  const filteredAgents = useMemo(() => {
+    if (!currentProjectId) return agents; // "All Projects"
+    if (currentProjectId === "unassigned") return agents.filter(a => !a.projectId);
+    return agents.filter(a => a.projectId === currentProjectId);
+  }, [agents, currentProjectId]);
 
-  const fetchDashboardData = async () => {
+  const filteredRunningCount = useMemo(() => {
+    return filteredAgents.filter(a => a.status === "running").length;
+  }, [filteredAgents]);
+
+  // Get agent IDs for filtering tasks
+  const projectAgentIds = useMemo(() => {
+    return new Set(filteredAgents.map(a => a.id));
+  }, [filteredAgents]);
+
+  const fetchDashboardData = useCallback(async () => {
     try {
       const [dashRes, tasksRes] = await Promise.all([
-        fetch("/api/dashboard"),
-        fetch("/api/tasks?status=all"),
+        authFetch("/api/dashboard"),
+        authFetch("/api/tasks?status=all"),
       ]);
 
       if (dashRes.ok) {
@@ -47,15 +59,38 @@ export function Dashboard({
     } catch (e) {
       console.error("Failed to fetch dashboard data:", e);
     }
-  };
+  }, [authFetch]);
 
-  const taskStats = stats?.tasks || { total: 0, pending: 0, running: 0, completed: 0 };
+  useEffect(() => {
+    fetchDashboardData();
+    const interval = setInterval(fetchDashboardData, 10000);
+    return () => clearInterval(interval);
+  }, [fetchDashboardData]);
+
+  // Filter tasks by project agents
+  const filteredTasks = useMemo(() => {
+    if (!currentProjectId) return recentTasks;
+    return recentTasks.filter(t => projectAgentIds.has(t.agentId));
+  }, [recentTasks, currentProjectId, projectAgentIds]);
+
+  // Calculate task stats from filtered tasks
+  const taskStats = useMemo(() => {
+    if (!currentProjectId) {
+      return stats?.tasks || { total: 0, pending: 0, running: 0, completed: 0 };
+    }
+    // When filtering by project, calculate from filtered tasks
+    const total = filteredTasks.length;
+    const pending = filteredTasks.filter(t => t.status === "pending").length;
+    const running = filteredTasks.filter(t => t.status === "running").length;
+    const completed = filteredTasks.filter(t => t.status === "completed").length;
+    return { total, pending, running, completed };
+  }, [stats, currentProjectId, filteredTasks]);
 
   return (
     <div className="flex-1 overflow-auto p-6">
       {/* Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Agents" value={agents.length} subValue={`${runningCount} running`} />
+        <StatCard label="Agents" value={filteredAgents.length} subValue={`${filteredRunningCount} running`} />
         <StatCard label="Tasks" value={taskStats.total} subValue={`${taskStats.pending} pending`} />
         <StatCard label="Completed" value={taskStats.completed} color="text-green-400" />
         <StatCard label="Providers" value={configuredProviders.length} color="text-[#f97316]" />
@@ -70,12 +105,12 @@ export function Dashboard({
         >
           {loading ? (
             <div className="p-4 text-center text-[#666]">Loading...</div>
-          ) : agents.length === 0 ? (
+          ) : filteredAgents.length === 0 ? (
             <div className="p-4 text-center text-[#666]">No agents yet</div>
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
-              {agents.slice(0, 5).map((agent) => (
-                <AgentListItem key={agent.id} agent={agent} onSelect={() => onSelectAgent(agent)} />
+              {filteredAgents.slice(0, 5).map((agent) => (
+                <AgentListItem key={agent.id} agent={agent} onSelect={() => onSelectAgent(agent)} showProject={!currentProjectId} />
               ))}
             </div>
           )}
@@ -87,14 +122,14 @@ export function Dashboard({
           actionLabel="View All"
           onAction={() => onNavigate("tasks")}
         >
-          {recentTasks.length === 0 ? (
+          {filteredTasks.length === 0 ? (
             <div className="p-4 text-center text-[#666]">
               <p>No tasks yet</p>
               <p className="text-sm text-[#444] mt-1">Tasks will appear when agents create them</p>
             </div>
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
-              {recentTasks.map((task) => (
+              {filteredTasks.map((task) => (
                 <div
                   key={`${task.agentId}-${task.id}`}
                   className="px-4 py-3 flex items-center justify-between"
@@ -155,20 +190,33 @@ function DashboardCard({ title, actionLabel, onAction, children }: DashboardCard
   );
 }
 
-function AgentListItem({ agent, onSelect }: { agent: Agent; onSelect: () => void }) {
+function AgentListItem({ agent, onSelect, showProject }: { agent: Agent; onSelect: () => void; showProject?: boolean }) {
   const { isActive } = useAgentActivity(agent.id);
+  const { projects } = useProjects();
+  const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
 
   return (
     <div
       onClick={onSelect}
       className="px-4 py-3 hover:bg-[#1a1a1a] cursor-pointer flex items-center justify-between"
     >
-      <div>
+      <div className="flex-1 min-w-0">
         <p className="font-medium">{agent.name}</p>
-        <p className="text-sm text-[#666]">{agent.provider}</p>
+        <div className="flex items-center gap-2 text-sm text-[#666]">
+          <span>{agent.provider}</span>
+          {showProject && project && (
+            <>
+              <span className="text-[#444]">·</span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
+                {project.name}
+              </span>
+            </>
+          )}
+        </div>
       </div>
       <span
-        className={`w-2 h-2 rounded-full ${
+        className={`w-2 h-2 rounded-full flex-shrink-0 ${
           agent.status === "running"
             ? isActive
               ? "bg-green-400 animate-pulse"

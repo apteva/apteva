@@ -1,7 +1,8 @@
 import React from "react";
 import { Modal } from "../common/Modal";
 import { Select } from "../common/Select";
-import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon } from "../common/Icons";
+import { MemoryIcon, TasksIcon, FilesIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, MultiAgentIcon } from "../common/Icons";
+import { useProjects } from "../../context";
 import type { Provider, NewAgentForm, AgentFeatures } from "../../types";
 
 interface CreateAgentModalProps {
@@ -18,10 +19,12 @@ interface CreateAgentModalProps {
 const FEATURE_CONFIG = [
   { key: "memory" as keyof AgentFeatures, label: "Memory", description: "Persistent recall", icon: MemoryIcon },
   { key: "tasks" as keyof AgentFeatures, label: "Tasks", description: "Schedule and execute tasks", icon: TasksIcon },
+  { key: "files" as keyof AgentFeatures, label: "Files", description: "File storage and management", icon: FilesIcon },
   { key: "vision" as keyof AgentFeatures, label: "Vision", description: "Process images and PDFs", icon: VisionIcon },
   { key: "operator" as keyof AgentFeatures, label: "Operator", description: "Browser automation", icon: OperatorIcon },
   { key: "mcp" as keyof AgentFeatures, label: "MCP", description: "External tools/services", icon: McpIcon },
   { key: "realtime" as keyof AgentFeatures, label: "Realtime", description: "Voice conversations", icon: RealtimeIcon },
+  { key: "agents" as keyof AgentFeatures, label: "Multi-Agent", description: "Communicate with peer agents", icon: MultiAgentIcon },
 ];
 
 export function CreateAgentModal({
@@ -34,6 +37,7 @@ export function CreateAgentModal({
   onClose,
   onGoToSettings,
 }: CreateAgentModalProps) {
+  const { projects, currentProjectId } = useProjects();
   const selectedProvider = providers.find(p => p.id === form.provider);
 
   const providerOptions = configuredProviders.map(p => ({
@@ -46,6 +50,18 @@ export function CreateAgentModal({
     label: m.label,
     recommended: m.recommended,
   })) || [];
+
+  const projectOptions = [
+    { value: "", label: "No Project" },
+    ...projects.map(p => ({ value: p.id, label: p.name })),
+  ];
+
+  // Set default project from current selection (but not "unassigned" or "all")
+  React.useEffect(() => {
+    if (form.projectId === undefined && currentProjectId && currentProjectId !== "unassigned") {
+      onFormChange({ ...form, projectId: currentProjectId });
+    }
+  }, [currentProjectId]);
 
   const toggleFeature = (key: keyof AgentFeatures) => {
     onFormChange({
@@ -75,6 +91,17 @@ export function CreateAgentModal({
                 placeholder="My Agent"
               />
             </FormField>
+
+            {projects.length > 0 && (
+              <FormField label="Project">
+                <Select
+                  value={form.projectId || ""}
+                  options={projectOptions}
+                  onChange={(value) => onFormChange({ ...form, projectId: value || null })}
+                  placeholder="Select project..."
+                />
+              </FormField>
+            )}
 
             <FormField label="Provider">
               <Select
