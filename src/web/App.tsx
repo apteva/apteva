@@ -28,6 +28,7 @@ import {
   TelemetryPage,
   LoginPage,
 } from "./components";
+import { ApiDocsPage } from "./components/api/ApiDocsPage";
 
 function AppContent() {
   // Auth state
@@ -265,6 +266,8 @@ function AppContent() {
           {route === "mcp" && <McpPage />}
 
           {route === "telemetry" && <TelemetryPage />}
+
+          {route === "api" && <ApiDocsPage />}
         </main>
       </div>
 

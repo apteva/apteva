@@ -114,8 +114,45 @@ const mcpServersToRestart = McpServerDB.findRunning();
 AgentDB.resetAllStatus();
 McpServerDB.resetAllStatus();
 
-// In-memory store for running agent processes only
-export const agentProcesses: Map<string, Subprocess> = new Map();
+// Clean up orphaned processes on agent ports (targeted cleanup based on DB)
+async function cleanupOrphanedProcesses(): Promise<void> {
+  // Get all agents with assigned ports
+  const agents = AgentDB.findAll();
+  const assignedPorts = agents.map(a => a.port).filter((p): p is number => p !== null);
+
+  if (assignedPorts.length === 0) return;
+
+  let cleaned = 0;
+  for (const port of assignedPorts) {
+    try {
+      const res = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(200) });
+      if (res.ok) {
+        // Orphaned process on this port - shut it down
+        try {
+          await fetch(`http://localhost:${port}/shutdown`, { method: "POST", signal: AbortSignal.timeout(500) });
+          cleaned++;
+        } catch {
+          // Shutdown failed - will be handled when agent tries to start
+        }
+      }
+    } catch {
+      // Port not in use - good
+    }
+  }
+
+  if (cleaned > 0) {
+    console.log(`  [cleanup] Stopped ${cleaned} orphaned agent process(es)`);
+  }
+}
+
+// Run cleanup (don't block startup)
+cleanupOrphanedProcesses().catch(() => {});
+
+// In-memory store for running agent processes (agent_id -> { process, port })
+export const agentProcesses: Map<string, { proc: Subprocess; port: number }> = new Map();
+
+// Track agents currently being started (to prevent race conditions)
+export const agentsStarting: Set<string> = new Set();
 
 // Binary path - can be overridden via environment variable, or found from npm/downloaded
 export function getBinaryPathForAgent(): string {
@@ -136,9 +173,41 @@ export { getBinaryStatus, BIN_DIR };
 // Base port for spawned agents
 export let nextAgentPort = 4100;
 
-// Increment port counter
-export function getNextPort(): number {
-  return nextAgentPort++;
+// Check if a port is available by trying to connect to it
+async function isPortAvailable(port: number): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 100);
+    try {
+      await fetch(`http://localhost:${port}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      return false; // Port responded, something is running there
+    } catch (err: any) {
+      clearTimeout(timeout);
+      // Connection refused = port is available
+      // Abort error = port is available (timeout means nothing responded)
+      if (err?.code === "ECONNREFUSED" || err?.name === "AbortError") {
+        return true;
+      }
+      return true; // Assume available if we get other errors
+    }
+  } catch {
+    return true;
+  }
+}
+
+// Get next available port (checking that nothing is using it)
+export async function getNextPort(): Promise<number> {
+  const maxAttempts = 100; // Prevent infinite loop
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = nextAgentPort++;
+    const available = await isPortAvailable(port);
+    if (available) {
+      return port;
+    }
+    console.log(`[port] Port ${port} in use, trying next...`);
+  }
+  throw new Error("Could not find available port after 100 attempts");
 }
 
 // ANSI color codes matching UI theme
@@ -331,7 +400,7 @@ if (hasRestarts) {
             continue;
           }
 
-          const port = getNextPort();
+          const port = await getNextPort();
           const result = await startMcpProcess(server.id, cmd, serverEnv, port);
 
           if (result.success) {

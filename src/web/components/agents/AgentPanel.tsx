@@ -2,6 +2,8 @@ import React, { useState, useEffect } from "react";
 import { Chat } from "@apteva/apteva-kit";
 import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon } from "../common/Icons";
 import { Select } from "../common/Select";
+import { useConfirm } from "../common/Modal";
+import { useAuth } from "../../context";
 import type { Agent, Provider, AgentFeatures, McpServer } from "../../types";
 
 type Tab = "chat" | "threads" | "tasks" | "memory" | "files" | "settings";
@@ -150,6 +152,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
   const [selectedThread, setSelectedThread] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<{ role: string; content: string; created_at: string }>>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   // Reset state when agent changes
   useEffect(() => {
@@ -200,7 +203,8 @@ function ThreadsTab({ agent }: { agent: Agent }) {
 
   const deleteThread = async (threadId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm("Delete this thread?")) return;
+    const confirmed = await confirm("Delete this thread?", { confirmText: "Delete", title: "Delete Thread" });
+    if (!confirmed) return;
 
     try {
       await fetch(`/api/agents/${agent.id}/threads/${threadId}`, { method: "DELETE" });
@@ -242,6 +246,8 @@ function ThreadsTab({ agent }: { agent: Agent }) {
   if (selectedThread) {
     const selectedThreadData = threads.find(t => t.id === selectedThread);
     return (
+      <>
+      {ConfirmDialog}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header with back button */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-[#1a1a1a]">
@@ -295,11 +301,14 @@ function ThreadsTab({ agent }: { agent: Agent }) {
           )}
         </div>
       </div>
+      </>
     );
   }
 
   // Show threads list (full width)
   return (
+    <>
+    {ConfirmDialog}
     <div className="flex-1 overflow-auto">
       {threads.length === 0 ? (
         <div className="flex items-center justify-center h-full text-[#666]">
@@ -333,6 +342,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -519,6 +529,7 @@ function MemoryTab({ agent }: { agent: Agent }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   // Reset state when agent changes
   useEffect(() => {
@@ -561,7 +572,8 @@ function MemoryTab({ agent }: { agent: Agent }) {
   };
 
   const clearAllMemories = async () => {
-    if (!confirm("Clear all memories?")) return;
+    const confirmed = await confirm("Clear all memories?", { confirmText: "Clear", title: "Clear Memories" });
+    if (!confirmed) return;
     try {
       await fetch(`/api/agents/${agent.id}/memories`, { method: "DELETE" });
       setMemories([]);
@@ -617,6 +629,8 @@ function MemoryTab({ agent }: { agent: Agent }) {
   }
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="flex-1 overflow-auto p-4">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-medium text-[#888]">Stored Memories ({memories.length})</h3>
@@ -672,6 +686,7 @@ function MemoryTab({ agent }: { agent: Agent }) {
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -691,6 +706,7 @@ function FilesTab({ agent }: { agent: Agent }) {
   const [files, setFiles] = useState<AgentFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   // Reset state when agent changes
   useEffect(() => {
@@ -723,7 +739,8 @@ function FilesTab({ agent }: { agent: Agent }) {
   }, [agent.id, agent.status]);
 
   const deleteFile = async (fileId: string) => {
-    if (!confirm("Delete this file?")) return;
+    const confirmed = await confirm("Delete this file?", { confirmText: "Delete", title: "Delete File" });
+    if (!confirmed) return;
     try {
       await fetch(`/api/agents/${agent.id}/files/${fileId}`, { method: "DELETE" });
       setFiles(prev => prev.filter(f => f.id !== fileId));
@@ -792,6 +809,8 @@ function FilesTab({ agent }: { agent: Agent }) {
   }
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="flex-1 overflow-auto p-4">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-medium text-[#888]">Agent Files ({files.length})</h3>
@@ -841,6 +860,7 @@ function FilesTab({ agent }: { agent: Agent }) {
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -850,6 +870,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   onUpdateAgent: (updates: Partial<Agent>) => Promise<{ error?: string }>;
   onDeleteAgent: () => void;
 }) {
+  const { authFetch } = useAuth();
   const [form, setForm] = useState({
     name: agent.name,
     provider: agent.provider,
@@ -867,7 +888,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   useEffect(() => {
     const fetchMcpServers = async () => {
       try {
-        const res = await fetch("/api/mcp/servers");
+        const res = await authFetch("/api/mcp/servers");
         const data = await res.json();
         setAvailableMcpServers(data.servers || []);
       } catch (e) {
@@ -875,7 +896,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
       }
     };
     fetchMcpServers();
-  }, []);
+  }, [authFetch]);
 
   // Reset form when agent changes
   useEffect(() => {
@@ -893,7 +914,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const selectedProvider = providers.find(p => p.id === form.provider);
 
   const providerOptions = providers
-    .filter(p => p.configured)
+    .filter(p => p.hasKey && p.type === "llm")
     .map(p => ({ value: p.id, label: p.name }));
 
   const modelOptions = selectedProvider?.models.map(m => ({
@@ -1015,40 +1036,44 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
               </p>
             ) : (
               <div className="space-y-2">
-                {availableMcpServers.map(server => (
-                  <button
-                    key={server.id}
-                    type="button"
-                    onClick={() => toggleMcpServer(server.id)}
-                    className={`w-full flex items-center gap-3 p-3 rounded border text-left transition ${
-                      form.mcpServers.includes(server.id)
-                        ? "border-[#f97316] bg-[#f97316]/10"
-                        : "border-[#222] hover:border-[#333]"
-                    }`}
-                  >
-                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      server.status === "running" ? "bg-green-400" : "bg-[#444]"
-                    }`} />
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-sm font-medium ${form.mcpServers.includes(server.id) ? "text-[#f97316]" : ""}`}>
-                        {server.name}
+                {availableMcpServers.map(server => {
+                  const isRemote = server.type === "http" && server.url;
+                  const isAvailable = isRemote || server.status === "running";
+                  const serverInfo = isRemote
+                    ? `${server.source || "remote"} • http`
+                    : `${server.type} • ${server.package || server.command || "custom"}${server.status === "running" && server.port ? ` • :${server.port}` : ""}`;
+                  return (
+                    <button
+                      key={server.id}
+                      type="button"
+                      onClick={() => toggleMcpServer(server.id)}
+                      className={`w-full flex items-center gap-3 p-3 rounded border text-left transition ${
+                        form.mcpServers.includes(server.id)
+                          ? "border-[#f97316] bg-[#f97316]/10"
+                          : "border-[#222] hover:border-[#333]"
+                      }`}
+                    >
+                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                        isAvailable ? "bg-green-400" : "bg-[#444]"
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-sm font-medium ${form.mcpServers.includes(server.id) ? "text-[#f97316]" : ""}`}>
+                          {server.name}
+                        </div>
+                        <div className="text-xs text-[#666]">{serverInfo}</div>
                       </div>
-                      <div className="text-xs text-[#666]">
-                        {server.type} • {server.package || server.command || "custom"}
-                        {server.status === "running" && server.port && ` • :${server.port}`}
+                      <div className={`text-xs px-2 py-0.5 rounded ${
+                        isAvailable
+                          ? "bg-green-500/20 text-green-400"
+                          : "bg-[#222] text-[#666]"
+                      }`}>
+                        {isRemote ? "remote" : server.status}
                       </div>
-                    </div>
-                    <div className={`text-xs px-2 py-0.5 rounded ${
-                      server.status === "running"
-                        ? "bg-green-500/20 text-green-400"
-                        : "bg-[#222] text-[#666]"
-                    }`}>
-                      {server.status}
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
                 <p className="text-xs text-[#666] mt-2">
-                  Only running servers will be connected to the agent.
+                  Remote servers are always available. Local servers must be running.
                 </p>
               </div>
             )}

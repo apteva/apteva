@@ -50,7 +50,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
 
   return (
     <div className="flex-1 p-4 md:p-6 overflow-auto">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl">
         <div className="mb-6">
           <div className="mb-4">
             <h1 className="text-xl md:text-2xl font-semibold mb-1">Tasks</h1>

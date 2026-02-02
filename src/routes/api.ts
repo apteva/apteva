@@ -2,7 +2,7 @@ import { spawn } from "bun";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync } from "fs";
-import { agentProcesses, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
+import { agentProcesses, agentsStarting, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
 import { AgentDB, McpServerDB, TelemetryDB, UserDB, ProjectDB, generateId, type Agent, type AgentFeatures, type McpServer, type Project } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import { createUser, hashPassword, validatePassword } from "../auth";
@@ -23,7 +23,14 @@ import {
   callMcpTool,
   getMcpProcess,
   getMcpProxyUrl,
+  getHttpMcpClient,
 } from "../mcp-client";
+import { openApiSpec } from "../openapi";
+import { getProvider, getProviderIds, registerProvider } from "../integrations";
+import { ComposioProvider } from "../integrations/composio";
+
+// Register integration providers
+registerProvider(ComposioProvider);
 
 // Data directory for agent instances (in ~/.apteva/agents/)
 const AGENTS_DATA_DIR = process.env.DATA_DIR
@@ -43,6 +50,7 @@ function debug(...args: unknown[]) {
 }
 
 // Wait for agent to be healthy (with timeout)
+// Note: /health endpoint is whitelisted in agent, no auth needed
 async function waitForAgentHealth(port: number, maxAttempts = 30, delayMs = 200): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
     try {
@@ -58,41 +66,56 @@ async function waitForAgentHealth(port: number, maxAttempts = 30, delayMs = 200)
   return false;
 }
 
+// Make authenticated request to agent
+async function agentFetch(
+  agentId: string,
+  port: number,
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const apiKey = AgentDB.getApiKey(agentId);
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string> || {}),
+  };
+  if (apiKey) {
+    headers["X-API-Key"] = apiKey;
+  }
+  return fetch(`http://localhost:${port}${endpoint}`, {
+    ...options,
+    headers,
+  });
+}
+
 // Build agent config from apteva agent data
 // Note: POST /config expects flat structure WITHOUT "agent" wrapper
 function buildAgentConfig(agent: Agent, providerKey: string) {
   const features = agent.features;
 
   // Get MCP server details for the agent's selected servers
-  // Supports both local servers and Composio configs (prefixed with "composio:")
   const mcpServers: Array<{ name: string; type: "http"; url: string; headers: Record<string, string>; enabled: boolean }> = [];
 
   for (const id of agent.mcp_servers || []) {
-    // Check if this is a Composio config
-    if (id.startsWith("composio:")) {
-      const configId = id.slice(9); // Remove "composio:" prefix
-      const composioKey = ProviderKeys.getDecrypted("composio");
-      if (composioKey) {
-        mcpServers.push({
-          name: `composio-${configId.slice(0, 8)}`,
-          type: "http",
-          url: `https://backend.composio.dev/v3/mcp/${configId}`,
-          headers: { "x-api-key": composioKey },
-          enabled: true,
-        });
-      }
-    } else {
-      // Local MCP server
-      const server = McpServerDB.findById(id);
-      if (server && server.status === "running" && server.port) {
-        mcpServers.push({
-          name: server.name,
-          type: "http",
-          url: `http://localhost:${server.port}/mcp`,
-          headers: {},
-          enabled: true,
-        });
-      }
+    const server = McpServerDB.findById(id);
+    if (!server) continue;
+
+    if (server.type === "http" && server.url) {
+      // Remote HTTP server (Composio, Smithery, or custom)
+      mcpServers.push({
+        name: server.name,
+        type: "http",
+        url: server.url,
+        headers: server.headers || {},
+        enabled: true,
+      });
+    } else if (server.status === "running" && server.port) {
+      // Local MCP server (npm, github, custom)
+      mcpServers.push({
+        name: server.name,
+        type: "http",
+        url: `http://localhost:${server.port}/mcp`,
+        headers: {},
+        enabled: true,
+      });
     }
   }
 
@@ -196,9 +219,10 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
 }
 
 // Push config to running agent
-async function pushConfigToAgent(port: number, config: any): Promise<{ success: boolean; error?: string }> {
+// Push config to running agent (with authentication)
+async function pushConfigToAgent(agentId: string, port: number, config: any): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch(`http://localhost:${port}/config`, {
+    const res = await agentFetch(agentId, port, "/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
@@ -217,38 +241,85 @@ async function pushConfigToAgent(port: number, config: any): Promise<{ success: 
 // Exported helper to start an agent process (used by API route and auto-restart)
 export async function startAgentProcess(
   agent: Agent,
-  options: { silent?: boolean } = {}
+  options: { silent?: boolean; cleanData?: boolean } = {}
 ): Promise<{ success: boolean; port?: number; error?: string }> {
-  const { silent = false } = options;
+  const { silent = false, cleanData = false } = options;
 
   // Check if binary exists
   if (!binaryExists(BIN_DIR)) {
     return { success: false, error: "Agent binary not available" };
   }
 
-  // Check if already running
+  // Check if already running (process map)
   if (agentProcesses.has(agent.id)) {
     return { success: false, error: "Agent already running" };
   }
 
+  // Check if already being started (race condition prevention)
+  if (agentsStarting.has(agent.id)) {
+    return { success: false, error: "Agent is already starting" };
+  }
+
+  // Mark as starting
+  agentsStarting.add(agent.id);
+
   // Get the API key for the agent's provider
   const providerKey = ProviderKeys.getDecrypted(agent.provider);
   if (!providerKey) {
+    agentsStarting.delete(agent.id);
     return { success: false, error: `No API key for provider: ${agent.provider}` };
   }
 
   // Get provider config for env var name
   const providerConfig = PROVIDERS[agent.provider as ProviderId];
   if (!providerConfig) {
+    agentsStarting.delete(agent.id);
     return { success: false, error: `Unknown provider: ${agent.provider}` };
   }
 
-  // Assign port
-  const port = getNextPort();
+  // Use agent's permanently assigned port
+  const port = agent.port;
+  if (!port) {
+    agentsStarting.delete(agent.id);
+    return { success: false, error: "Agent has no assigned port" };
+  }
+
+  // Get or create API key for the agent
+  const agentApiKey = AgentDB.ensureApiKey(agent.id);
+  if (!agentApiKey) {
+    agentsStarting.delete(agent.id);
+    return { success: false, error: "Failed to get/create agent API key" };
+  }
 
   try {
-    // Create data directory for this agent
+    // Check if something is already running on this port (orphaned process)
+    try {
+      const res = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(500) });
+      if (res.ok) {
+        // Something is running - try to shut it down
+        if (!silent) {
+          console.log(`  Port ${port} in use, stopping orphaned process...`);
+        }
+        try {
+          await fetch(`http://localhost:${port}/shutdown`, { method: "POST", signal: AbortSignal.timeout(1000) });
+          await new Promise(r => setTimeout(r, 500)); // Wait for shutdown
+        } catch {
+          // Shutdown failed - process might not support it
+        }
+      }
+    } catch {
+      // Port is free - good
+    }
+
+    // Handle data directory
     const agentDataDir = join(AGENTS_DATA_DIR, agent.id);
+    if (cleanData && existsSync(agentDataDir)) {
+      // Clean old data if requested
+      rmSync(agentDataDir, { recursive: true, force: true });
+      if (!silent) {
+        console.log(`  Cleaned old data directory`);
+      }
+    }
     if (!existsSync(agentDataDir)) {
       mkdirSync(agentDataDir, { recursive: true });
     }
@@ -259,11 +330,12 @@ export async function startAgentProcess(
       console.log(`  Data dir: ${agentDataDir}`);
     }
 
-    // Build environment with provider key
+    // Build environment with provider key and agent API key
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       PORT: String(port),
       DATA_DIR: agentDataDir,
+      AGENT_API_KEY: agentApiKey,
       [providerConfig.envVar]: providerKey,
     };
 
@@ -274,7 +346,8 @@ export async function startAgentProcess(
       stderr: "ignore",
     });
 
-    agentProcesses.set(agent.id, proc);
+    // Store process with port for tracking
+    agentProcesses.set(agent.id, { proc, port });
 
     // Wait for agent to be healthy
     if (!silent) {
@@ -287,6 +360,7 @@ export async function startAgentProcess(
       }
       proc.kill();
       agentProcesses.delete(agent.id);
+      agentsStarting.delete(agent.id);
       return { success: false, error: "Health check timeout" };
     }
 
@@ -295,7 +369,7 @@ export async function startAgentProcess(
       console.log(`  Pushing configuration...`);
     }
     const config = buildAgentConfig(agent, providerKey);
-    const configResult = await pushConfigToAgent(port, config);
+    const configResult = await pushConfigToAgent(agent.id, port, config);
     if (!configResult.success) {
       if (!silent) {
         console.error(`  Failed to configure agent: ${configResult.error}`);
@@ -305,15 +379,17 @@ export async function startAgentProcess(
       console.log(`  Configuration applied successfully`);
     }
 
-    // Update status in database
-    AgentDB.setStatus(agent.id, "running", port);
+    // Update status in database (port is already set, just update status)
+    AgentDB.setStatus(agent.id, "running");
 
     if (!silent) {
       console.log(`Agent ${agent.name} started on port ${port} (pid: ${proc.pid})`);
     }
 
+    agentsStarting.delete(agent.id);
     return { success: true, port };
   } catch (err) {
+    agentsStarting.delete(agent.id);
     if (!silent) {
       console.error(`Failed to start agent: ${err}`);
     }
@@ -377,6 +453,11 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       version: getAptevaVersion(),
       agents: { total: agentCount, running: runningAgents },
     });
+  }
+
+  // GET /api/openapi - OpenAPI spec (no auth required)
+  if (path === "/api/openapi" && method === "GET") {
+    return json(openApiSpec);
   }
 
   // GET /api/agents - List all agents
@@ -452,7 +533,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
         const providerKey = ProviderKeys.getDecrypted(updated.provider);
         if (providerKey) {
           const config = buildAgentConfig(updated, providerKey);
-          const configResult = await pushConfigToAgent(updated.port, config);
+          const configResult = await pushConfigToAgent(updated.id, updated.port, config);
           if (!configResult.success) {
             console.error(`Failed to push config to running agent: ${configResult.error}`);
           }
@@ -474,9 +555,9 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
 
     // Stop the agent if running
-    const proc = agentProcesses.get(agentId);
-    if (proc) {
-      proc.kill();
+    const agentProc = agentProcesses.get(agentId);
+    if (agentProc) {
+      agentProc.proc.kill();
       agentProcesses.delete(agentId);
     }
 
@@ -496,6 +577,46 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     AgentDB.delete(agentId);
     return json({ success: true });
+  }
+
+  // GET /api/agents/:id/api-key - Get the agent's API key (masked)
+  const apiKeyGetMatch = path.match(/^\/api\/agents\/([^/]+)\/api-key$/);
+  if (apiKeyGetMatch && method === "GET") {
+    const agent = AgentDB.findById(apiKeyGetMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    const apiKey = AgentDB.getApiKey(agent.id);
+    if (!apiKey) {
+      return json({ error: "No API key found for this agent" }, 404);
+    }
+
+    // Return masked key (show only first 8 chars)
+    const masked = apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length - 4);
+    return json({
+      apiKey: masked,
+      hasKey: true,
+    });
+  }
+
+  // POST /api/agents/:id/api-key - Regenerate the agent's API key
+  if (apiKeyGetMatch && method === "POST") {
+    const agent = AgentDB.findById(apiKeyGetMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    const newKey = AgentDB.regenerateApiKey(agent.id);
+    if (!newKey) {
+      return json({ error: "Failed to regenerate API key" }, 500);
+    }
+
+    // Return the full new key (only time it's fully visible)
+    return json({
+      apiKey: newKey,
+      message: "API key regenerated. This is the only time the full key will be shown.",
+    });
   }
 
   // POST /api/agents/:id/start - Start an agent
@@ -523,10 +644,10 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       return json({ error: "Agent not found" }, 404);
     }
 
-    const proc = agentProcesses.get(agent.id);
-    if (proc) {
-      console.log(`Stopping agent ${agent.name} (pid: ${proc.pid})...`);
-      proc.kill();
+    const agentProc = agentProcesses.get(agent.id);
+    if (agentProc) {
+      console.log(`Stopping agent ${agent.name} (pid: ${agentProc.proc.pid})...`);
+      agentProc.proc.kill();
       agentProcesses.delete(agent.id);
     }
 
@@ -549,13 +670,10 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     try {
       const body = await req.json();
 
-      // Proxy to the agent's /chat endpoint
-      const agentUrl = `http://localhost:${agent.port}/chat`;
-      const response = await fetch(agentUrl, {
+      // Proxy to the agent's /chat endpoint with authentication
+      const response = await agentFetch(agent.id, agent.port, "/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
 
@@ -595,8 +713,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
 
     try {
-      const agentUrl = `http://localhost:${agent.port}/threads`;
-      const response = await fetch(agentUrl, {
+      const response = await agentFetch(agent.id, agent.port, "/threads", {
         method: "GET",
         headers: { "Accept": "application/json" },
       });
@@ -627,8 +744,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const body = await req.json().catch(() => ({}));
-      const agentUrl = `http://localhost:${agent.port}/threads`;
-      const response = await fetch(agentUrl, {
+      const response = await agentFetch(agent.id, agent.port, "/threads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -661,8 +777,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const threadId = threadDetailMatch[2];
-      const agentUrl = `http://localhost:${agent.port}/threads/${threadId}`;
-      const response = await fetch(agentUrl, {
+      const response = await agentFetch(agent.id, agent.port, `/threads/${threadId}`, {
         method: "GET",
         headers: { "Accept": "application/json" },
       });
@@ -693,8 +808,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const threadId = threadDetailMatch[2];
-      const agentUrl = `http://localhost:${agent.port}/threads/${threadId}`;
-      const response = await fetch(agentUrl, {
+      const response = await agentFetch(agent.id, agent.port, `/threads/${threadId}`, {
         method: "DELETE",
       });
 
@@ -724,8 +838,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const threadId = threadMessagesMatch[2];
-      const agentUrl = `http://localhost:${agent.port}/threads/${threadId}/messages`;
-      const response = await fetch(agentUrl, {
+      const response = await agentFetch(agent.id, agent.port, `/threads/${threadId}/messages`, {
         method: "GET",
         headers: { "Accept": "application/json" },
       });
@@ -760,8 +873,8 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     try {
       const url = new URL(req.url);
       const threadId = url.searchParams.get("thread_id") || "";
-      const agentUrl = `http://localhost:${agent.port}/memories${threadId ? `?thread_id=${threadId}` : ""}`;
-      const response = await fetch(agentUrl, {
+      const endpoint = `/memories${threadId ? `?thread_id=${threadId}` : ""}`;
+      const response = await agentFetch(agent.id, agent.port, endpoint, {
         method: "GET",
         headers: { "Accept": "application/json" },
       });
@@ -791,8 +904,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
 
     try {
-      const agentUrl = `http://localhost:${agent.port}/memories`;
-      const response = await fetch(agentUrl, { method: "DELETE" });
+      const response = await agentFetch(agent.id, agent.port, "/memories", { method: "DELETE" });
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -820,8 +932,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const memoryId = memoryDeleteMatch[2];
-      const agentUrl = `http://localhost:${agent.port}/memories/${memoryId}`;
-      const response = await fetch(agentUrl, { method: "DELETE" });
+      const response = await agentFetch(agent.id, agent.port, `/memories/${memoryId}`, { method: "DELETE" });
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -855,8 +966,8 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       if (url.searchParams.get("thread_id")) params.set("thread_id", url.searchParams.get("thread_id")!);
       if (url.searchParams.get("limit")) params.set("limit", url.searchParams.get("limit")!);
 
-      const agentUrl = `http://localhost:${agent.port}/files${params.toString() ? `?${params}` : ""}`;
-      const response = await fetch(agentUrl, {
+      const endpoint = `/files${params.toString() ? `?${params}` : ""}`;
+      const response = await agentFetch(agent.id, agent.port, endpoint, {
         method: "GET",
         headers: { "Accept": "application/json" },
       });
@@ -888,8 +999,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const fileId = fileGetMatch[2];
-      const agentUrl = `http://localhost:${agent.port}/files/${fileId}`;
-      const response = await fetch(agentUrl, {
+      const response = await agentFetch(agent.id, agent.port, `/files/${fileId}`, {
         method: "GET",
         headers: { "Accept": "application/json" },
       });
@@ -920,8 +1030,9 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const fileId = fileGetMatch[2];
-      const agentUrl = `http://localhost:${agent.port}/files/${fileId}`;
-      const response = await fetch(agentUrl, { method: "DELETE" });
+      const response = await agentFetch(agent.id, agent.port, `/files/${fileId}`, {
+        method: "DELETE",
+      });
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -949,8 +1060,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     try {
       const fileId = fileDownloadMatch[2];
-      const agentUrl = `http://localhost:${agent.port}/files/${fileId}/download`;
-      const response = await fetch(agentUrl);
+      const response = await agentFetch(agent.id, agent.port, `/files/${fileId}/download`);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -987,8 +1097,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
 
     try {
-      const agentUrl = `http://localhost:${agent.port}/discovery/agents`;
-      const response = await fetch(agentUrl, {
+      const response = await agentFetch(agent.id, agent.port, "/discovery/agents", {
         method: "GET",
         headers: { "Accept": "application/json" },
       });
@@ -1385,13 +1494,19 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
   // POST /api/version/update - Download/install latest agent binary
   if (path === "/api/version/update" && method === "POST") {
-    // Check if any agents are running
+    // Get all running agents to restart later
     const runningAgents = AgentDB.findAll().filter(a => a.status === "running");
-    if (runningAgents.length > 0) {
-      return json(
-        { success: false, error: "Cannot update while agents are running. Stop all agents first." },
-        { status: 400 }
-      );
+    const agentsToRestart = runningAgents.map(a => a.id);
+
+    // Stop all running agents
+    for (const agent of runningAgents) {
+      const agentProc = agentProcesses.get(agent.id);
+      if (agentProc) {
+        console.log(`Stopping agent ${agent.name} for update...`);
+        agentProc.proc.kill();
+        agentProcesses.delete(agent.id);
+      }
+      AgentDB.setStatus(agent.id, "stopped");
     }
 
     // Try npm install first, fall back to direct download
@@ -1401,10 +1516,31 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       result = await downloadLatestBinary(BIN_DIR);
     }
 
-    if (result.success) {
-      return json({ success: true, version: result.version });
+    if (!result.success) {
+      return json({ success: false, error: result.error }, 500);
     }
-    return json({ success: false, error: result.error }, { status: 500 });
+
+    // Restart agents that were running
+    const restartResults: { id: string; name: string; success: boolean; error?: string }[] = [];
+    for (const agentId of agentsToRestart) {
+      const agent = AgentDB.findById(agentId);
+      if (agent) {
+        console.log(`Restarting agent ${agent.name} after update...`);
+        const startResult = await startAgentProcess(agent);
+        restartResults.push({
+          id: agent.id,
+          name: agent.name,
+          success: startResult.success,
+          error: startResult.error,
+        });
+      }
+    }
+
+    return json({
+      success: true,
+      version: result.version,
+      restarted: restartResults,
+    });
   }
 
   // GET /api/health - Health check
@@ -1429,10 +1565,10 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
   // ==================== TASKS ====================
 
-  // Helper to fetch from a running agent
-  async function fetchFromAgent(port: number, endpoint: string): Promise<any> {
+  // Helper to fetch from a running agent (with authentication)
+  async function fetchFromAgent(agentId: string, port: number, endpoint: string): Promise<any> {
     try {
-      const response = await fetch(`http://localhost:${port}${endpoint}`, {
+      const response = await agentFetch(agentId, port, endpoint, {
         headers: { "Accept": "application/json" },
       });
       if (response.ok) {
@@ -1453,7 +1589,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     const allTasks: any[] = [];
 
     for (const agent of runningAgents) {
-      const data = await fetchFromAgent(agent.port!, `/tasks?status=${status}`);
+      const data = await fetchFromAgent(agent.id, agent.port!, `/tasks?status=${status}`);
       if (data?.tasks) {
         // Add agent info to each task
         for (const task of data.tasks) {
@@ -1489,7 +1625,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     const url = new URL(req.url);
     const status = url.searchParams.get("status") || "all";
 
-    const data = await fetchFromAgent(agent.port, `/tasks?status=${status}`);
+    const data = await fetchFromAgent(agent.id, agent.port, `/tasks?status=${status}`);
     if (!data) {
       return json({ error: "Failed to fetch tasks from agent" }, 500);
     }
@@ -1508,7 +1644,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     let runningTasks = 0;
 
     for (const agent of runningAgents) {
-      const data = await fetchFromAgent(agent.port!, "/tasks?status=all");
+      const data = await fetchFromAgent(agent.id, agent.port!, "/tasks?status=all");
       if (data?.tasks) {
         totalTasks += data.tasks.length;
         for (const task of data.tasks) {
@@ -1633,7 +1769,161 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
   }
 
-  // ============ Composio Integration ============
+  // ============ Generic Integration Providers ============
+  // These endpoints work with any registered provider (composio, smithery, etc.)
+
+  // GET /api/integrations/providers - List available integration providers
+  if (path === "/api/integrations/providers" && method === "GET") {
+    const providerIds = getProviderIds();
+    const providers = providerIds.map(id => {
+      const provider = getProvider(id);
+      const hasKey = !!ProviderKeys.getDecrypted(id);
+      return {
+        id,
+        name: provider?.name || id,
+        connected: hasKey,
+      };
+    });
+    return json({ providers });
+  }
+
+  // GET /api/integrations/:provider/apps - List available apps from a provider
+  const appsMatch = path.match(/^\/api\/integrations\/([^/]+)\/apps$/);
+  if (appsMatch && method === "GET") {
+    const providerId = appsMatch[1];
+    const provider = getProvider(providerId);
+    if (!provider) {
+      return json({ error: `Unknown provider: ${providerId}` }, 404);
+    }
+
+    const apiKey = ProviderKeys.getDecrypted(providerId);
+    if (!apiKey) {
+      return json({ error: `${provider.name} API key not configured`, apps: [] }, 200);
+    }
+
+    try {
+      const apps = await provider.listApps(apiKey);
+      return json({ apps });
+    } catch (e) {
+      console.error(`Failed to list apps from ${providerId}:`, e);
+      return json({ error: "Failed to fetch apps" }, 500);
+    }
+  }
+
+  // GET /api/integrations/:provider/connected - List user's connected accounts
+  const connectedMatch = path.match(/^\/api\/integrations\/([^/]+)\/connected$/);
+  if (connectedMatch && method === "GET") {
+    const providerId = connectedMatch[1];
+    const provider = getProvider(providerId);
+    if (!provider) {
+      return json({ error: `Unknown provider: ${providerId}` }, 404);
+    }
+
+    const apiKey = ProviderKeys.getDecrypted(providerId);
+    if (!apiKey) {
+      return json({ error: `${provider.name} API key not configured`, accounts: [] }, 200);
+    }
+
+    // Use Apteva user ID as the entity ID for the provider
+    const userId = user?.id || "default";
+
+    try {
+      const accounts = await provider.listConnectedAccounts(apiKey, userId);
+      return json({ accounts });
+    } catch (e) {
+      console.error(`Failed to list connected accounts from ${providerId}:`, e);
+      return json({ error: "Failed to fetch connected accounts" }, 500);
+    }
+  }
+
+  // POST /api/integrations/:provider/connect - Initiate connection (OAuth or API Key)
+  const connectMatch = path.match(/^\/api\/integrations\/([^/]+)\/connect$/);
+  if (connectMatch && method === "POST") {
+    const providerId = connectMatch[1];
+    const provider = getProvider(providerId);
+    if (!provider) {
+      return json({ error: `Unknown provider: ${providerId}` }, 404);
+    }
+
+    const apiKey = ProviderKeys.getDecrypted(providerId);
+    if (!apiKey) {
+      return json({ error: `${provider.name} API key not configured` }, 401);
+    }
+
+    try {
+      const body = await req.json();
+      const { appSlug, redirectUrl, credentials } = body;
+
+      if (!appSlug) {
+        return json({ error: "appSlug is required" }, 400);
+      }
+
+      // Use Apteva user ID as the entity ID
+      const userId = user?.id || "default";
+
+      // Default redirect URL back to our integrations page
+      const callbackUrl = redirectUrl || `http://localhost:${process.env.PORT || 4280}/mcp?tab=hosted&connected=${appSlug}`;
+
+      const result = await provider.initiateConnection(apiKey, userId, appSlug, callbackUrl, credentials);
+      return json(result);
+    } catch (e) {
+      console.error(`Failed to initiate connection for ${providerId}:`, e);
+      return json({ error: `Failed to initiate connection: ${e}` }, 500);
+    }
+  }
+
+  // GET /api/integrations/:provider/connection/:id - Check connection status
+  const connectionStatusMatch = path.match(/^\/api\/integrations\/([^/]+)\/connection\/([^/]+)$/);
+  if (connectionStatusMatch && method === "GET") {
+    const providerId = connectionStatusMatch[1];
+    const connectionId = connectionStatusMatch[2];
+    const provider = getProvider(providerId);
+    if (!provider) {
+      return json({ error: `Unknown provider: ${providerId}` }, 404);
+    }
+
+    const apiKey = ProviderKeys.getDecrypted(providerId);
+    if (!apiKey) {
+      return json({ error: `${provider.name} API key not configured` }, 401);
+    }
+
+    try {
+      const connection = await provider.getConnectionStatus(apiKey, connectionId);
+      if (!connection) {
+        return json({ error: "Connection not found" }, 404);
+      }
+      return json({ connection });
+    } catch (e) {
+      console.error(`Failed to get connection status:`, e);
+      return json({ error: "Failed to get connection status" }, 500);
+    }
+  }
+
+  // DELETE /api/integrations/:provider/connection/:id - Disconnect/revoke
+  const disconnectMatch = path.match(/^\/api\/integrations\/([^/]+)\/connection\/([^/]+)$/);
+  if (disconnectMatch && method === "DELETE") {
+    const providerId = disconnectMatch[1];
+    const connectionId = disconnectMatch[2];
+    const provider = getProvider(providerId);
+    if (!provider) {
+      return json({ error: `Unknown provider: ${providerId}` }, 404);
+    }
+
+    const apiKey = ProviderKeys.getDecrypted(providerId);
+    if (!apiKey) {
+      return json({ error: `${provider.name} API key not configured` }, 401);
+    }
+
+    try {
+      const success = await provider.disconnect(apiKey, connectionId);
+      return json({ success });
+    } catch (e) {
+      console.error(`Failed to disconnect:`, e);
+      return json({ error: "Failed to disconnect" }, 500);
+    }
+  }
+
+  // ============ Composio-Specific Routes (MCP Configs) ============
 
   // GET /api/integrations/composio/configs - List Composio MCP configs
   if (path === "/api/integrations/composio/configs" && method === "GET") {
@@ -1658,15 +1948,13 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
       const data = await res.json();
 
-      // Transform to our format
+      // Transform to our format (no user_id in URLs - that's provided when adding)
       const configs = (data.items || data.servers || []).map((item: any) => ({
         id: item.id,
         name: item.name || item.id,
         toolkits: item.toolkits || item.apps || [],
         toolsCount: item.toolsCount || item.tools?.length || 0,
         createdAt: item.createdAt || item.created_at,
-        // Build the MCP URL for this config
-        mcpUrl: `https://backend.composio.dev/v3/mcp/${item.id}`,
       }));
 
       return json({ configs });
@@ -1704,11 +1992,179 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
           name: data.name || data.id,
           toolkits: data.toolkits || data.apps || [],
           tools: data.tools || [],
-          mcpUrl: `https://backend.composio.dev/v3/mcp/${data.id}`,
-        }
+        },
       });
     } catch (e) {
       return json({ error: "Failed to fetch config" }, 500);
+    }
+  }
+
+  // POST /api/integrations/composio/configs/:id/add - Add a Composio config as an MCP server
+  // Fetches the mcp_url directly from Composio API
+  const composioAddMatch = path.match(/^\/api\/integrations\/composio\/configs\/([^/]+)\/add$/);
+  if (composioAddMatch && method === "POST") {
+    const configId = composioAddMatch[1];
+    const apiKey = ProviderKeys.getDecrypted("composio");
+    if (!apiKey) {
+      return json({ error: "Composio API key not configured" }, 401);
+    }
+
+    try {
+      // Fetch config details from Composio to get the name and mcp_url
+      const res = await fetch(`https://backend.composio.dev/api/v3/mcp/${configId}`, {
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("Failed to fetch Composio MCP config:", errText);
+        return json({ error: "Failed to fetch MCP config from Composio" }, 400);
+      }
+
+      const data = await res.json();
+      const configName = data.name || `composio-${configId.slice(0, 8)}`;
+      const mcpUrl = data.mcp_url;
+      const authConfigIds = data.auth_config_ids || [];
+      const serverInstanceCount = data.server_instance_count || 0;
+
+      if (!mcpUrl) {
+        return json({ error: "MCP config does not have a URL" }, 400);
+      }
+
+      // Get user_id from connected accounts for this auth config
+      const { createMcpServerInstance, getUserIdForAuthConfig } = await import("../integrations/composio");
+      let userId: string | null = null;
+
+      if (authConfigIds.length > 0) {
+        userId = await getUserIdForAuthConfig(apiKey, authConfigIds[0]);
+
+        // Create server instance if none exists
+        if (serverInstanceCount === 0 && userId) {
+          const instance = await createMcpServerInstance(apiKey, configId, userId);
+          if (instance) {
+            console.log(`Created server instance for user ${userId} on server ${configId}`);
+          }
+        }
+      }
+
+      // Append user_id to mcp_url for authentication
+      const mcpUrlWithUser = userId
+        ? `${mcpUrl}?user_id=${encodeURIComponent(userId)}`
+        : mcpUrl;
+
+      // Check if already exists (match by config ID in URL)
+      const existing = McpServerDB.findAll().find(
+        s => s.source === "composio" && s.url?.includes(configId)
+      );
+      if (existing) {
+        return json({ server: existing, message: "Server already exists" });
+      }
+
+      // Create the MCP server entry with user_id in URL
+      const server = McpServerDB.create({
+        id: generateId(),
+        name: configName,
+        type: "http",
+        package: null,
+        command: null,
+        args: null,
+        env: {},
+        url: mcpUrlWithUser,
+        headers: { "x-api-key": apiKey },
+        source: "composio",
+      });
+
+      return json({ server, message: "Server added successfully" });
+    } catch (e) {
+      console.error("Failed to add Composio config:", e);
+      return json({ error: "Failed to add Composio config" }, 500);
+    }
+  }
+
+  // POST /api/integrations/composio/configs - Create a new MCP config from connected app
+  if (path === "/api/integrations/composio/configs" && method === "POST") {
+    const apiKey = ProviderKeys.getDecrypted("composio");
+    if (!apiKey) {
+      return json({ error: "Composio API key not configured" }, 401);
+    }
+
+    try {
+      const body = await req.json();
+      const { name, toolkitSlug, authConfigId } = body;
+
+      if (!name || !toolkitSlug) {
+        return json({ error: "name and toolkitSlug are required" }, 400);
+      }
+
+      // If authConfigId not provided, find it from the toolkit
+      let configId = authConfigId;
+      if (!configId) {
+        const { getAuthConfigForToolkit } = await import("../integrations/composio");
+        configId = await getAuthConfigForToolkit(apiKey, toolkitSlug);
+        if (!configId) {
+          return json({ error: `No auth config found for ${toolkitSlug}. Make sure you have connected this app first.` }, 400);
+        }
+      }
+
+      // Create MCP server in Composio
+      const { createMcpServer, createMcpServerInstance, getUserIdForAuthConfig } = await import("../integrations/composio");
+      const mcpServer = await createMcpServer(apiKey, name, [configId]);
+
+      if (!mcpServer) {
+        return json({ error: "Failed to create MCP config" }, 500);
+      }
+
+      // Create server instance for the user who has the connected account
+      const userId = await getUserIdForAuthConfig(apiKey, configId);
+      if (userId) {
+        const instance = await createMcpServerInstance(apiKey, mcpServer.id, userId);
+        if (!instance) {
+          console.warn(`Created MCP server but failed to create instance for user ${userId}`);
+        }
+      }
+
+      // Append user_id to mcp_url for authentication
+      const mcpUrlWithUser = userId
+        ? `${mcpServer.mcpUrl}?user_id=${encodeURIComponent(userId)}`
+        : mcpServer.mcpUrl;
+
+      return json({
+        config: {
+          id: mcpServer.id,
+          name: mcpServer.name,
+          toolkits: mcpServer.toolkits,
+          mcpUrl: mcpUrlWithUser,
+          allowedTools: mcpServer.allowedTools,
+          userId,
+        },
+      }, 201);
+    } catch (e: any) {
+      console.error("Failed to create Composio MCP config:", e);
+      return json({ error: e.message || "Failed to create MCP config" }, 500);
+    }
+  }
+
+  // DELETE /api/integrations/composio/configs/:id - Delete a Composio MCP config
+  if (composioConfigMatch && method === "DELETE") {
+    const configId = composioConfigMatch[1];
+    const apiKey = ProviderKeys.getDecrypted("composio");
+    if (!apiKey) {
+      return json({ error: "Composio API key not configured" }, 401);
+    }
+
+    try {
+      const { deleteMcpServer } = await import("../integrations/composio");
+      const success = await deleteMcpServer(apiKey, configId);
+      if (!success) {
+        return json({ error: "Failed to delete MCP config" }, 500);
+      }
+      return json({ success: true });
+    } catch (e) {
+      console.error("Failed to delete Composio config:", e);
+      return json({ error: "Failed to delete MCP config" }, 500);
     }
   }
 
@@ -1716,7 +2172,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
   if (path === "/api/mcp/servers" && method === "POST") {
     try {
       const body = await req.json();
-      const { name, type, package: pkg, command, args, env } = body;
+      const { name, type, package: pkg, command, args, env, url, headers, source } = body;
 
       if (!name) {
         return json({ error: "Name is required" }, 400);
@@ -1730,6 +2186,9 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
         command: command || null,
         args: args || null,
         env: env || {},
+        url: url || null,
+        headers: headers || {},
+        source: source || null,
       });
 
       return json({ server }, 201);
@@ -1832,7 +2291,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
 
     // Get a port for the HTTP proxy
-    const port = getNextPort();
+    const port = await getNextPort();
 
     console.log(`Starting MCP server ${server.name}...`);
     console.log(`  Command: ${cmd.join(" ")}`);
@@ -1879,7 +2338,24 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       return json({ error: "MCP server not found" }, 404);
     }
 
-    // Check if process is running
+    // HTTP servers use remote HTTP transport
+    if (server.type === "http" && server.url) {
+      try {
+        const httpClient = getHttpMcpClient(server.url, server.headers || {});
+        const serverInfo = await httpClient.initialize();
+        const tools = await httpClient.listTools();
+
+        return json({
+          serverInfo,
+          tools,
+        });
+      } catch (err) {
+        console.error(`Failed to list HTTP MCP tools: ${err}`);
+        return json({ error: `Failed to communicate with MCP server: ${err}` }, 500);
+      }
+    }
+
+    // Stdio servers require a running process
     const mcpProcess = getMcpProcess(server.id);
     if (!mcpProcess) {
       return json({ error: "MCP server is not running" }, 400);
@@ -1907,13 +2383,29 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       return json({ error: "MCP server not found" }, 404);
     }
 
-    // Check if process is running
+    const toolName = decodeURIComponent(mcpToolCallMatch[2]);
+
+    // HTTP servers use remote HTTP transport
+    if (server.type === "http" && server.url) {
+      try {
+        const body = await req.json();
+        const args = body.arguments || {};
+
+        const httpClient = getHttpMcpClient(server.url, server.headers || {});
+        const result = await httpClient.callTool(toolName, args);
+
+        return json({ result });
+      } catch (err) {
+        console.error(`Failed to call HTTP MCP tool: ${err}`);
+        return json({ error: `Failed to call tool: ${err}` }, 500);
+      }
+    }
+
+    // Stdio servers require a running process
     const mcpProcess = getMcpProcess(server.id);
     if (!mcpProcess) {
       return json({ error: "MCP server is not running" }, 400);
     }
-
-    const toolName = decodeURIComponent(mcpToolCallMatch[2]);
 
     try {
       const body = await req.json();

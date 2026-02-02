@@ -51,8 +51,11 @@ export interface McpServer {
   type: "npm" | "github" | "http" | "custom";
   package: string | null;
   command: string | null;
+  url: string | null;
+  headers: Record<string, string>;
   port: number | null;
   status: "stopped" | "running";
+  source: string | null; // "composio", "smithery", or null for local
 }
 
 export interface McpTool {
@@ -96,7 +99,7 @@ export interface OnboardingStatus {
   has_any_keys: boolean;
 }
 
-export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "telemetry" | "settings";
+export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "telemetry" | "settings" | "api";
 
 export interface Task {
   id: string;

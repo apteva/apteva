@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { CheckIcon, CloseIcon, PlusIcon } from "../common/Icons";
-import { Modal } from "../common/Modal";
+import { Modal, useConfirm } from "../common/Modal";
 import { useProjects, useAuth, type Project } from "../../context";
 import type { Provider } from "../../types";
 
@@ -81,6 +81,7 @@ function ProvidersSettings() {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   const fetchProviders = async () => {
     const res = await authFetch("/api/providers");
@@ -136,7 +137,8 @@ function ProvidersSettings() {
   };
 
   const deleteKey = async (providerId: string) => {
-    if (!confirm("Are you sure you want to remove this API key?")) return;
+    const confirmed = await confirm("Are you sure you want to remove this API key?", { confirmText: "Remove", title: "Remove API Key" });
+    if (!confirmed) return;
     await authFetch(`/api/keys/${providerId}`, { method: "DELETE" });
     fetchProviders();
   };
@@ -147,6 +149,8 @@ function ProvidersSettings() {
   const intConfiguredCount = integrations.filter(p => p.hasKey).length;
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="space-y-10">
       {/* AI Providers Section */}
       <div>
@@ -224,6 +228,7 @@ function ProvidersSettings() {
         </div>
       </div>
     </div>
+    </>
   );
 }
 
@@ -242,11 +247,11 @@ function ProjectsSettings() {
   const { projects, createProject, updateProject, deleteProject } = useProjects();
   const [showModal, setShowModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this project? Agents in this project will become unassigned.")) {
-      return;
-    }
+    const confirmed = await confirm("Are you sure you want to delete this project? Agents in this project will become unassigned.", { confirmText: "Delete", title: "Delete Project" });
+    if (!confirmed) return;
     await deleteProject(id);
   };
 
@@ -266,6 +271,8 @@ function ProjectsSettings() {
   };
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="max-w-4xl w-full">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
@@ -347,6 +354,7 @@ function ProjectsSettings() {
         />
       )}
     </div>
+    </>
   );
 }
 
@@ -507,7 +515,11 @@ function UpdatesSettings() {
       if (!data.success) {
         setError(data.error || "Update failed");
       } else {
-        setUpdateSuccess(`Agent updated to v${data.version}. New agents will use this version.`);
+        const restartedCount = data.restarted?.length || 0;
+        const restartMsg = restartedCount > 0
+          ? ` ${restartedCount} running agent${restartedCount > 1 ? 's' : ''} restarted.`
+          : '';
+        setUpdateSuccess(`Agent binary updated to v${data.version}.${restartMsg}`);
         await checkForUpdates();
       }
     } catch (e) {
@@ -938,6 +950,7 @@ function DataSettings() {
   const [clearing, setClearing] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [eventCount, setEventCount] = useState<number | null>(null);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   const fetchStats = async () => {
     try {
@@ -954,9 +967,8 @@ function DataSettings() {
   }, []);
 
   const clearTelemetry = async () => {
-    if (!confirm("Are you sure you want to delete all telemetry data? This cannot be undone.")) {
-      return;
-    }
+    const confirmed = await confirm("Are you sure you want to delete all telemetry data? This cannot be undone.", { confirmText: "Clear All", title: "Clear Telemetry Data" });
+    if (!confirmed) return;
 
     setClearing(true);
     setMessage(null);
@@ -979,6 +991,8 @@ function DataSettings() {
   };
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Data Management</h1>
@@ -1012,5 +1026,6 @@ function DataSettings() {
         </button>
       </div>
     </div>
+    </>
   );
 }

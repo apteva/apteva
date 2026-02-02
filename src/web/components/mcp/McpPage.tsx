@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { McpIcon } from "../common/Icons";
 import { useAuth } from "../../context";
+import { useConfirm, useAlert } from "../common/Modal";
 import type { McpTool, McpToolCallResult } from "../../types";
+import { IntegrationsPanel } from "./IntegrationsPanel";
 
 interface McpServer {
   id: string;
@@ -11,8 +13,11 @@ interface McpServer {
   command: string | null;
   args: string | null;
   env: Record<string, string>;
+  url: string | null;
+  headers: Record<string, string>;
   port: number | null;
   status: "stopped" | "running";
+  source: string | null; // "composio", "smithery", or null for local
   created_at: string;
 }
 
@@ -35,6 +40,7 @@ export function McpPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
   const [activeTab, setActiveTab] = useState<"servers" | "hosted" | "registry">("servers");
+  const { confirm, ConfirmDialog } = useConfirm();
 
   const fetchServers = async () => {
     try {
@@ -70,7 +76,8 @@ export function McpPage() {
   };
 
   const deleteServer = async (id: string) => {
-    if (!confirm("Delete this MCP server?")) return;
+    const confirmed = await confirm("Delete this MCP server?", { confirmText: "Delete", title: "Delete Server" });
+    if (!confirmed) return;
     try {
       await authFetch(`/api/mcp/servers/${id}`, { method: "DELETE" });
       if (selectedServer?.id === id) {
@@ -83,6 +90,8 @@ export function McpPage() {
   };
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-6xl">
         {/* Header */}
@@ -176,17 +185,21 @@ export function McpPage() {
               <div className="flex gap-6">
                 {/* Server List */}
                 <div className={`space-y-3 ${selectedServer ? "w-1/2" : "w-full"}`}>
-                  {servers.map(server => (
-                    <McpServerCard
-                      key={server.id}
-                      server={server}
-                      selected={selectedServer?.id === server.id}
-                      onSelect={() => setSelectedServer(server.status === "running" ? server : null)}
-                      onStart={() => startServer(server.id)}
-                      onStop={() => stopServer(server.id)}
-                      onDelete={() => deleteServer(server.id)}
-                    />
-                  ))}
+                  {servers.map(server => {
+                    const isRemote = server.type === "http" && server.url;
+                    const isAvailable = isRemote || server.status === "running";
+                    return (
+                      <McpServerCard
+                        key={server.id}
+                        server={server}
+                        selected={selectedServer?.id === server.id}
+                        onSelect={() => setSelectedServer(isAvailable ? server : null)}
+                        onStart={() => startServer(server.id)}
+                        onStop={() => stopServer(server.id)}
+                        onDelete={() => deleteServer(server.id)}
+                      />
+                    );
+                  })}
                 </div>
 
                 {/* Tools Panel */}
@@ -205,7 +218,7 @@ export function McpPage() {
 
         {/* Hosted Services Tab */}
         {activeTab === "hosted" && (
-          <HostedServices />
+          <HostedServices onServerAdded={fetchServers} />
         )}
 
         {/* Browse Registry Tab */}
@@ -252,6 +265,7 @@ export function McpPage() {
         />
       )}
     </div>
+    </>
   );
 }
 
@@ -270,28 +284,50 @@ function McpServerCard({
   onStop: () => void;
   onDelete: () => void;
 }) {
+  // Remote/hosted servers (http type with url) are always available
+  const isRemote = server.type === "http" && server.url;
+  const isAvailable = isRemote || server.status === "running";
+
+  // Determine what to show as the server info
+  const getServerInfo = () => {
+    if (isRemote) {
+      // Show source (composio, smithery) or just "remote"
+      const source = server.source || "remote";
+      return `${source} • http`;
+    }
+    return `${server.type} • ${server.package || server.command || "custom"}${
+      server.status === "running" && server.port ? ` • :${server.port}` : ""
+    }`;
+  };
+
   return (
     <div
       className={`bg-[#111] border rounded-lg p-4 cursor-pointer transition ${
         selected ? "border-[#f97316]" : "border-[#1a1a1a] hover:border-[#333]"
       }`}
-      onClick={server.status === "running" ? onSelect : undefined}
+      onClick={isAvailable ? onSelect : undefined}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className={`w-2 h-2 rounded-full ${
-            server.status === "running" ? "bg-green-400" : "bg-[#444]"
+            isAvailable ? "bg-green-400" : "bg-[#444]"
           }`} />
           <div>
             <h3 className="font-medium">{server.name}</h3>
-            <p className="text-sm text-[#666]">
-              {server.type} • {server.package || server.command || "custom"}
-              {server.status === "running" && server.port && ` • :${server.port}`}
-            </p>
+            <p className="text-sm text-[#666]">{getServerInfo()}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {server.status === "running" ? (
+          {isRemote ? (
+            // Remote servers: no start/stop, just delete
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
+            >
+              Remove
+            </button>
+          ) : server.status === "running" ? (
+            // Local running server: tools + stop + delete
             <>
               <button
                 onClick={(e) => { e.stopPropagation(); onSelect(); }}
@@ -305,21 +341,30 @@ function McpServerCard({
               >
                 Stop
               </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
+              >
+                Delete
+              </button>
             </>
           ) : (
-            <button
-              onClick={(e) => { e.stopPropagation(); onStart(); }}
-              className="text-sm text-[#666] hover:text-green-400 px-3 py-1 transition"
-            >
-              Start
-            </button>
+            // Local stopped server: start + delete
+            <>
+              <button
+                onClick={(e) => { e.stopPropagation(); onStart(); }}
+                className="text-sm text-[#666] hover:text-green-400 px-3 py-1 transition"
+              >
+                Start
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
+              >
+                Delete
+              </button>
+            </>
           )}
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
-          >
-            Delete
-          </button>
         </div>
       </div>
     </div>
@@ -782,19 +827,43 @@ interface ComposioConfig {
   createdAt?: string;
 }
 
-function HostedServices() {
+function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
   const { authFetch } = useAuth();
+  const [subTab, setSubTab] = useState<"configs" | "connect">("configs");
   const [composioConnected, setComposioConnected] = useState(false);
   const [smitheryConnected, setSmitheryConnected] = useState(false);
   const [composioConfigs, setComposioConfigs] = useState<ComposioConfig[]>([]);
+  const [addedServers, setAddedServers] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadingConfigs, setLoadingConfigs] = useState(false);
+  const [addingConfig, setAddingConfig] = useState<string | null>(null);
+  const { alert, AlertDialog } = useAlert();
 
   const fetchStatus = async () => {
     try {
-      const res = await authFetch("/api/providers");
-      const data = await res.json();
-      const providers = data.providers || [];
+      const [providersRes, serversRes] = await Promise.all([
+        authFetch("/api/providers"),
+        authFetch("/api/mcp/servers"),
+      ]);
+      const providersData = await providersRes.json();
+      const serversData = await serversRes.json();
+
+      const providers = providersData.providers || [];
+      const servers = serversData.servers || [];
+
+      // Track which Composio config IDs are already added as servers
+      // Extract config ID from URLs like https://backend.composio.dev/v3/mcp/{configId}/mcp?user_id=...
+      const composioConfigIds = new Set(
+        servers
+          .filter((s: any) => s.source === "composio" && s.url)
+          .map((s: any) => {
+            const match = s.url.match(/\/v3\/mcp\/([^/]+)/);
+            return match ? match[1] : null;
+          })
+          .filter(Boolean)
+      );
+      setAddedServers(composioConfigIds);
+
       const composio = providers.find((p: any) => p.id === "composio");
       const smithery = providers.find((p: any) => p.id === "smithery");
       setComposioConnected(composio?.hasKey || false);
@@ -819,6 +888,30 @@ function HostedServices() {
       console.error("Failed to fetch Composio configs:", e);
     }
     setLoadingConfigs(false);
+  };
+
+  const addComposioConfig = async (configId: string) => {
+    setAddingConfig(configId);
+    try {
+      const res = await authFetch(`/api/integrations/composio/configs/${configId}/add`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        // Mark as added by config ID
+        setAddedServers(prev => new Set([...prev, configId]));
+        onServerAdded?.();
+      } else {
+        const data = await res.json();
+        await alert(data.error || "Failed to add config", { title: "Error", variant: "error" });
+      }
+    } catch (e) {
+      console.error("Failed to add config:", e);
+    }
+    setAddingConfig(null);
+  };
+
+  const isConfigAdded = (configId: string) => {
+    return addedServers.has(configId);
   };
 
   useEffect(() => {
@@ -849,13 +942,62 @@ function HostedServices() {
   }
 
   return (
+    <>
+    {AlertDialog}
     <div className="space-y-6">
-      {/* Composio MCP Configs */}
+      {/* Sub-tabs for Composio */}
       {composioConnected && (
+        <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded-lg p-1 w-fit">
+          <button
+            onClick={() => setSubTab("configs")}
+            className={`px-4 py-2 rounded text-sm font-medium transition ${
+              subTab === "configs"
+                ? "bg-[#1a1a1a] text-white"
+                : "text-[#666] hover:text-[#888]"
+            }`}
+          >
+            MCP Configs
+          </button>
+          <button
+            onClick={() => setSubTab("connect")}
+            className={`px-4 py-2 rounded text-sm font-medium transition ${
+              subTab === "connect"
+                ? "bg-[#1a1a1a] text-white"
+                : "text-[#666] hover:text-[#888]"
+            }`}
+          >
+            Connect Apps
+          </button>
+        </div>
+      )}
+
+      {/* Connect Apps Tab */}
+      {composioConnected && subTab === "connect" && (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="font-medium">Connect Apps via Composio</h2>
+              <p className="text-sm text-[#666] mt-1">
+                Connect your accounts to enable tools in MCP configs
+              </p>
+            </div>
+          </div>
+          <IntegrationsPanel
+            providerId="composio"
+            onConnectionComplete={() => {
+              // Refresh configs after connecting an app
+              fetchComposioConfigs();
+            }}
+          />
+        </div>
+      )}
+
+      {/* MCP Configs Tab */}
+      {composioConnected && subTab === "configs" && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <h2 className="font-medium">Composio</h2>
+              <h2 className="font-medium">Composio MCP Configs</h2>
               <span className="text-xs text-green-400">Connected</span>
             </div>
             <div className="flex items-center gap-3">
@@ -882,62 +1024,78 @@ function HostedServices() {
           ) : composioConfigs.length === 0 ? (
             <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
               <p className="text-sm text-[#666]">No MCP configs found</p>
+              <p className="text-xs text-[#555] mt-2">
+                First <button onClick={() => setSubTab("connect")} className="text-[#f97316] hover:text-[#fb923c]">connect some apps</button>, then create a config.
+              </p>
               <a
                 href="https://app.composio.dev/mcp_configs"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-[#f97316] hover:text-[#fb923c] mt-1 inline-block"
+                className="text-xs text-[#f97316] hover:text-[#fb923c] mt-2 inline-block"
               >
-                Create one in Composio →
+                Create in Composio →
               </a>
             </div>
           ) : (
             <div className="space-y-2">
-              {composioConfigs.map((config) => (
-                <div
-                  key={config.id}
-                  className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 hover:border-[#333] transition flex items-center justify-between"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm">{config.name}</span>
-                      <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
-                    </div>
-                    {config.toolkits.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {config.toolkits.slice(0, 4).map((toolkit) => (
-                          <span
-                            key={toolkit}
-                            className="text-xs bg-[#1a1a1a] text-[#666] px-1.5 py-0.5 rounded"
-                          >
-                            {toolkit}
-                          </span>
-                        ))}
-                        {config.toolkits.length > 4 && (
-                          <span className="text-xs text-[#555]">+{config.toolkits.length - 4}</span>
+              {composioConfigs.map((config) => {
+                const added = isConfigAdded(config.id);
+                const isAdding = addingConfig === config.id;
+                return (
+                  <div
+                    key={config.id}
+                    className={`bg-[#111] border rounded-lg p-3 transition flex items-center justify-between ${
+                      added ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm">{config.name}</span>
+                        <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
+                        {added && (
+                          <span className="text-xs text-green-400">Added</span>
                         )}
                       </div>
-                    )}
+                      {config.toolkits.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {config.toolkits.slice(0, 4).map((toolkit) => (
+                            <span
+                              key={toolkit}
+                              className="text-xs bg-[#1a1a1a] text-[#666] px-1.5 py-0.5 rounded"
+                            >
+                              {toolkit}
+                            </span>
+                          ))}
+                          {config.toolkits.length > 4 && (
+                            <span className="text-xs text-[#555]">+{config.toolkits.length - 4}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 ml-3">
+                      {added ? (
+                        <span className="text-xs text-[#555] px-2 py-1">In Servers</span>
+                      ) : (
+                        <button
+                          onClick={() => addComposioConfig(config.id)}
+                          disabled={isAdding}
+                          className="text-xs bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
+                        >
+                          {isAdding ? "Adding..." : "Add"}
+                        </button>
+                      )}
+                      <a
+                        href={`https://app.composio.dev/mcp_configs/${config.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-[#666] hover:text-[#888] transition"
+                      >
+                        Edit
+                      </a>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 ml-3">
-                    <button
-                      onClick={() => navigator.clipboard.writeText(`composio:${config.id}`)}
-                      className="text-xs text-[#666] hover:text-[#f97316] px-2 py-1 transition"
-                      title="Copy config ID"
-                    >
-                      Copy ID
-                    </button>
-                    <a
-                      href={`https://app.composio.dev/mcp_configs/${config.id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-[#666] hover:text-[#888] transition"
-                    >
-                      Edit
-                    </a>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -969,11 +1127,12 @@ function HostedServices() {
       )}
 
       <div className="p-3 bg-[#0a0a0a] border border-[#222] rounded text-xs text-[#666]">
-        <strong className="text-[#888]">Tip:</strong> Copy a config ID (e.g., <code className="bg-[#111] px-1 rounded">composio:abc123</code>) and add it to your agent's MCP servers.
+        <strong className="text-[#888]">Tip:</strong> Connect apps first, then add MCP configs to make tools available to your agents.
         {" · "}
         <a href="/settings" className="text-[#f97316] hover:text-[#fb923c]">Add more providers in Settings</a>
       </div>
     </div>
+    </>
   );
 }
 

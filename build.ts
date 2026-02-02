@@ -58,7 +58,7 @@ const html = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>apteva</title>
+  <title>Apteva</title>
   <link rel="icon" type="image/png" href="/icon.png">
   <link rel="apple-touch-icon" href="/icon.png">
   <link rel="stylesheet" href="/styles.css">

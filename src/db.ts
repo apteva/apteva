@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
 import { join } from "path";
 import { mkdirSync, existsSync } from "fs";
-import { encryptObject, decryptObject } from "./crypto";
+import { encrypt, decrypt, encryptObject, decryptObject } from "./crypto";
+import { randomBytes } from "crypto";
 
 // Types
 export interface AgentFeatures {
@@ -37,6 +38,7 @@ export interface Agent {
   features: AgentFeatures;
   mcp_servers: string[]; // Array of MCP server IDs
   project_id: string | null; // Optional project grouping
+  api_key_encrypted: string | null; // Encrypted API key for agent authentication
   created_at: string;
   updated_at: string;
 }
@@ -70,6 +72,7 @@ export interface AgentRow {
   features: string | null;
   mcp_servers: string | null;
   project_id: string | null;
+  api_key_encrypted: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -107,8 +110,11 @@ export interface McpServer {
   command: string | null;
   args: string | null;
   env: Record<string, string>;
+  url: string | null; // For http type: the remote server URL
+  headers: Record<string, string>; // For http type: auth headers
   port: number | null;
   status: "stopped" | "running";
+  source: string | null; // e.g., "composio", "smithery", null for local
   created_at: string;
 }
 
@@ -120,8 +126,11 @@ export interface McpServerRow {
   command: string | null;
   args: string | null;
   env: string | null;
+  url: string | null;
+  headers: string | null;
   port: number | null;
   status: string;
+  source: string | null;
   created_at: string;
 }
 
@@ -348,6 +357,20 @@ function runMigrations() {
         CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id);
       `,
     },
+    {
+      name: "014_add_mcp_server_url_headers",
+      sql: `
+        ALTER TABLE mcp_servers ADD COLUMN url TEXT;
+        ALTER TABLE mcp_servers ADD COLUMN headers TEXT DEFAULT '{}';
+        ALTER TABLE mcp_servers ADD COLUMN source TEXT;
+      `,
+    },
+    {
+      name: "015_add_agent_api_key",
+      sql: `
+        ALTER TABLE agents ADD COLUMN api_key_encrypted TEXT;
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -418,18 +441,39 @@ function runSchemaUpgrades() {
   }
 }
 
+// Generate a unique API key for an agent
+function generateAgentApiKey(agentId: string): string {
+  const randomPart = randomBytes(24).toString("hex");
+  return `agt_${randomPart}`;
+}
+
 // Agent CRUD operations
 export const AgentDB = {
-  // Create a new agent
-  create(agent: Omit<Agent, "created_at" | "updated_at" | "status" | "port">): Agent {
+  // Get the next available port for a new agent (starting from 4100)
+  getNextAvailablePort(): number {
+    const BASE_PORT = 4100;
+    const row = db.query("SELECT MAX(port) as max_port FROM agents").get() as { max_port: number | null };
+    if (row.max_port === null) {
+      return BASE_PORT;
+    }
+    return row.max_port + 1;
+  },
+
+  // Create a new agent with a permanently assigned port and API key
+  create(agent: Omit<Agent, "created_at" | "updated_at" | "status" | "api_key_encrypted"> & { port?: number }): Agent {
     const now = new Date().toISOString();
     const featuresJson = JSON.stringify(agent.features || DEFAULT_FEATURES);
     const mcpServersJson = JSON.stringify(agent.mcp_servers || []);
+    // Assign port permanently at creation time
+    const port = agent.port ?? this.getNextAvailablePort();
+    // Generate and encrypt API key
+    const apiKey = generateAgentApiKey(agent.id);
+    const apiKeyEncrypted = encrypt(apiKey);
     const stmt = db.prepare(`
-      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, project_id, status, port, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?, ?)
+      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, project_id, status, port, api_key_encrypted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, ?)
     `);
-    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, agent.project_id || null, now, now);
+    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, agent.project_id || null, port, apiKeyEncrypted, now, now);
     return this.findById(agent.id)!;
   },
 
@@ -523,14 +567,14 @@ export const AgentDB = {
     return result.changes > 0;
   },
 
-  // Set agent status
-  setStatus(id: string, status: "stopped" | "running", port?: number): Agent | null {
-    return this.update(id, { status, port: port ?? null });
+  // Set agent status (port is permanently assigned, don't change it)
+  setStatus(id: string, status: "stopped" | "running"): Agent | null {
+    return this.update(id, { status });
   },
 
-  // Reset all agents to stopped (on server restart)
+  // Reset all agents to stopped (on server restart) - keep ports as they're permanent
   resetAllStatus(): void {
-    db.run("UPDATE agents SET status = 'stopped', port = NULL");
+    db.run("UPDATE agents SET status = 'stopped'");
   },
 
   // Count agents
@@ -543,6 +587,54 @@ export const AgentDB = {
   countRunning(): number {
     const row = db.query("SELECT COUNT(*) as count FROM agents WHERE status = 'running'").get() as { count: number };
     return row.count;
+  },
+
+  // Get decrypted API key for an agent
+  getApiKey(id: string): string | null {
+    const agent = this.findById(id);
+    if (!agent || !agent.api_key_encrypted) {
+      return null;
+    }
+    try {
+      return decrypt(agent.api_key_encrypted);
+    } catch {
+      return null;
+    }
+  },
+
+  // Regenerate API key for an agent
+  regenerateApiKey(id: string): string | null {
+    const agent = this.findById(id);
+    if (!agent) return null;
+
+    const newApiKey = generateAgentApiKey(id);
+    const encrypted = encrypt(newApiKey);
+    const now = new Date().toISOString();
+
+    db.run(
+      "UPDATE agents SET api_key_encrypted = ?, updated_at = ? WHERE id = ?",
+      [encrypted, now, id]
+    );
+
+    return newApiKey;
+  },
+
+  // Ensure agent has an API key (for migration of existing agents)
+  ensureApiKey(id: string): string | null {
+    const agent = this.findById(id);
+    if (!agent) return null;
+
+    // If agent already has a key, return it
+    if (agent.api_key_encrypted) {
+      try {
+        return decrypt(agent.api_key_encrypted);
+      } catch {
+        // Key is corrupted, regenerate
+      }
+    }
+
+    // Generate new key for agents without one
+    return this.regenerateApiKey(id);
   },
 };
 
@@ -736,6 +828,7 @@ function rowToAgent(row: AgentRow): Agent {
     features,
     mcp_servers,
     project_id: row.project_id,
+    api_key_encrypted: row.api_key_encrypted,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -826,13 +919,17 @@ function rowToProviderKey(row: ProviderKeyRow): ProviderKey {
 export const McpServerDB = {
   create(server: Omit<McpServer, "created_at" | "status" | "port">): McpServer {
     const now = new Date().toISOString();
-    // Encrypt env vars (credentials) before storing
+    // Encrypt env vars and headers (credentials) before storing
     const envEncrypted = encryptObject(server.env || {});
+    const headersEncrypted = encryptObject(server.headers || {});
     const stmt = db.prepare(`
-      INSERT INTO mcp_servers (id, name, type, package, command, args, env, status, port, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
+      INSERT INTO mcp_servers (id, name, type, package, command, args, env, url, headers, source, status, port, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
     `);
-    stmt.run(server.id, server.name, server.type, server.package, server.command, server.args, envEncrypted, now);
+    stmt.run(
+      server.id, server.name, server.type, server.package, server.command, server.args,
+      envEncrypted, server.url || null, headersEncrypted, server.source || null, now
+    );
     return this.findById(server.id)!;
   },
 
@@ -883,6 +980,19 @@ export const McpServerDB = {
       // Encrypt env vars (credentials) before storing
       values.push(encryptObject(updates.env));
     }
+    if (updates.url !== undefined) {
+      fields.push("url = ?");
+      values.push(updates.url);
+    }
+    if (updates.headers !== undefined) {
+      fields.push("headers = ?");
+      // Encrypt headers (may contain auth tokens) before storing
+      values.push(encryptObject(updates.headers));
+    }
+    if (updates.source !== undefined) {
+      fields.push("source = ?");
+      values.push(updates.source);
+    }
     if (updates.port !== undefined) {
       fields.push("port = ?");
       values.push(updates.port);
@@ -921,8 +1031,9 @@ export const McpServerDB = {
 
 // Helper to convert DB row to McpServer type
 function rowToMcpServer(row: McpServerRow): McpServer {
-  // Decrypt env vars (handles both encrypted and legacy unencrypted data)
+  // Decrypt env vars and headers (handles both encrypted and legacy unencrypted data)
   const env = row.env ? decryptObject(row.env) : {};
+  const headers = row.headers ? decryptObject(row.headers) : {};
   return {
     id: row.id,
     name: row.name,
@@ -931,8 +1042,11 @@ function rowToMcpServer(row: McpServerRow): McpServer {
     command: row.command,
     args: row.args,
     env,
+    url: row.url,
+    headers,
     port: row.port,
     status: row.status as "stopped" | "running",
+    source: row.source,
     created_at: row.created_at,
   };
 }
