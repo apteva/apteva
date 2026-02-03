@@ -1198,10 +1198,13 @@ function AddServerModal({
   onAdded: () => void;
 }) {
   const { authFetch } = useAuth();
-  const [mode, setMode] = useState<"npm" | "command">("npm");
+  const [mode, setMode] = useState<"npm" | "command" | "http">("npm");
   const [name, setName] = useState("");
   const [pkg, setPkg] = useState("");
   const [command, setCommand] = useState("");
+  const [url, setUrl] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1300,6 +1303,11 @@ function AddServerModal({
       return;
     }
 
+    if (mode === "http" && !url) {
+      setError("URL is required");
+      return;
+    }
+
     setSaving(true);
     setError(null);
 
@@ -1317,6 +1325,19 @@ function AddServerModal({
       if (mode === "npm") {
         body.type = "npm";
         body.package = pkg;
+      } else if (mode === "http") {
+        body.type = "http";
+        body.url = url;
+        // Build headers with Basic Auth if credentials provided
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (username && password) {
+          // Base64 encode username:password for Basic Auth
+          const credentials = btoa(`${username}:${password}`);
+          headers["Authorization"] = `Basic ${credentials}`;
+        }
+        body.headers = headers;
       } else {
         // Parse command into parts
         const parts = command.trim().split(/\s+/);
@@ -1409,6 +1430,16 @@ function AddServerModal({
             >
               Custom Command
             </button>
+            <button
+              onClick={() => setMode("http")}
+              className={`flex-1 px-3 py-1.5 rounded text-sm transition ${
+                mode === "http"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              HTTP Endpoint
+            </button>
           </div>
 
           {/* Name */}
@@ -1454,6 +1485,49 @@ function AddServerModal({
               <p className="text-xs text-[#555] mt-1">
                 Paste the full command - credentials like YOUR_TOKEN will be auto-extracted
               </p>
+            </div>
+          )}
+
+          {/* HTTP Endpoint */}
+          {mode === "http" && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-[#666] mb-1">URL</label>
+                <input
+                  type="text"
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  placeholder="e.g., https://example.com/wp-json/mcp/v1/messages"
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                />
+              </div>
+              <div className="p-3 bg-[#0a0a0a] border border-[#222] rounded">
+                <p className="text-xs text-[#666] mb-3">
+                  Optional: Basic Auth credentials (will be encoded and stored securely)
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-[#555] mb-1">Username</label>
+                    <input
+                      type="text"
+                      value={username}
+                      onChange={e => setUsername(e.target.value)}
+                      placeholder="username"
+                      className="w-full bg-[#111] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#555] mb-1">Password</label>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="password or app key"
+                      className="w-full bg-[#111] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1520,7 +1594,7 @@ function AddServerModal({
           </button>
           <button
             onClick={handleAdd}
-            disabled={saving || !name || (mode === "npm" ? !pkg : !command)}
+            disabled={saving || !name || (mode === "npm" ? !pkg : mode === "http" ? !url : !command)}
             className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-black rounded font-medium transition disabled:opacity-50"
           >
             {saving ? "Adding..." : "Add Server"}
