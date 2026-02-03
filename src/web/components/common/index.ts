@@ -12,6 +12,7 @@ export {
   VisionIcon,
   OperatorIcon,
   McpIcon,
+  SkillsIcon,
   RealtimeIcon,
   TelemetryIcon,
 } from "./Icons";

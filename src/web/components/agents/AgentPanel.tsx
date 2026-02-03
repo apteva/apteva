@@ -4,7 +4,7 @@ import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, Re
 import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
 import { useAuth } from "../../context";
-import type { Agent, Provider, AgentFeatures, McpServer } from "../../types";
+import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary } from "../../types";
 
 type Tab = "chat" | "threads" | "tasks" | "memory" | "files" | "settings";
 
@@ -885,6 +885,14 @@ function FilesTab({ agent }: { agent: Agent }) {
   );
 }
 
+interface AvailableSkill {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  enabled: boolean;
+}
+
 function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   agent: Agent;
   providers: Provider[];
@@ -899,11 +907,13 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     systemPrompt: agent.systemPrompt,
     features: { ...agent.features },
     mcpServers: [...(agent.mcpServers || [])],
+    skills: [...(agent.skills || [])],
   });
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<AvailableSkill[]>([]);
 
   // Fetch available MCP servers
   useEffect(() => {
@@ -919,6 +929,20 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     fetchMcpServers();
   }, [authFetch]);
 
+  // Fetch available skills
+  useEffect(() => {
+    const fetchSkills = async () => {
+      try {
+        const res = await authFetch("/api/skills");
+        const data = await res.json();
+        setAvailableSkills(data.skills || []);
+      } catch (e) {
+        console.error("Failed to fetch skills:", e);
+      }
+    };
+    fetchSkills();
+  }, [authFetch]);
+
   // Reset form when agent changes
   useEffect(() => {
     setForm({
@@ -928,6 +952,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
       systemPrompt: agent.systemPrompt,
       features: { ...agent.features },
       mcpServers: [...(agent.mcpServers || [])],
+      skills: [...(agent.skills || [])],
     });
     setMessage(null);
   }, [agent.id]);
@@ -966,6 +991,15 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     }));
   };
 
+  const toggleSkill = (skillId: string) => {
+    setForm(prev => ({
+      ...prev,
+      skills: prev.skills.includes(skillId)
+        ? prev.skills.filter(id => id !== skillId)
+        : [...prev.skills, skillId],
+    }));
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setMessage(null);
@@ -985,7 +1019,8 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     form.model !== agent.model ||
     form.systemPrompt !== agent.systemPrompt ||
     JSON.stringify(form.features) !== JSON.stringify(agent.features) ||
-    JSON.stringify(form.mcpServers.sort()) !== JSON.stringify((agent.mcpServers || []).sort());
+    JSON.stringify(form.mcpServers.sort()) !== JSON.stringify((agent.mcpServers || []).sort()) ||
+    JSON.stringify(form.skills.sort()) !== JSON.stringify((agent.skills || []).sort());
 
   return (
     <div className="flex-1 overflow-auto p-4">
@@ -1100,6 +1135,43 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             )}
           </FormField>
         )}
+
+        {/* Skills Selection */}
+        <FormField label="Skills">
+          {availableSkills.length === 0 ? (
+            <p className="text-sm text-[#666]">
+              No skills configured. Add skills in the Skills page first.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {availableSkills.filter(s => s.enabled).map(skill => (
+                <button
+                  key={skill.id}
+                  type="button"
+                  onClick={() => toggleSkill(skill.id)}
+                  className={`w-full flex items-center gap-3 p-3 rounded border text-left transition ${
+                    form.skills.includes(skill.id)
+                      ? "border-[#f97316] bg-[#f97316]/10"
+                      : "border-[#222] hover:border-[#333]"
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-medium ${form.skills.includes(skill.id) ? "text-[#f97316]" : ""}`}>
+                      {skill.name}
+                    </div>
+                    <div className="text-xs text-[#666]">{skill.description}</div>
+                  </div>
+                  <div className="text-xs px-2 py-0.5 rounded bg-[#222] text-[#666]">
+                    v{skill.version}
+                  </div>
+                </button>
+              ))}
+              <p className="text-xs text-[#666] mt-2">
+                Skills provide reusable instructions for the agent.
+              </p>
+            </div>
+          )}
+        </FormField>
 
         {message && (
           <div className={`text-sm px-3 py-2 rounded ${

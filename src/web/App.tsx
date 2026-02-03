@@ -25,6 +25,7 @@ import {
   Dashboard,
   TasksPage,
   McpPage,
+  SkillsPage,
   TelemetryPage,
   LoginPage,
 } from "./components";
@@ -99,6 +100,8 @@ function AppContent() {
     provider: "",
     systemPrompt: "You are a helpful assistant.",
     features: { ...DEFAULT_FEATURES },
+    mcpServers: [],
+    skills: [],
   });
 
   // Set default provider when providers are loaded
@@ -148,6 +151,8 @@ function AppContent() {
       provider: defaultProvider?.id || "",
       systemPrompt: "You are a helpful assistant.",
       features: { ...DEFAULT_FEATURES },
+      mcpServers: [],
+      skills: [],
     });
     setShowCreate(false);
   };
@@ -264,6 +269,8 @@ function AppContent() {
           {route === "tasks" && <TasksPage />}
 
           {route === "mcp" && <McpPage />}
+
+          {route === "skills" && <SkillsPage />}
 
           {route === "telemetry" && <TelemetryPage />}
 

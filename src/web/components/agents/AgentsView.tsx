@@ -90,7 +90,7 @@ export function AgentsView({
         ) : filteredAgents.length === 0 ? (
           <EmptyState onNewAgent={onNewAgent} canCreateAgent={canCreateAgent} hasProjectFilter={currentProjectId !== null} />
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 auto-rows-fr">
             {filteredAgents.map((agent) => (
               <AgentCard
                 key={agent.id}

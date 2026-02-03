@@ -37,6 +37,7 @@ export interface Agent {
   port: number | null;
   features: AgentFeatures;
   mcp_servers: string[]; // Array of MCP server IDs
+  skills: string[]; // Array of Skill IDs
   project_id: string | null; // Optional project grouping
   api_key_encrypted: string | null; // Encrypted API key for agent authentication
   created_at: string;
@@ -71,6 +72,7 @@ export interface AgentRow {
   port: number | null;
   features: string | null;
   mcp_servers: string | null;
+  skills: string | null;
   project_id: string | null;
   api_key_encrypted: string | null;
   created_at: string;
@@ -116,6 +118,41 @@ export interface McpServer {
   status: "stopped" | "running";
   source: string | null; // e.g., "composio", "smithery", null for local
   created_at: string;
+}
+
+// Skill types
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  content: string; // Full SKILL.md body (markdown)
+  version: string; // Semantic version (e.g., "1.0.0")
+  license: string | null;
+  compatibility: string | null;
+  metadata: Record<string, string>;
+  allowed_tools: string[];
+  source: "local" | "skillsmp" | "github" | "import";
+  source_url: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillRow {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  version: string;
+  license: string | null;
+  compatibility: string | null;
+  metadata: string | null;
+  allowed_tools: string | null;
+  source: string;
+  source_url: string | null;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface McpServerRow {
@@ -371,6 +408,41 @@ function runMigrations() {
         ALTER TABLE agents ADD COLUMN api_key_encrypted TEXT;
       `,
     },
+    {
+      name: "016_create_skills",
+      sql: `
+        CREATE TABLE IF NOT EXISTS skills (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL,
+          content TEXT NOT NULL,
+          license TEXT,
+          compatibility TEXT,
+          metadata TEXT DEFAULT '{}',
+          allowed_tools TEXT DEFAULT '[]',
+          source TEXT NOT NULL DEFAULT 'local',
+          source_url TEXT,
+          enabled INTEGER DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
+        CREATE INDEX IF NOT EXISTS idx_skills_source ON skills(source);
+        CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);
+      `,
+    },
+    {
+      name: "017_add_skills_to_agents",
+      sql: `
+        ALTER TABLE agents ADD COLUMN skills TEXT DEFAULT '[]';
+      `,
+    },
+    {
+      name: "018_add_skill_version",
+      sql: `
+        ALTER TABLE skills ADD COLUMN version TEXT DEFAULT '1.0.0';
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -383,9 +455,20 @@ function runMigrations() {
   // Run pending migrations
   for (const migration of migrations) {
     if (!applied.has(migration.name)) {
-      // Migration runs silently
-      db.run(migration.sql);
-      db.run("INSERT INTO migrations (name) VALUES (?)", [migration.name]);
+      try {
+        // Migration runs silently
+        db.run(migration.sql);
+        db.run("INSERT INTO migrations (name) VALUES (?)", [migration.name]);
+      } catch (err) {
+        // Log error but continue - some migrations may fail if partially applied
+        console.error(`[db] Migration ${migration.name} failed:`, err);
+        // Still mark as applied to avoid retrying broken migrations
+        try {
+          db.run("INSERT INTO migrations (name) VALUES (?)", [migration.name]);
+        } catch {
+          // Ignore if already marked
+        }
+      }
     }
   }
 
@@ -464,16 +547,17 @@ export const AgentDB = {
     const now = new Date().toISOString();
     const featuresJson = JSON.stringify(agent.features || DEFAULT_FEATURES);
     const mcpServersJson = JSON.stringify(agent.mcp_servers || []);
+    const skillsJson = JSON.stringify(agent.skills || []);
     // Assign port permanently at creation time
     const port = agent.port ?? this.getNextAvailablePort();
     // Generate and encrypt API key
     const apiKey = generateAgentApiKey(agent.id);
     const apiKeyEncrypted = encrypt(apiKey);
     const stmt = db.prepare(`
-      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, project_id, status, port, api_key_encrypted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, ?)
+      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, skills, project_id, status, port, api_key_encrypted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, ?)
     `);
-    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, agent.project_id || null, port, apiKeyEncrypted, now, now);
+    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, skillsJson, agent.project_id || null, port, apiKeyEncrypted, now, now);
     return this.findById(agent.id)!;
   },
 
@@ -535,6 +619,10 @@ export const AgentDB = {
       fields.push("mcp_servers = ?");
       values.push(JSON.stringify(updates.mcp_servers));
     }
+    if (updates.skills !== undefined) {
+      fields.push("skills = ?");
+      values.push(JSON.stringify(updates.skills));
+    }
     if (updates.project_id !== undefined) {
       fields.push("project_id = ?");
       values.push(updates.project_id);
@@ -558,6 +646,15 @@ export const AgentDB = {
       return rows.map(rowToAgent);
     }
     const rows = db.query("SELECT * FROM agents WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as AgentRow[];
+    return rows.map(rowToAgent);
+  },
+
+  // Find agents that have a specific skill
+  findBySkill(skillId: string): Agent[] {
+    // SQLite JSON query: check if skills array contains the skillId
+    const rows = db.query(
+      `SELECT * FROM agents WHERE skills LIKE ? ORDER BY created_at DESC`
+    ).all(`%"${skillId}"%`) as AgentRow[];
     return rows.map(rowToAgent);
   },
 
@@ -817,6 +914,14 @@ function rowToAgent(row: AgentRow): Agent {
       // Use empty array if parsing fails
     }
   }
+  let skills: string[] = [];
+  if (row.skills) {
+    try {
+      skills = JSON.parse(row.skills);
+    } catch {
+      // Use empty array if parsing fails
+    }
+  }
   return {
     id: row.id,
     name: row.name,
@@ -827,6 +932,7 @@ function rowToAgent(row: AgentRow): Agent {
     port: row.port,
     features,
     mcp_servers,
+    skills,
     project_id: row.project_id,
     api_key_encrypted: row.api_key_encrypted,
     created_at: row.created_at,
@@ -1618,6 +1724,193 @@ function rowToSession(row: SessionRow): Session {
     refresh_token_hash: row.refresh_token_hash,
     expires_at: row.expires_at,
     created_at: row.created_at,
+  };
+}
+
+// Skill operations
+export const SkillDB = {
+  // Create a new skill
+  create(skill: Omit<Skill, "id" | "created_at" | "updated_at">): Skill {
+    const id = generateId();
+    const now = new Date().toISOString();
+    const metadataJson = JSON.stringify(skill.metadata || {});
+    const allowedToolsJson = JSON.stringify(skill.allowed_tools || []);
+
+    db.run(
+      `INSERT INTO skills (id, name, description, content, version, license, compatibility, metadata, allowed_tools, source, source_url, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        skill.name,
+        skill.description,
+        skill.content,
+        skill.version || "1.0.0",
+        skill.license || null,
+        skill.compatibility || null,
+        metadataJson,
+        allowedToolsJson,
+        skill.source,
+        skill.source_url || null,
+        skill.enabled ? 1 : 0,
+        now,
+        now,
+      ]
+    );
+
+    return this.findById(id)!;
+  },
+
+  // Find skill by ID
+  findById(id: string): Skill | null {
+    const row = db.query("SELECT * FROM skills WHERE id = ?").get(id) as SkillRow | null;
+    return row ? rowToSkill(row) : null;
+  },
+
+  // Find skill by name
+  findByName(name: string): Skill | null {
+    const row = db.query("SELECT * FROM skills WHERE name = ?").get(name) as SkillRow | null;
+    return row ? rowToSkill(row) : null;
+  },
+
+  // Get all skills
+  findAll(): Skill[] {
+    const rows = db.query("SELECT * FROM skills ORDER BY name ASC").all() as SkillRow[];
+    return rows.map(rowToSkill);
+  },
+
+  // Get enabled skills
+  findEnabled(): Skill[] {
+    const rows = db.query("SELECT * FROM skills WHERE enabled = 1 ORDER BY name ASC").all() as SkillRow[];
+    return rows.map(rowToSkill);
+  },
+
+  // Update skill
+  update(id: string, updates: Partial<Omit<Skill, "id" | "created_at">>): Skill | null {
+    const skill = this.findById(id);
+    if (!skill) return null;
+
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.name !== undefined) {
+      fields.push("name = ?");
+      values.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      fields.push("description = ?");
+      values.push(updates.description);
+    }
+    if (updates.content !== undefined) {
+      fields.push("content = ?");
+      values.push(updates.content);
+    }
+    if (updates.version !== undefined) {
+      fields.push("version = ?");
+      values.push(updates.version);
+    }
+    if (updates.license !== undefined) {
+      fields.push("license = ?");
+      values.push(updates.license);
+    }
+    if (updates.compatibility !== undefined) {
+      fields.push("compatibility = ?");
+      values.push(updates.compatibility);
+    }
+    if (updates.metadata !== undefined) {
+      fields.push("metadata = ?");
+      values.push(JSON.stringify(updates.metadata));
+    }
+    if (updates.allowed_tools !== undefined) {
+      fields.push("allowed_tools = ?");
+      values.push(JSON.stringify(updates.allowed_tools));
+    }
+    if (updates.source !== undefined) {
+      fields.push("source = ?");
+      values.push(updates.source);
+    }
+    if (updates.source_url !== undefined) {
+      fields.push("source_url = ?");
+      values.push(updates.source_url);
+    }
+    if (updates.enabled !== undefined) {
+      fields.push("enabled = ?");
+      values.push(updates.enabled ? 1 : 0);
+    }
+
+    if (fields.length > 0) {
+      fields.push("updated_at = ?");
+      values.push(new Date().toISOString());
+      values.push(id);
+
+      db.run(`UPDATE skills SET ${fields.join(", ")} WHERE id = ?`, values);
+    }
+
+    return this.findById(id);
+  },
+
+  // Toggle skill enabled/disabled
+  setEnabled(id: string, enabled: boolean): Skill | null {
+    return this.update(id, { enabled });
+  },
+
+  // Delete skill
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM skills WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+
+  // Count skills
+  count(): number {
+    const row = db.query("SELECT COUNT(*) as count FROM skills").get() as { count: number };
+    return row.count;
+  },
+
+  // Count enabled skills
+  countEnabled(): number {
+    const row = db.query("SELECT COUNT(*) as count FROM skills WHERE enabled = 1").get() as { count: number };
+    return row.count;
+  },
+
+  // Check if skill with name exists
+  exists(name: string): boolean {
+    const row = db.query("SELECT COUNT(*) as count FROM skills WHERE name = ?").get(name) as { count: number };
+    return row.count > 0;
+  },
+};
+
+// Helper to convert DB row to Skill type
+function rowToSkill(row: SkillRow): Skill {
+  let metadata: Record<string, string> = {};
+  if (row.metadata) {
+    try {
+      metadata = JSON.parse(row.metadata);
+    } catch {
+      // Use empty object if parsing fails
+    }
+  }
+  let allowed_tools: string[] = [];
+  if (row.allowed_tools) {
+    try {
+      allowed_tools = JSON.parse(row.allowed_tools);
+    } catch {
+      // Use empty array if parsing fails
+    }
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    content: row.content,
+    version: row.version || "1.0.0",
+    license: row.license,
+    compatibility: row.compatibility,
+    metadata,
+    allowed_tools,
+    source: row.source as Skill["source"],
+    source_url: row.source_url,
+    enabled: row.enabled === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 

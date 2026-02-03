@@ -1,5 +1,5 @@
 import React from "react";
-import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon } from "../common/Icons";
+import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, SkillsIcon } from "../common/Icons";
 import { useAgentActivity, useProjects } from "../../context";
 import type { Agent, AgentFeatures } from "../../types";
 
@@ -25,6 +25,7 @@ const FEATURE_ICONS: { key: keyof AgentFeatures; icon: React.ComponentType<{ cla
 export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: AgentCardProps) {
   const enabledFeatures = FEATURE_ICONS.filter(f => agent.features?.[f.key]);
   const mcpServers = agent.mcpServerDetails || [];
+  const skills = agent.skillDetails || [];
   const { isActive, type } = useAgentActivity(agent.id);
   const { projects } = useProjects();
   const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
@@ -32,7 +33,7 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
   return (
     <div
       onClick={onSelect}
-      className={`bg-[#111] rounded p-5 border transition cursor-pointer ${
+      className={`bg-[#111] rounded p-5 border transition cursor-pointer flex flex-col h-full ${
         selected
           ? 'border-[#f97316]'
           : 'border-[#1a1a1a] hover:border-[#333]'
@@ -90,13 +91,33 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
         </div>
       )}
 
-      <p className="text-sm text-[#666] line-clamp-2 mb-4">
+      {/* Skills */}
+      {skills.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {skills.map((skill) => (
+            <span
+              key={skill.id}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+                skill.enabled
+                  ? "bg-purple-500/10 text-purple-400"
+                  : "bg-[#222] text-[#666]"
+              }`}
+              title={`Skill: ${skill.name} v${skill.version}`}
+            >
+              <SkillsIcon className="w-3 h-3" />
+              {skill.name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <p className="text-sm text-[#666] line-clamp-2 mb-4 flex-1">
         {agent.systemPrompt}
       </p>
 
       <button
         onClick={onToggle}
-        className={`w-full px-3 py-1.5 rounded text-sm font-medium transition ${
+        className={`w-full px-3 py-1.5 rounded text-sm font-medium transition mt-auto ${
           agent.status === "running"
             ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
             : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"

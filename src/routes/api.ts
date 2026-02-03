@@ -3,7 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync } from "fs";
 import { agentProcesses, agentsStarting, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
-import { AgentDB, McpServerDB, TelemetryDB, UserDB, ProjectDB, generateId, type Agent, type AgentFeatures, type McpServer, type Project } from "../db";
+import { AgentDB, McpServerDB, TelemetryDB, UserDB, ProjectDB, SkillDB, generateId, type Agent, type AgentFeatures, type McpServer, type Project, type Skill } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import { createUser, hashPassword, validatePassword } from "../auth";
 import type { AuthContext } from "../auth/middleware";
@@ -28,6 +28,7 @@ import {
 import { openApiSpec } from "../openapi";
 import { getProvider, getProviderIds, registerProvider } from "../integrations";
 import { ComposioProvider } from "../integrations/composio";
+import { SkillsmpProvider, parseSkillMd, type SkillsmpSkill } from "../integrations/skillsmp";
 
 // Register integration providers
 registerProvider(ComposioProvider);
@@ -93,6 +94,34 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
 
   // Get MCP server details for the agent's selected servers
   const mcpServers: Array<{ name: string; type: "http"; url: string; headers: Record<string, string>; enabled: boolean }> = [];
+
+  // Get skill definitions for the agent's selected skills
+  const skillDefinitions: Array<{
+    name: string;
+    description: string;
+    instructions: string;
+    icon: string;
+    category: string;
+    tags: string[];
+    tools: string[];
+    enabled: boolean;
+  }> = [];
+
+  for (const skillId of agent.skills || []) {
+    const skill = SkillDB.findById(skillId);
+    if (!skill || !skill.enabled) continue;
+
+    skillDefinitions.push({
+      name: skill.name,
+      description: skill.description,
+      instructions: skill.content,
+      icon: "",
+      category: "",
+      tags: [],
+      tools: skill.allowed_tools || [],
+      enabled: true,
+    });
+  }
 
   for (const id of agent.mcp_servers || []) {
     const server = McpServerDB.findById(id);
@@ -214,6 +243,10 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
       batch_size: 1,
       flush_interval: 1, // Every 1 second
       categories: [], // Empty = all categories
+    },
+    skills: {
+      enabled: skillDefinitions.length > 0,
+      definitions: skillDefinitions,
     },
   };
 }
@@ -411,6 +444,18 @@ function toApiAgent(agent: Agent) {
       port: s.port,
     }));
 
+  // Look up skill details
+  const skillDetails = (agent.skills || [])
+    .map(id => SkillDB.findById(id))
+    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .map(s => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      version: s.version,
+      enabled: s.enabled,
+    }));
+
   return {
     id: agent.id,
     name: agent.name,
@@ -422,6 +467,8 @@ function toApiAgent(agent: Agent) {
     features: agent.features,
     mcpServers: agent.mcp_servers, // Keep IDs for backwards compatibility
     mcpServerDetails, // Include full details
+    skills: agent.skills, // Skill IDs
+    skillDetails, // Include full details
     projectId: agent.project_id,
     createdAt: agent.created_at,
     updatedAt: agent.updated_at,
@@ -487,6 +534,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
         system_prompt: systemPrompt || "You are a helpful assistant.",
         features: features || DEFAULT_FEATURES,
         mcp_servers: body.mcpServers || [],
+        skills: body.skills || [],
         project_id: projectId || null,
       });
 
@@ -524,6 +572,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       if (body.systemPrompt !== undefined) updates.system_prompt = body.systemPrompt;
       if (body.features !== undefined) updates.features = body.features;
       if (body.mcpServers !== undefined) updates.mcp_servers = body.mcpServers;
+      if (body.skills !== undefined) updates.skills = body.skills;
       if (body.projectId !== undefined) updates.project_id = body.projectId;
 
       const updated = AgentDB.update(agentMatch[1], updates);
@@ -2418,6 +2467,264 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       console.error(`Failed to call MCP tool: ${err}`);
       return json({ error: `Failed to call tool: ${err}` }, 500);
     }
+  }
+
+  // ============ Skills Endpoints ============
+
+  // GET /api/skills - List all skills
+  if (path === "/api/skills" && method === "GET") {
+    const skills = SkillDB.findAll();
+    return json({ skills });
+  }
+
+  // POST /api/skills - Create a new skill
+  if (path === "/api/skills" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { name, description, content, version, license, compatibility, metadata, allowed_tools, source, source_url, enabled } = body;
+
+      if (!name || !description || !content) {
+        return json({ error: "name, description, and content are required" }, 400);
+      }
+
+      // Validate name format (lowercase, hyphens only)
+      if (!/^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$/.test(name)) {
+        return json({ error: "name must be lowercase letters, numbers, and hyphens only" }, 400);
+      }
+
+      if (SkillDB.exists(name)) {
+        return json({ error: "A skill with this name already exists" }, 400);
+      }
+
+      const skill = SkillDB.create({
+        name,
+        description,
+        content,
+        version: version || "1.0.0",
+        license: license || null,
+        compatibility: compatibility || null,
+        metadata: metadata || {},
+        allowed_tools: allowed_tools || [],
+        source: source || "local",
+        source_url: source_url || null,
+        enabled: enabled !== false,
+      });
+
+      return json({ skill }, 201);
+    } catch (err) {
+      console.error("Failed to create skill:", err);
+      return json({ error: `Failed to create skill: ${err}` }, 500);
+    }
+  }
+
+  // GET /api/skills/:id - Get a skill
+  const skillMatch = path.match(/^\/api\/skills\/([^/]+)$/);
+  if (skillMatch && method === "GET") {
+    const skill = SkillDB.findById(skillMatch[1]);
+    if (!skill) {
+      return json({ error: "Skill not found" }, 404);
+    }
+    return json({ skill });
+  }
+
+  // PUT /api/skills/:id - Update a skill
+  if (skillMatch && method === "PUT") {
+    const skill = SkillDB.findById(skillMatch[1]);
+    if (!skill) {
+      return json({ error: "Skill not found" }, 404);
+    }
+
+    try {
+      const body = await req.json();
+      const updates: Partial<Skill> = {};
+
+      if (body.name !== undefined) updates.name = body.name;
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.content !== undefined) updates.content = body.content;
+      if (body.license !== undefined) updates.license = body.license;
+      if (body.compatibility !== undefined) updates.compatibility = body.compatibility;
+      if (body.metadata !== undefined) updates.metadata = body.metadata;
+      if (body.allowed_tools !== undefined) updates.allowed_tools = body.allowed_tools;
+      if (body.enabled !== undefined) updates.enabled = body.enabled;
+
+      // Auto-increment version if content changed
+      if (body.content !== undefined && body.content !== skill.content) {
+        const [major, minor, patch] = (skill.version || "1.0.0").split(".").map(Number);
+        updates.version = `${major}.${minor}.${patch + 1}`;
+      } else if (body.version !== undefined) {
+        updates.version = body.version;
+      }
+
+      const updated = SkillDB.update(skillMatch[1], updates);
+
+      // Push updated skill to all running agents that have it
+      const agentsWithSkill = AgentDB.findBySkill(skillMatch[1]);
+      const runningAgents = agentsWithSkill.filter(a => a.status === "running" && a.port);
+
+      for (const agent of runningAgents) {
+        try {
+          const providerKey = ProviderKeys.getDecrypted(agent.provider);
+          if (providerKey) {
+            const config = buildAgentConfig(agent, providerKey);
+            await pushConfigToAgent(agent.id, agent.port!, config);
+            console.log(`Pushed skill update to agent ${agent.name}`);
+          }
+        } catch (err) {
+          console.error(`Failed to push skill update to agent ${agent.name}:`, err);
+        }
+      }
+
+      return json({ skill: updated, agents_updated: runningAgents.length });
+    } catch (err) {
+      console.error("Failed to update skill:", err);
+      return json({ error: `Failed to update skill: ${err}` }, 500);
+    }
+  }
+
+  // DELETE /api/skills/:id - Delete a skill
+  if (skillMatch && method === "DELETE") {
+    const skill = SkillDB.findById(skillMatch[1]);
+    if (!skill) {
+      return json({ error: "Skill not found" }, 404);
+    }
+
+    SkillDB.delete(skillMatch[1]);
+    return json({ success: true });
+  }
+
+  // POST /api/skills/:id/toggle - Toggle skill enabled/disabled
+  const skillToggleMatch = path.match(/^\/api\/skills\/([^/]+)\/toggle$/);
+  if (skillToggleMatch && method === "POST") {
+    const skill = SkillDB.findById(skillToggleMatch[1]);
+    if (!skill) {
+      return json({ error: "Skill not found" }, 404);
+    }
+
+    const updated = SkillDB.setEnabled(skillToggleMatch[1], !skill.enabled);
+    return json({ skill: updated });
+  }
+
+  // POST /api/skills/import - Import a skill from SKILL.md content
+  if (path === "/api/skills/import" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { content, source, source_url } = body;
+
+      if (!content) {
+        return json({ error: "content is required" }, 400);
+      }
+
+      const parsed = parseSkillMd(content);
+      if (!parsed) {
+        return json({ error: "Invalid SKILL.md format. Must have YAML frontmatter with name and description." }, 400);
+      }
+
+      if (SkillDB.exists(parsed.name)) {
+        return json({ error: `A skill named "${parsed.name}" already exists` }, 400);
+      }
+
+      const skill = SkillDB.create({
+        name: parsed.name,
+        description: parsed.description,
+        content: content, // Store full content including frontmatter
+        license: parsed.license || null,
+        compatibility: parsed.compatibility || null,
+        metadata: parsed.metadata || {},
+        allowed_tools: parsed.allowedTools || [],
+        source: source || "import",
+        source_url: source_url || null,
+        enabled: true,
+      });
+
+      return json({ skill }, 201);
+    } catch (err) {
+      console.error("Failed to import skill:", err);
+      return json({ error: `Failed to import skill: ${err}` }, 500);
+    }
+  }
+
+  // GET /api/skills/:id/export - Export a skill as SKILL.md
+  const skillExportMatch = path.match(/^\/api\/skills\/([^/]+)\/export$/);
+  if (skillExportMatch && method === "GET") {
+    const skill = SkillDB.findById(skillExportMatch[1]);
+    if (!skill) {
+      return json({ error: "Skill not found" }, 404);
+    }
+
+    // Return the raw content
+    return new Response(skill.content, {
+      headers: {
+        "Content-Type": "text/markdown",
+        "Content-Disposition": `attachment; filename="${skill.name}-SKILL.md"`,
+      },
+    });
+  }
+
+  // ============ SkillsMP Marketplace Endpoints ============
+
+  // GET /api/skills/marketplace/search - Search skills marketplace
+  if (path === "/api/skills/marketplace/search" && method === "GET") {
+    const url = new URL(req.url);
+    const query = url.searchParams.get("q") || "";
+    const page = parseInt(url.searchParams.get("page") || "1", 10);
+
+    // Get SkillsMP API key if configured
+    const skillsmpKey = ProviderKeys.getDecrypted("skillsmp");
+
+    const result = await SkillsmpProvider.search(skillsmpKey || "", query, page);
+    return json(result);
+  }
+
+  // GET /api/skills/marketplace/featured - Get featured skills
+  if (path === "/api/skills/marketplace/featured" && method === "GET") {
+    const skillsmpKey = ProviderKeys.getDecrypted("skillsmp");
+    const skills = await SkillsmpProvider.getFeatured(skillsmpKey || "");
+    return json({ skills });
+  }
+
+  // GET /api/skills/marketplace/:id - Get skill details from marketplace
+  const marketplaceSkillMatch = path.match(/^\/api\/skills\/marketplace\/([^/]+)$/);
+  if (marketplaceSkillMatch && method === "GET") {
+    const skillsmpKey = ProviderKeys.getDecrypted("skillsmp");
+    const skill = await SkillsmpProvider.getSkill(skillsmpKey || "", marketplaceSkillMatch[1]);
+    if (!skill) {
+      return json({ error: "Skill not found in marketplace" }, 404);
+    }
+    return json({ skill });
+  }
+
+  // POST /api/skills/marketplace/:id/install - Install a skill from marketplace
+  const marketplaceInstallMatch = path.match(/^\/api\/skills\/marketplace\/([^/]+)\/install$/);
+  if (marketplaceInstallMatch && method === "POST") {
+    const skillsmpKey = ProviderKeys.getDecrypted("skillsmp");
+    const marketplaceSkill = await SkillsmpProvider.getSkill(skillsmpKey || "", marketplaceInstallMatch[1]);
+
+    if (!marketplaceSkill) {
+      return json({ error: "Skill not found in marketplace" }, 404);
+    }
+
+    if (SkillDB.exists(marketplaceSkill.name)) {
+      return json({ error: `A skill named "${marketplaceSkill.name}" already exists` }, 400);
+    }
+
+    const skill = SkillDB.create({
+      name: marketplaceSkill.name,
+      description: marketplaceSkill.description,
+      content: marketplaceSkill.content,
+      license: marketplaceSkill.license,
+      compatibility: marketplaceSkill.compatibility,
+      metadata: {
+        author: marketplaceSkill.author,
+        version: marketplaceSkill.version,
+        ...(marketplaceSkill.repository ? { repository: marketplaceSkill.repository } : {}),
+      },
+      allowed_tools: [],
+      source: "skillsmp",
+      source_url: marketplaceSkill.repository || `https://skillsmp.com/skills/${marketplaceSkill.id}`,
+      enabled: true,
+    });
+
+    return json({ skill }, 201);
   }
 
   // ============ Telemetry Endpoints ============

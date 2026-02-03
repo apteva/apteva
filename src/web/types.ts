@@ -30,6 +30,14 @@ export interface McpServerSummary {
   port: number | null;
 }
 
+export interface SkillSummary {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  enabled: boolean;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -41,6 +49,8 @@ export interface Agent {
   features: AgentFeatures;
   mcpServers: string[]; // Array of MCP server IDs
   mcpServerDetails?: McpServerSummary[]; // Full details included from API
+  skills: string[]; // Array of Skill IDs
+  skillDetails?: SkillSummary[]; // Full details included from API
   projectId: string | null; // Optional project grouping
   createdAt: string;
 }
@@ -99,7 +109,7 @@ export interface OnboardingStatus {
   has_any_keys: boolean;
 }
 
-export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "telemetry" | "settings" | "api";
+export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "skills" | "telemetry" | "settings" | "api";
 
 export interface Task {
   id: string;
@@ -142,5 +152,6 @@ export interface NewAgentForm {
   systemPrompt: string;
   features: AgentFeatures;
   mcpServers: string[];
+  skills: string[];
   projectId?: string | null;
 }

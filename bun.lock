@@ -34,7 +34,7 @@
 
     "@apteva/agent-linux-arm64": ["@apteva/agent-linux-arm64@1.33.30", "", { "os": "linux", "cpu": "arm64" }, "sha512-WY8UFHdDWiYulK4PrvA7FEDvgh9zR8ZrwdZJ9nh3UTdqtzXl4r5iLtN41OOACQuAYjEAW66TbiH3hX1UizvKQg=="],
 
-    "@apteva/agent-linux-x64": ["@apteva/agent-linux-x64@1.33.30", "", { "os": "linux", "cpu": "x64" }, "sha512-Y/ejC5JTm0kM4wpZMoSEPL89d0NAmYvev9ashGBhOokPd/t61Tuo7zIS7bWLP6SaTq+e19WA1qQjIt7xv/P7nQ=="],
+    "@apteva/agent-linux-x64": ["@apteva/agent-linux-x64@1.33.53", "", { "os": "linux", "cpu": "x64" }, "sha512-ewATD/Lg5NpfBh3EutIDAkAKAVMJe+U5KxiQoGBnNvUiKFvuqMdmBCCK+G915oGa80DJX2kq7buSxZ1a/77ZSg=="],
 
     "@apteva/agent-win32-x64": ["@apteva/agent-win32-x64@1.33.30", "", { "os": "win32", "cpu": "x64" }, "sha512-5rl3eWcaw85lVFgDYOkQRRbAKwfkp9k2YBcrQsjaqOCD++Pk20TBNcpKGZ89qxwqHA3RbnFCFT3wGUt6XdyIZg=="],
 

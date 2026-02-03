@@ -128,6 +128,17 @@ export const PROVIDERS = {
     description: "MCP server registry and hosting",
     models: [],
   },
+  // Skills Integrations
+  skillsmp: {
+    id: "skillsmp",
+    name: "SkillsMP",
+    displayName: "SkillsMP",
+    type: "integration" as const,
+    envVar: "SKILLSMP_API_KEY",
+    docsUrl: "https://skillsmp.com/settings",
+    description: "Agent skills marketplace (optional - public registry available without key)",
+    models: [],
+  },
 } as const;
 
 export type ProviderId = keyof typeof PROVIDERS;
