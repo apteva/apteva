@@ -142,6 +142,10 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
       pattern: /^[a-zA-Z0-9_-]+$/,
       example: "...",
     },
+    agentdojo: {
+      pattern: /^[a-zA-Z0-9_-]+$/,
+      example: "adj_...",
+    },
   };
 
   const providerPattern = patterns[provider];

@@ -128,6 +128,16 @@ export const PROVIDERS = {
     description: "MCP server registry and hosting",
     models: [],
   },
+  agentdojo: {
+    id: "agentdojo",
+    name: "AgentDojo",
+    displayName: "AgentDojo",
+    type: "integration" as const,
+    envVar: "AGENTDOJO_API_KEY",
+    docsUrl: "https://agentdojo.com/settings",
+    description: "Hosted MCP tools and agent capabilities",
+    models: [],
+  },
   // Skills Integrations
   skillsmp: {
     id: "skillsmp",

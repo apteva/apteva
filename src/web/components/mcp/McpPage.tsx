@@ -832,6 +832,7 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
   const [subTab, setSubTab] = useState<"configs" | "connect">("configs");
   const [composioConnected, setComposioConnected] = useState(false);
   const [smitheryConnected, setSmitheryConnected] = useState(false);
+  const [agentDojoConnected, setAgentDojoConnected] = useState(false);
   const [composioConfigs, setComposioConfigs] = useState<ComposioConfig[]>([]);
   const [addedServers, setAddedServers] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -866,8 +867,10 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
 
       const composio = providers.find((p: any) => p.id === "composio");
       const smithery = providers.find((p: any) => p.id === "smithery");
+      const agentdojo = providers.find((p: any) => p.id === "agentdojo");
       setComposioConnected(composio?.hasKey || false);
       setSmitheryConnected(smithery?.hasKey || false);
+      setAgentDojoConnected(agentdojo?.hasKey || false);
 
       if (composio?.hasKey) {
         fetchComposioConfigs();
@@ -922,14 +925,14 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
     return <div className="text-center py-8 text-[#666]">Loading...</div>;
   }
 
-  const hasAnyConnection = composioConnected || smitheryConnected;
+  const hasAnyConnection = composioConnected || smitheryConnected || agentDojoConnected;
 
   if (!hasAnyConnection) {
     return (
       <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
         <p className="text-[#888] mb-2">No hosted MCP services connected</p>
         <p className="text-sm text-[#666] mb-4">
-          Connect Composio or Smithery in Settings to access cloud-based MCP servers.
+          Connect Composio, Smithery, or AgentDojo in Settings to access cloud-based MCP servers.
         </p>
         <a
           href="/settings"
@@ -1121,6 +1124,31 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
           <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
             <p className="text-sm text-[#666]">
               Smithery servers can be added from the Registry tab.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* AgentDojo - hosted MCP tools */}
+      {agentDojoConnected && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <h2 className="font-medium">AgentDojo</h2>
+              <span className="text-xs text-green-400">Connected</span>
+            </div>
+            <a
+              href="https://agentdojo.com/tools"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-[#666] hover:text-[#f97316] transition"
+            >
+              Browse Tools →
+            </a>
+          </div>
+          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
+            <p className="text-sm text-[#666]">
+              AgentDojo integration coming soon. Browse available tools on their platform.
             </p>
           </div>
         </div>
