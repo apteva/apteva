@@ -28,6 +28,7 @@ export interface McpServerSummary {
   type: string;
   status: "stopped" | "running";
   port: number | null;
+  url?: string | null; // For HTTP servers
 }
 
 export interface SkillSummary {

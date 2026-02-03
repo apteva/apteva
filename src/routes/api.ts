@@ -514,6 +514,7 @@ function toApiAgent(agent: Agent) {
       type: s.type,
       status: s.status,
       port: s.port,
+      url: s.url, // Include URL for HTTP servers
     }));
 
   // Look up skill details
