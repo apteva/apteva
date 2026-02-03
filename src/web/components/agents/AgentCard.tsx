@@ -74,20 +74,24 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
       {/* MCP Servers */}
       {mcpServers.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
-          {mcpServers.map((server) => (
-            <span
-              key={server.id}
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
-                server.status === "running"
-                  ? "bg-green-500/10 text-green-400"
-                  : "bg-[#222] text-[#666]"
-              }`}
-              title={`MCP: ${server.name} (${server.status})`}
-            >
-              <McpIcon className="w-3 h-3" />
-              {server.name}
-            </span>
-          ))}
+          {mcpServers.map((server) => {
+            // HTTP/remote servers are always available
+            const isAvailable = (server.type === "http" && server.url) || server.status === "running";
+            return (
+              <span
+                key={server.id}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+                  isAvailable
+                    ? "bg-green-500/10 text-green-400"
+                    : "bg-[#222] text-[#666]"
+                }`}
+                title={`MCP: ${server.name} (${isAvailable ? "available" : server.status})`}
+              >
+                <McpIcon className="w-3 h-3" />
+                {server.name}
+              </span>
+            );
+          })}
         </div>
       )}
 
