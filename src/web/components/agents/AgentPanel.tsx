@@ -4,7 +4,8 @@ import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, Re
 import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
 import { useAuth } from "../../context";
-import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary } from "../../types";
+import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, AgentMode, MultiAgentConfig } from "../../types";
+import { getMultiAgentConfig } from "../../types";
 
 type Tab = "chat" | "threads" | "tasks" | "memory" | "files" | "settings";
 
@@ -995,10 +996,63 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   };
 
   const toggleFeature = (key: keyof AgentFeatures) => {
-    setForm(prev => ({
-      ...prev,
-      features: { ...prev.features, [key]: !prev.features[key] },
-    }));
+    if (key === "agents") {
+      // Special handling for agents feature - convert to MultiAgentConfig
+      const current = prev => {
+        const agentConfig = getMultiAgentConfig(prev.features, agent.projectId);
+        return agentConfig.enabled;
+      };
+      setForm(prev => {
+        const isEnabled = typeof prev.features.agents === "boolean"
+          ? prev.features.agents
+          : (prev.features.agents as MultiAgentConfig)?.enabled ?? false;
+        if (isEnabled) {
+          // Turning off - set to false
+          return { ...prev, features: { ...prev.features, agents: false } };
+        } else {
+          // Turning on - set to config with defaults
+          return {
+            ...prev,
+            features: {
+              ...prev.features,
+              agents: { enabled: true, mode: "worker" as AgentMode, group: agent.projectId || undefined },
+            },
+          };
+        }
+      });
+    } else {
+      setForm(prev => ({
+        ...prev,
+        features: { ...prev.features, [key]: !prev.features[key] },
+      }));
+    }
+  };
+
+  // Set multi-agent mode
+  const setAgentMode = (mode: AgentMode) => {
+    setForm(prev => {
+      const currentConfig = getMultiAgentConfig(prev.features, agent.projectId);
+      return {
+        ...prev,
+        features: {
+          ...prev.features,
+          agents: { ...currentConfig, enabled: true, mode },
+        },
+      };
+    });
+  };
+
+  // Helper to check if agents feature is enabled
+  const isAgentsEnabled = () => {
+    const agentsVal = form.features.agents;
+    if (typeof agentsVal === "boolean") return agentsVal;
+    return (agentsVal as MultiAgentConfig)?.enabled ?? false;
+  };
+
+  // Get current agent mode
+  const getAgentMode = (): AgentMode => {
+    const config = getMultiAgentConfig(form.features, agent.projectId);
+    return config.mode || "worker";
   };
 
   const toggleMcpServer = (serverId: string) => {
@@ -1079,28 +1133,73 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
 
         <FormField label="Features">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {FEATURE_CONFIG.map(({ key, label, description, icon: Icon }) => (
+            {FEATURE_CONFIG.map(({ key, label, description, icon: Icon }) => {
+              // For agents feature, check the enabled property of the config
+              const isEnabled = key === "agents" ? isAgentsEnabled() : !!form.features[key];
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => toggleFeature(key)}
+                  className={`flex items-center gap-3 p-3 rounded border text-left transition ${
+                    isEnabled
+                      ? "border-[#f97316] bg-[#f97316]/10"
+                      : "border-[#222] hover:border-[#333]"
+                  }`}
+                >
+                  <Icon className={`w-5 h-5 flex-shrink-0 ${isEnabled ? "text-[#f97316]" : "text-[#666]"}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-medium ${isEnabled ? "text-[#f97316]" : ""}`}>
+                      {label}
+                    </div>
+                    <div className="text-xs text-[#666]">{description}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </FormField>
+
+        {/* Multi-Agent Mode Selection - shown when agents is enabled */}
+        {isAgentsEnabled() && (
+          <FormField label="Multi-Agent Mode">
+            <div className="flex gap-2">
               <button
-                key={key}
                 type="button"
-                onClick={() => toggleFeature(key)}
-                className={`flex items-center gap-3 p-3 rounded border text-left transition ${
-                  form.features[key]
+                onClick={() => setAgentMode("coordinator")}
+                className={`flex-1 p-3 rounded border text-left transition ${
+                  getAgentMode() === "coordinator"
                     ? "border-[#f97316] bg-[#f97316]/10"
                     : "border-[#222] hover:border-[#333]"
                 }`}
               >
-                <Icon className={`w-5 h-5 flex-shrink-0 ${form.features[key] ? "text-[#f97316]" : "text-[#666]"}`} />
-                <div className="flex-1 min-w-0">
-                  <div className={`text-sm font-medium ${form.features[key] ? "text-[#f97316]" : ""}`}>
-                    {label}
-                  </div>
-                  <div className="text-xs text-[#666]">{description}</div>
+                <div className={`text-sm font-medium ${getAgentMode() === "coordinator" ? "text-[#f97316]" : ""}`}>
+                  Coordinator
                 </div>
+                <div className="text-xs text-[#666]">Orchestrates and delegates to other agents</div>
               </button>
-            ))}
-          </div>
-        </FormField>
+              <button
+                type="button"
+                onClick={() => setAgentMode("worker")}
+                className={`flex-1 p-3 rounded border text-left transition ${
+                  getAgentMode() === "worker"
+                    ? "border-[#f97316] bg-[#f97316]/10"
+                    : "border-[#222] hover:border-[#333]"
+                }`}
+              >
+                <div className={`text-sm font-medium ${getAgentMode() === "worker" ? "text-[#f97316]" : ""}`}>
+                  Worker
+                </div>
+                <div className="text-xs text-[#666]">Receives tasks from coordinators</div>
+              </button>
+            </div>
+            {agent.projectId && (
+              <p className="text-xs text-[#555] mt-2">
+                Group: Using project as agent group
+              </p>
+            )}
+          </FormField>
+        )}
 
         {/* MCP Server Selection - shown when MCP is enabled */}
         {form.features.mcp && (

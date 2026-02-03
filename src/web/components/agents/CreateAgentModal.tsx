@@ -3,7 +3,8 @@ import { Modal } from "../common/Modal";
 import { Select } from "../common/Select";
 import { MemoryIcon, TasksIcon, FilesIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, MultiAgentIcon } from "../common/Icons";
 import { useProjects } from "../../context";
-import type { Provider, NewAgentForm, AgentFeatures } from "../../types";
+import type { Provider, NewAgentForm, AgentFeatures, AgentMode, MultiAgentConfig } from "../../types";
+import { getMultiAgentConfig } from "../../types";
 
 interface CreateAgentModalProps {
   form: NewAgentForm;
@@ -64,11 +65,56 @@ export function CreateAgentModal({
   }, [currentProjectId]);
 
   const toggleFeature = (key: keyof AgentFeatures) => {
+    if (key === "agents") {
+      // Special handling for agents feature
+      const isEnabled = typeof form.features.agents === "boolean"
+        ? form.features.agents
+        : (form.features.agents as MultiAgentConfig)?.enabled ?? false;
+      if (isEnabled) {
+        // Turning off
+        onFormChange({ ...form, features: { ...form.features, agents: false } });
+      } else {
+        // Turning on with defaults - use project as group
+        onFormChange({
+          ...form,
+          features: {
+            ...form.features,
+            agents: { enabled: true, mode: "worker" as AgentMode, group: form.projectId || undefined },
+          },
+        });
+      }
+    } else {
+      onFormChange({
+        ...form,
+        features: {
+          ...form.features,
+          [key]: !form.features[key],
+        },
+      });
+    }
+  };
+
+  // Helper to check if agents feature is enabled
+  const isAgentsEnabled = () => {
+    const agentsVal = form.features.agents;
+    if (typeof agentsVal === "boolean") return agentsVal;
+    return (agentsVal as MultiAgentConfig)?.enabled ?? false;
+  };
+
+  // Get current agent mode
+  const getAgentMode = (): AgentMode => {
+    const config = getMultiAgentConfig(form.features, form.projectId);
+    return config.mode || "worker";
+  };
+
+  // Set multi-agent mode
+  const setAgentMode = (mode: AgentMode) => {
+    const currentConfig = getMultiAgentConfig(form.features, form.projectId);
     onFormChange({
       ...form,
       features: {
         ...form.features,
-        [key]: !form.features[key],
+        agents: { ...currentConfig, enabled: true, mode },
       },
     });
   };
@@ -131,28 +177,72 @@ export function CreateAgentModal({
 
             <FormField label="Features">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {FEATURE_CONFIG.map(({ key, label, description, icon: Icon }) => (
+                {FEATURE_CONFIG.map(({ key, label, description, icon: Icon }) => {
+                  const isEnabled = key === "agents" ? isAgentsEnabled() : !!form.features[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => toggleFeature(key)}
+                      className={`flex items-center gap-3 p-3 rounded border text-left transition ${
+                        isEnabled
+                          ? "border-[#f97316] bg-[#f97316]/10"
+                          : "border-[#222] hover:border-[#333]"
+                      }`}
+                    >
+                      <Icon className={`w-5 h-5 flex-shrink-0 ${isEnabled ? "text-[#f97316]" : "text-[#666]"}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-sm font-medium ${isEnabled ? "text-[#f97316]" : ""}`}>
+                          {label}
+                        </div>
+                        <div className="text-xs text-[#666]">{description}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </FormField>
+
+            {/* Multi-Agent Mode Selection */}
+            {isAgentsEnabled() && (
+              <FormField label="Multi-Agent Mode">
+                <div className="flex gap-2">
                   <button
-                    key={key}
                     type="button"
-                    onClick={() => toggleFeature(key)}
-                    className={`flex items-center gap-3 p-3 rounded border text-left transition ${
-                      form.features[key]
+                    onClick={() => setAgentMode("coordinator")}
+                    className={`flex-1 p-3 rounded border text-left transition ${
+                      getAgentMode() === "coordinator"
                         ? "border-[#f97316] bg-[#f97316]/10"
                         : "border-[#222] hover:border-[#333]"
                     }`}
                   >
-                    <Icon className={`w-5 h-5 flex-shrink-0 ${form.features[key] ? "text-[#f97316]" : "text-[#666]"}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-sm font-medium ${form.features[key] ? "text-[#f97316]" : ""}`}>
-                        {label}
-                      </div>
-                      <div className="text-xs text-[#666]">{description}</div>
+                    <div className={`text-sm font-medium ${getAgentMode() === "coordinator" ? "text-[#f97316]" : ""}`}>
+                      Coordinator
                     </div>
+                    <div className="text-xs text-[#666]">Orchestrates and delegates</div>
                   </button>
-                ))}
-              </div>
-            </FormField>
+                  <button
+                    type="button"
+                    onClick={() => setAgentMode("worker")}
+                    className={`flex-1 p-3 rounded border text-left transition ${
+                      getAgentMode() === "worker"
+                        ? "border-[#f97316] bg-[#f97316]/10"
+                        : "border-[#222] hover:border-[#333]"
+                    }`}
+                  >
+                    <div className={`text-sm font-medium ${getAgentMode() === "worker" ? "text-[#f97316]" : ""}`}>
+                      Worker
+                    </div>
+                    <div className="text-xs text-[#666]">Receives delegated tasks</div>
+                  </button>
+                </div>
+                {form.projectId && (
+                  <p className="text-xs text-[#555] mt-2">
+                    Group: Using project as agent group
+                  </p>
+                )}
+              </FormField>
+            )}
           </div>
 
           <div className="flex gap-3 mt-6">

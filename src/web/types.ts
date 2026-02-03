@@ -1,5 +1,13 @@
 // Shared types for the Apteva UI
 
+export type AgentMode = "coordinator" | "worker";
+
+export interface MultiAgentConfig {
+  enabled: boolean;
+  mode?: AgentMode;
+  group?: string; // Defaults to projectId if not specified
+}
+
 export interface AgentFeatures {
   memory: boolean;
   tasks: boolean;
@@ -8,7 +16,7 @@ export interface AgentFeatures {
   mcp: boolean;
   realtime: boolean;
   files: boolean;
-  agents: boolean;
+  agents: boolean | MultiAgentConfig; // Can be boolean for backwards compat or full config
 }
 
 export const DEFAULT_FEATURES: AgentFeatures = {
@@ -21,6 +29,22 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   files: false,
   agents: false,
 };
+
+// Helper to normalize agents feature to MultiAgentConfig
+export function getMultiAgentConfig(features: AgentFeatures, projectId?: string | null): MultiAgentConfig {
+  const agents = features.agents;
+  if (typeof agents === "boolean") {
+    return {
+      enabled: agents,
+      mode: "worker",
+      group: projectId || undefined,
+    };
+  }
+  return {
+    ...agents,
+    group: agents.group || projectId || undefined,
+  };
+}
 
 export interface McpServerSummary {
   id: string;

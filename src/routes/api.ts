@@ -3,7 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync } from "fs";
 import { agentProcesses, agentsStarting, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
-import { AgentDB, McpServerDB, TelemetryDB, UserDB, ProjectDB, SkillDB, generateId, type Agent, type AgentFeatures, type McpServer, type Project, type Skill } from "../db";
+import { AgentDB, McpServerDB, TelemetryDB, UserDB, ProjectDB, SkillDB, generateId, getMultiAgentConfig, type Agent, type AgentFeatures, type McpServer, type Project, type Skill } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import { createUser, hashPassword, validatePassword } from "../auth";
 import type { AuthContext } from "../auth/middleware";
@@ -248,6 +248,14 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
       enabled: skillDefinitions.length > 0,
       definitions: skillDefinitions,
     },
+    agents: (() => {
+      const multiAgentConfig = getMultiAgentConfig(features, agent.project_id);
+      return {
+        enabled: multiAgentConfig.enabled,
+        mode: multiAgentConfig.mode || "worker",
+        group: multiAgentConfig.group || agent.project_id || undefined,
+      };
+    })(),
   };
 }
 
