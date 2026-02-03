@@ -67,6 +67,22 @@ async function waitForAgentHealth(port: number, maxAttempts = 30, delayMs = 200)
   return false;
 }
 
+// Check if a port is free by trying to connect
+async function checkPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const net = require("net");
+    const server = net.createServer();
+    server.once("error", () => {
+      resolve(false); // Port in use
+    });
+    server.once("listening", () => {
+      server.close();
+      resolve(true); // Port is free
+    });
+    server.listen(port, "127.0.0.1");
+  });
+}
+
 // Make authenticated request to agent
 async function agentFetch(
   agentId: string,
@@ -410,13 +426,37 @@ export async function startAgentProcess(
         }
         try {
           await fetch(`http://localhost:${port}/shutdown`, { method: "POST", signal: AbortSignal.timeout(1000) });
-          await new Promise(r => setTimeout(r, 500)); // Wait for shutdown
         } catch {
           // Shutdown failed - process might not support it
         }
+        // Wait longer for port to be released
+        await new Promise(r => setTimeout(r, 1500));
       }
     } catch {
-      // Port is free - good
+      // No HTTP response - but port might still be bound by zombie process
+    }
+
+    // Double-check port is actually free by trying to connect
+    const isPortFree = await checkPortFree(port);
+    if (!isPortFree) {
+      if (!silent) {
+        console.log(`  Port ${port} still in use, trying to kill process...`);
+      }
+      // Try to kill process using the port (Linux/Mac)
+      try {
+        const { execSync } = await import("child_process");
+        execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null || true`, { stdio: "ignore" });
+        await new Promise(r => setTimeout(r, 1000));
+      } catch {
+        // Ignore errors
+      }
+
+      // Final check
+      const stillInUse = !(await checkPortFree(port));
+      if (stillInUse) {
+        agentsStarting.delete(agent.id);
+        return { success: false, error: `Port ${port} is still in use` };
+      }
     }
 
     // Handle data directory
