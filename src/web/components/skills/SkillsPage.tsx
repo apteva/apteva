@@ -471,21 +471,13 @@ function CreateSkillModal({
     setError(null);
 
     try {
-      // Build full SKILL.md content
-      const fullContent = `---
-name: ${name}
-description: ${description}
----
-
-${content}`;
-
       const res = await authFetch("/api/skills", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
           description,
-          content: fullContent,
+          content,  // Just the instructions, not wrapped in frontmatter
           source: "local",
         }),
       });

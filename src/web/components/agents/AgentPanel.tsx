@@ -899,7 +899,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   onUpdateAgent: (updates: Partial<Agent>) => Promise<{ error?: string }>;
   onDeleteAgent: () => void;
 }) {
-  const { authFetch } = useAuth();
+  const { authFetch, isDev } = useAuth();
   const [form, setForm] = useState({
     name: agent.name,
     provider: agent.provider,
@@ -914,6 +914,8 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
   const [availableSkills, setAvailableSkills] = useState<AvailableSkill[]>([]);
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
 
   // Fetch available MCP servers
   useEffect(() => {
@@ -928,6 +930,23 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     };
     fetchMcpServers();
   }, [authFetch]);
+
+  // Fetch API key (dev mode only)
+  useEffect(() => {
+    if (!isDev) return;
+    const fetchApiKey = async () => {
+      try {
+        const res = await authFetch(`/api/agents/${agent.id}/api-key`);
+        if (res.ok) {
+          const data = await res.json();
+          setApiKey(data.apiKey);
+        }
+      } catch (e) {
+        // Ignore - not critical
+      }
+    };
+    fetchApiKey();
+  }, [agent.id, isDev, authFetch]);
 
   // Fetch available skills
   useEffect(() => {
@@ -1195,6 +1214,47 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
           <p className="text-xs text-[#666] text-center">
             Changes will be applied to the running agent
           </p>
+        )}
+
+        {/* Developer Info (dev mode only) */}
+        {isDev && apiKey && (
+          <div className="mt-8 pt-6 border-t border-[#222]">
+            <p className="text-sm text-[#666] mb-3">Developer Info</p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-[#666]">Agent ID</span>
+                <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888]">{agent.id}</code>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-[#666]">Port</span>
+                <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888]">{agent.port || "N/A"}</code>
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[#666]">API Key</span>
+                  <button
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="text-xs text-[#f97316] hover:text-[#fb923c]"
+                  >
+                    {showApiKey ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {showApiKey && (
+                  <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888] break-all">
+                    {apiKey}
+                  </code>
+                )}
+              </div>
+              {agent.status === "running" && agent.port && (
+                <div className="flex flex-col gap-1 mt-2">
+                  <span className="text-xs text-[#666]">Test with curl</span>
+                  <code className="text-xs bg-[#1a1a1a] px-2 py-1.5 rounded text-[#666] break-all">
+                    curl -H "X-API-Key: {showApiKey ? apiKey : "***"}" http://localhost:{agent.port}/config
+                  </code>
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {/* Danger Zone */}

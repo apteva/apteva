@@ -271,29 +271,37 @@ export function invalidateAllSessions(userId: string): number {
 export interface AuthStatus {
   hasUsers: boolean;
   authenticated: boolean;
+  isDev: boolean;
   user?: { id: string; username: string; role: string };
+}
+
+// Determine if we're in dev mode - used by frontend for dev-only features
+function checkIsDev(): boolean {
+  return process.env.NODE_ENV !== "production";
 }
 
 export function getAuthStatus(accessToken?: string): AuthStatus {
   const hasUsers = UserDB.hasUsers();
+  const isDev = checkIsDev();
 
   if (!accessToken) {
-    return { hasUsers, authenticated: false };
+    return { hasUsers, authenticated: false, isDev };
   }
 
   const payload = verifyAccessToken(accessToken);
   if (!payload) {
-    return { hasUsers, authenticated: false };
+    return { hasUsers, authenticated: false, isDev };
   }
 
   const user = UserDB.findById(payload.userId);
   if (!user) {
-    return { hasUsers, authenticated: false };
+    return { hasUsers, authenticated: false, isDev };
   }
 
   return {
     hasUsers,
     authenticated: true,
+    isDev,
     user: { id: user.id, username: user.username, role: user.role },
   };
 }

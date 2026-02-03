@@ -271,6 +271,68 @@ async function pushConfigToAgent(agentId: string, port: number, config: any): Pr
   }
 }
 
+// Push skills to running agent via /skills endpoint (not config)
+async function pushSkillsToAgent(agentId: string, port: number, skills: Array<{
+  name: string;
+  description: string;
+  instructions: string;
+  icon?: string;
+  category?: string;
+  tags?: string[];
+  tools?: string[];
+  enabled: boolean;
+}>): Promise<{ success: boolean; error?: string }> {
+  if (skills.length === 0) {
+    return { success: true };
+  }
+
+  try {
+    // Push each skill - try PUT first (update), then POST (create) if not found
+    for (const skill of skills) {
+      // First try PUT to update existing skill
+      let res = await agentFetch(agentId, port, "/skills", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(skill),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      // If skill doesn't exist (404), create it with POST
+      if (res.status === 404) {
+        res = await agentFetch(agentId, port, "/skills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(skill),
+          signal: AbortSignal.timeout(5000),
+        });
+      }
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error(`[pushSkillsToAgent] Failed to push skill ${skill.name}:`, data.error || res.status);
+      }
+    }
+
+    // Enable skills globally via POST /skills/status
+    const statusRes = await agentFetch(agentId, port, "/skills/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!statusRes.ok) {
+      const data = await statusRes.json().catch(() => ({}));
+      return { success: false, error: data.error || `HTTP ${statusRes.status}` };
+    }
+
+    console.log(`[pushSkillsToAgent] Pushed ${skills.length} skill(s) to agent`);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
 // Exported helper to start an agent process (used by API route and auto-restart)
 export async function startAgentProcess(
   agent: Agent,
@@ -410,6 +472,16 @@ export async function startAgentProcess(
       // Agent is running but not configured - still usable but log warning
     } else if (!silent) {
       console.log(`  Configuration applied successfully`);
+    }
+
+    // Push skills via /skills endpoint (separate from config)
+    if (config.skills?.definitions?.length > 0) {
+      const skillsResult = await pushSkillsToAgent(agent.id, port, config.skills.definitions);
+      if (!skillsResult.success && !silent) {
+        console.error(`  Failed to push skills: ${skillsResult.error}`);
+      } else if (!silent) {
+        console.log(`  Skills pushed successfully (${config.skills.definitions.length} skills)`);
+      }
     }
 
     // Update status in database (port is already set, just update status)
@@ -555,6 +627,20 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     return json({ agent: toApiAgent(agent) });
   }
 
+  // GET /api/agents/:id/api-key - Get agent API key (dev mode only)
+  const agentApiKeyMatch = path.match(/^\/api\/agents\/([^/]+)\/api-key$/);
+  if (agentApiKeyMatch && method === "GET") {
+    if (!isDev) {
+      return json({ error: "Only available in development mode" }, 403);
+    }
+    const agent = AgentDB.findById(agentApiKeyMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+    const apiKey = AgentDB.getApiKey(agent.id);
+    return json({ apiKey });
+  }
+
   // PUT /api/agents/:id - Update an agent
   if (agentMatch && method === "PUT") {
     const agent = AgentDB.findById(agentMatch[1]);
@@ -577,7 +663,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
       const updated = AgentDB.update(agentMatch[1], updates);
 
-      // If agent is running, push the new config
+      // If agent is running, push the new config and skills
       if (updated && updated.status === "running" && updated.port) {
         const providerKey = ProviderKeys.getDecrypted(updated.provider);
         if (providerKey) {
@@ -585,6 +671,13 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
           const configResult = await pushConfigToAgent(updated.id, updated.port, config);
           if (!configResult.success) {
             console.error(`Failed to push config to running agent: ${configResult.error}`);
+          }
+          // Push skills via /skills endpoint
+          if (config.skills?.definitions?.length > 0) {
+            const skillsResult = await pushSkillsToAgent(updated.id, updated.port, config.skills.definitions);
+            if (!skillsResult.success) {
+              console.error(`Failed to push skills to running agent: ${skillsResult.error}`);
+            }
           }
         }
       }
@@ -2567,6 +2660,10 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
           if (providerKey) {
             const config = buildAgentConfig(agent, providerKey);
             await pushConfigToAgent(agent.id, agent.port!, config);
+            // Push skills via /skills endpoint
+            if (config.skills?.definitions?.length > 0) {
+              await pushSkillsToAgent(agent.id, agent.port!, config.skills.definitions);
+            }
             console.log(`Pushed skill update to agent ${agent.name}`);
           }
         } catch (err) {

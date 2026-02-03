@@ -9,6 +9,7 @@ interface User {
 interface AuthStatus {
   hasUsers: boolean;
   authenticated: boolean;
+  isDev: boolean;
   user?: User;
 }
 
@@ -17,6 +18,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   hasUsers: boolean | null;
+  isDev: boolean;
   accessToken: string | null;
   login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
@@ -44,6 +46,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasUsers, setHasUsers] = useState<boolean | null>(null);
+  const [isDev, setIsDev] = useState(false);
 
   // Refs to track state without causing re-renders
   const tokenRef = useRef<string | null>(null);
@@ -107,6 +110,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const data: AuthStatus = await res.json();
 
       setHasUsers(data.hasUsers);
+      setIsDev(data.isDev ?? false);
 
       if (data.authenticated && data.user) {
         setUser(data.user as User);
@@ -212,6 +216,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     isAuthenticated: !!user,
     isLoading,
     hasUsers,
+    isDev,
     accessToken,
     login,
     logout,
