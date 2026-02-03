@@ -250,10 +250,15 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
     },
     agents: (() => {
       const multiAgentConfig = getMultiAgentConfig(features, agent.project_id);
+      const baseUrl = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 4280}`;
       return {
         enabled: multiAgentConfig.enabled,
         mode: multiAgentConfig.mode || "worker",
         group: multiAgentConfig.group || agent.project_id || undefined,
+        // This agent's reachable URL for peer communication
+        url: `http://localhost:${agent.port}`,
+        // Discovery endpoint to find peer agents in the same group
+        discovery_url: `${baseUrl}/api/discovery/agents`,
       };
     })(),
   };
@@ -1234,6 +1239,44 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
   }
 
   // ==================== DISCOVERY/PEERS PROXY ====================
+
+  // GET /api/discovery/agents - Central discovery endpoint for agents to find peers
+  // Called by agent binaries to discover other agents in the same group
+  if (path === "/api/discovery/agents" && method === "GET") {
+    const group = url.searchParams.get("group");
+    const excludeId = url.searchParams.get("exclude") || req.headers.get("X-Agent-ID");
+
+    // Find all running agents in the same group
+    const allAgents = AgentDB.findAll();
+    const peers = allAgents
+      .filter(a => {
+        // Must be running with a port
+        if (a.status !== "running" || !a.port) return false;
+        // Exclude the requesting agent
+        if (excludeId && a.id === excludeId) return false;
+        // Must have multi-agent enabled
+        const agentConfig = getMultiAgentConfig(a.features, a.project_id);
+        if (!agentConfig.enabled) return false;
+        // If group specified, must match
+        if (group) {
+          const peerGroup = agentConfig.group || a.project_id;
+          if (peerGroup !== group) return false;
+        }
+        return true;
+      })
+      .map(a => {
+        const agentConfig = getMultiAgentConfig(a.features, a.project_id);
+        return {
+          id: a.id,
+          name: a.name,
+          url: `http://localhost:${a.port}`,
+          mode: agentConfig.mode || "worker",
+          group: agentConfig.group || a.project_id,
+        };
+      });
+
+    return json({ agents: peers });
+  }
 
   // GET /api/agents/:id/peers - Get discovered peer agents
   const peersMatch = path.match(/^\/api\/agents\/([^/]+)\/peers$/);
