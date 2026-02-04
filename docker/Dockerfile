@@ -24,13 +24,21 @@ RUN bun run build
 # ============ Production Stage ============
 FROM oven/bun:1-debian
 
-# Install curl for health checks, ca-certificates for HTTPS, and Node.js for MCP servers (npx)
+# Install runtime dependencies for MCP servers:
+# - curl: health checks
+# - ca-certificates: HTTPS
+# - nodejs/npm: Node.js MCP servers (npx)
+# - python3/pip: Python MCP servers (e.g., late-sdk, mcp-server-*)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     nodejs \
     npm \
-    && rm -rf /var/lib/apt/lists/*
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
 WORKDIR /app
 
