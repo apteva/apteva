@@ -17,26 +17,26 @@
         "typescript": "^5.0.0",
       },
       "optionalDependencies": {
-        "@apteva/agent-darwin-arm64": "*",
-        "@apteva/agent-darwin-x64": "*",
-        "@apteva/agent-linux-arm64": "*",
-        "@apteva/agent-linux-x64": "*",
-        "@apteva/agent-win32-x64": "*",
+        "@apteva/agent-darwin-arm64": "^1.33.73",
+        "@apteva/agent-darwin-x64": "^1.33.73",
+        "@apteva/agent-linux-arm64": "^1.33.73",
+        "@apteva/agent-linux-x64": "^1.33.73",
+        "@apteva/agent-win32-x64": "^1.33.73",
       },
     },
   },
   "packages": {
     "@alloc/quick-lru": ["@alloc/quick-lru@5.2.0", "", {}, ""],
 
-    "@apteva/agent-darwin-arm64": ["@apteva/agent-darwin-arm64@1.33.30", "", { "os": "darwin", "cpu": "arm64" }, "sha512-WsX64MAuRcJzGcPjBuMC6St/XLswXg+JZ8i7Kap438CByZrKFJNV9+SS41Ky7C+c7iKedOTTrabBPbY0J9+c5Q=="],
+    "@apteva/agent-darwin-arm64": ["@apteva/agent-darwin-arm64@1.33.73", "", { "os": "darwin", "cpu": "arm64" }, "sha512-ONTsd8wsZtceSpVX/2JHD1aKk0ORofA6btzRjmr7AT4eMyNPEF+hPCvl9m06yskU3GuxFW2lH65AcdEeWLHWbw=="],
 
-    "@apteva/agent-darwin-x64": ["@apteva/agent-darwin-x64@1.33.30", "", { "os": "darwin", "cpu": "x64" }, "sha512-7tpWPcY7tAUhdVEcmt9Ju2K6ERkgvLTQxjyedoFYUGgFpoRFtmAh2h/HOe91is1rR5TZHNaf2LTxl/AILPQc5g=="],
+    "@apteva/agent-darwin-x64": ["@apteva/agent-darwin-x64@1.33.73", "", { "os": "darwin", "cpu": "x64" }, "sha512-J8w48qFw1NzBd6X3mxOrYq4k8kAmpQR9S0mzxtITCzGyrYxLXpc+oXvTzXwWGr0xRDfps3MdLJ6zxBgImLkcSQ=="],
 
-    "@apteva/agent-linux-arm64": ["@apteva/agent-linux-arm64@1.33.30", "", { "os": "linux", "cpu": "arm64" }, "sha512-WY8UFHdDWiYulK4PrvA7FEDvgh9zR8ZrwdZJ9nh3UTdqtzXl4r5iLtN41OOACQuAYjEAW66TbiH3hX1UizvKQg=="],
+    "@apteva/agent-linux-arm64": ["@apteva/agent-linux-arm64@1.33.73", "", { "os": "linux", "cpu": "arm64" }, "sha512-xjuA4nYcc3tXAEoUZjn9JAR+9n/EsKHrR748S44CXxlDxzfZzOZp6LS9Snk1yle4ecmzrnUReQkr4Tr8uelvLw=="],
 
-    "@apteva/agent-linux-x64": ["@apteva/agent-linux-x64@1.33.53", "", { "os": "linux", "cpu": "x64" }, "sha512-ewATD/Lg5NpfBh3EutIDAkAKAVMJe+U5KxiQoGBnNvUiKFvuqMdmBCCK+G915oGa80DJX2kq7buSxZ1a/77ZSg=="],
+    "@apteva/agent-linux-x64": ["@apteva/agent-linux-x64@1.33.73", "", { "os": "linux", "cpu": "x64" }, "sha512-BDU5hzkTWPIe4qtscyxhNXGb86aDegI4Dkz/PDaMtY9p7kI4ULi780UxGvIjEsIwLryS6N3tkyF5n7FPEqlZGQ=="],
 
-    "@apteva/agent-win32-x64": ["@apteva/agent-win32-x64@1.33.30", "", { "os": "win32", "cpu": "x64" }, "sha512-5rl3eWcaw85lVFgDYOkQRRbAKwfkp9k2YBcrQsjaqOCD++Pk20TBNcpKGZ89qxwqHA3RbnFCFT3wGUt6XdyIZg=="],
+    "@apteva/agent-win32-x64": ["@apteva/agent-win32-x64@1.33.73", "", { "os": "win32", "cpu": "x64" }, "sha512-taey3aIWZrC3QCcwJ3X+UmJWKy/MlUhyS2nGrfn6Siai600eT1e2LroExfWap+B4BNHq3G4EjKjvjsmsA67Udg=="],
 
     "@apteva/apteva-kit": ["@apteva/apteva-kit@0.1.102", "", { "dependencies": { "clsx": "^2.1.0", "tailwind-merge": "^2.2.0" }, "peerDependencies": { "react": ">=18", "react-dom": ">=18" } }, ""],
 
@@ -208,15 +208,11 @@
 
     "util-deprecate": ["util-deprecate@1.0.2", "", {}, ""],
 
-    "anymatch/picomatch": ["picomatch@2.3.1", "", {}, "sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA=="],
-
     "chokidar/glob-parent": ["glob-parent@5.1.2", "", { "dependencies": { "is-glob": "^4.0.1" } }, ""],
 
     "fast-glob/glob-parent": ["glob-parent@5.1.2", "", { "dependencies": { "is-glob": "^4.0.1" } }, ""],
 
     "fdir/picomatch": ["picomatch@4.0.3", "", {}, "sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q=="],
-
-    "readdirp/picomatch": ["picomatch@2.3.1", "", {}, "sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA=="],
 
     "tinyglobby/picomatch": ["picomatch@4.0.3", "", {}, "sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q=="],
   }

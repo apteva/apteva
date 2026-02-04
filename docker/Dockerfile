@@ -42,11 +42,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json bun.lock* ./
+# Copy package files (no lockfile - always get latest agent binary)
+COPY package.json ./
 
 # Install production dependencies only (includes agent binary via optionalDependencies)
-RUN bun install --production
+# Remove any cached lockfile to ensure latest versions
+RUN rm -f bun.lock && bun install --production
 
 # Copy source code (needed for server runtime)
 COPY src ./src
