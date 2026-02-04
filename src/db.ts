@@ -138,8 +138,9 @@ export interface ProviderKeyRow {
 export interface McpServer {
   id: string;
   name: string;
-  type: "npm" | "github" | "http" | "custom";
-  package: string | null;
+  type: "npm" | "pip" | "github" | "http" | "custom";
+  package: string | null;       // npm or pip package name
+  pip_module: string | null;    // For pip type: the module to run (e.g., "late.mcp")
   command: string | null;
   args: string | null;
   env: Record<string, string>;
@@ -194,6 +195,7 @@ export interface McpServerRow {
   name: string;
   type: string;
   package: string | null;
+  pip_module: string | null;
   command: string | null;
   args: string | null;
   env: string | null;
@@ -490,6 +492,12 @@ function runMigrations() {
       sql: `
         ALTER TABLE skills ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
         CREATE INDEX IF NOT EXISTS idx_skills_project ON skills(project_id);
+      `,
+    },
+    {
+      name: "021_add_mcp_server_pip_module",
+      sql: `
+        ALTER TABLE mcp_servers ADD COLUMN pip_module TEXT;
       `,
     },
   ];
@@ -1079,11 +1087,11 @@ export const McpServerDB = {
     const envEncrypted = encryptObject(server.env || {});
     const headersEncrypted = encryptObject(server.headers || {});
     const stmt = db.prepare(`
-      INSERT INTO mcp_servers (id, name, type, package, command, args, env, url, headers, source, project_id, status, port, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
+      INSERT INTO mcp_servers (id, name, type, package, pip_module, command, args, env, url, headers, source, project_id, status, port, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
     `);
     stmt.run(
-      server.id, server.name, server.type, server.package, server.command, server.args,
+      server.id, server.name, server.type, server.package, server.pip_module || null, server.command, server.args,
       envEncrypted, server.url || null, headersEncrypted, server.source || null, server.project_id || null, now
     );
     return this.findById(server.id)!;
@@ -1122,6 +1130,10 @@ export const McpServerDB = {
     if (updates.package !== undefined) {
       fields.push("package = ?");
       values.push(updates.package);
+    }
+    if (updates.pip_module !== undefined) {
+      fields.push("pip_module = ?");
+      values.push(updates.pip_module);
     }
     if (updates.command !== undefined) {
       fields.push("command = ?");
@@ -1227,6 +1239,7 @@ function rowToMcpServer(row: McpServerRow): McpServer {
     name: row.name,
     type: row.type as McpServer["type"],
     package: row.package,
+    pip_module: row.pip_module,
     command: row.command,
     args: row.args,
     env,

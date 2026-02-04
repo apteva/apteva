@@ -90,8 +90,9 @@ export interface Agent {
 export interface McpServer {
   id: string;
   name: string;
-  type: "npm" | "github" | "http" | "custom";
+  type: "npm" | "pip" | "github" | "http" | "custom";
   package: string | null;
+  pip_module: string | null;  // For pip type: module to run (e.g., "late.mcp")
   command: string | null;
   url: string | null;
   headers: Record<string, string>;

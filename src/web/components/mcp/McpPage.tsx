@@ -9,8 +9,9 @@ import { IntegrationsPanel } from "./IntegrationsPanel";
 interface McpServer {
   id: string;
   name: string;
-  type: "npm" | "github" | "http" | "custom";
+  type: "npm" | "pip" | "github" | "http" | "custom";
   package: string | null;
+  pip_module: string | null;  // For pip type: module to run (e.g., "late.mcp")
   command: string | null;
   args: string | null;
   env: Record<string, string>;
@@ -1334,9 +1335,10 @@ function AddServerModal({
   defaultProjectId?: string | null;
 }) {
   const { authFetch } = useAuth();
-  const [mode, setMode] = useState<"npm" | "command" | "http">("npm");
+  const [mode, setMode] = useState<"npm" | "pip" | "command" | "http">("npm");
   const [name, setName] = useState("");
   const [pkg, setPkg] = useState("");
+  const [pipModule, setPipModule] = useState("");
   const [command, setCommand] = useState("");
   const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
@@ -1437,6 +1439,11 @@ function AddServerModal({
       return;
     }
 
+    if (mode === "pip" && !pkg) {
+      setError("pip package is required");
+      return;
+    }
+
     if (mode === "command" && !command) {
       setError("Command is required");
       return;
@@ -1464,6 +1471,12 @@ function AddServerModal({
       if (mode === "npm") {
         body.type = "npm";
         body.package = pkg;
+      } else if (mode === "pip") {
+        body.type = "pip";
+        body.package = pkg;
+        if (pipModule) {
+          body.pip_module = pipModule;
+        }
       } else if (mode === "http") {
         body.type = "http";
         body.url = url;
@@ -1536,14 +1549,22 @@ function AddServerModal({
             <p className="text-sm text-[#666] mb-2">Quick add:</p>
             <div className="flex flex-wrap gap-2">
               {[
-                { name: "filesystem", pkg: "@modelcontextprotocol/server-filesystem" },
-                { name: "fetch", pkg: "@modelcontextprotocol/server-fetch" },
-                { name: "memory", pkg: "@modelcontextprotocol/server-memory" },
-                { name: "github", pkg: "@modelcontextprotocol/server-github" },
+                { name: "filesystem", pkg: "@modelcontextprotocol/server-filesystem", type: "npm" as const },
+                { name: "fetch", pkg: "@modelcontextprotocol/server-fetch", type: "npm" as const },
+                { name: "memory", pkg: "@modelcontextprotocol/server-memory", type: "npm" as const },
+                { name: "github", pkg: "@modelcontextprotocol/server-github", type: "npm" as const },
+                { name: "late", pkg: "late-sdk[mcp]", module: "late.mcp", type: "pip" as const },
               ].map(s => (
                 <button
                   key={s.name}
-                  onClick={() => quickAdd(s.name, s.pkg)}
+                  onClick={() => {
+                    setMode(s.type);
+                    setName(s.name);
+                    setPkg(s.pkg);
+                    if (s.type === "pip" && "module" in s) {
+                      setPipModule(s.module || "");
+                    }
+                  }}
                   className="text-sm bg-[#1a1a1a] hover:bg-[#222] px-3 py-1 rounded transition"
                 >
                   {s.name}
@@ -1556,33 +1577,43 @@ function AddServerModal({
           <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded p-1">
             <button
               onClick={() => setMode("npm")}
-              className={`flex-1 px-3 py-1.5 rounded text-sm transition ${
+              className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
                 mode === "npm"
                   ? "bg-[#1a1a1a] text-white"
                   : "text-[#666] hover:text-[#888]"
               }`}
             >
-              npm Package
+              npm
+            </button>
+            <button
+              onClick={() => setMode("pip")}
+              className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
+                mode === "pip"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              pip
             </button>
             <button
               onClick={() => setMode("command")}
-              className={`flex-1 px-3 py-1.5 rounded text-sm transition ${
+              className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
                 mode === "command"
                   ? "bg-[#1a1a1a] text-white"
                   : "text-[#666] hover:text-[#888]"
               }`}
             >
-              Custom Command
+              Command
             </button>
             <button
               onClick={() => setMode("http")}
-              className={`flex-1 px-3 py-1.5 rounded text-sm transition ${
+              className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
                 mode === "http"
                   ? "bg-[#1a1a1a] text-white"
                   : "text-[#666] hover:text-[#888]"
               }`}
             >
-              HTTP Endpoint
+              HTTP
             </button>
           </div>
 
@@ -1631,6 +1662,45 @@ function AddServerModal({
               <p className="text-xs text-[#555] mt-1">
                 Package name or paste a full npx command with credentials
               </p>
+            </div>
+          )}
+
+          {/* pip Package (Python) */}
+          {mode === "pip" && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-[#666] mb-1">pip Package</label>
+                <input
+                  type="text"
+                  value={pkg}
+                  onChange={e => {
+                    setPkg(e.target.value);
+                    // Auto-set module from package name
+                    if (!pipModule && e.target.value) {
+                      const basePkg = e.target.value.split("[")[0].replace(/-/g, ".");
+                      setPipModule(basePkg);
+                    }
+                  }}
+                  placeholder="e.g., late-sdk[mcp]"
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                />
+                <p className="text-xs text-[#555] mt-1">
+                  Python package with extras, e.g., late-sdk[mcp] or mcp-server-time
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm text-[#666] mb-1">Module (optional)</label>
+                <input
+                  type="text"
+                  value={pipModule}
+                  onChange={e => setPipModule(e.target.value)}
+                  placeholder="e.g., late.mcp"
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                />
+                <p className="text-xs text-[#555] mt-1">
+                  Python module to run with -m. Auto-detected from package name if not specified.
+                </p>
+              </div>
             </div>
           )}
 

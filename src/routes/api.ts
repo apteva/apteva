@@ -2685,7 +2685,7 @@ Keep responses short and actionable. Use markdown formatting when helpful.`,
   if (path === "/api/mcp/servers" && method === "POST") {
     try {
       const body = await req.json();
-      const { name, type, package: pkg, command, args, env, url, headers, source, project_id } = body;
+      const { name, type, package: pkg, pip_module, command, args, env, url, headers, source, project_id } = body;
 
       if (!name) {
         return json({ error: "Name is required" }, 400);
@@ -2696,6 +2696,7 @@ Keep responses short and actionable. Use markdown formatting when helpful.`,
         name,
         type: type || "npm",
         package: pkg || null,
+        pip_module: pip_module || null,
         command: command || null,
         args: args || null,
         env: env || {},
@@ -2790,6 +2791,32 @@ Keep responses short and actionable. Use markdown formatting when helpful.`,
     if (server.command) {
       // Custom command - substitute env vars in args
       cmd = server.command.split(" ");
+      if (server.args) {
+        const substitutedArgs = substituteEnvVars(server.args, serverEnv);
+        cmd.push(...substitutedArgs.split(" "));
+      }
+    } else if (server.type === "pip" && server.package) {
+      // Python pip package - install first, then run module
+      const pipPackage = server.package;
+      const pipModule = server.pip_module || server.package.split("[")[0]; // Default: package name without extras
+
+      console.log(`Installing pip package: ${pipPackage}...`);
+      const installResult = spawn({
+        cmd: ["pip", "install", "--quiet", "--break-system-packages", pipPackage],
+        env: { ...process.env as Record<string, string>, ...serverEnv },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      // Wait for installation to complete
+      const exitCode = await installResult.exited;
+      if (exitCode !== 0) {
+        const stderr = await new Response(installResult.stderr).text();
+        return json({ error: `Failed to install pip package: ${stderr || "unknown error"}` }, 500);
+      }
+
+      // Now run the module
+      cmd = ["python", "-m", pipModule];
       if (server.args) {
         const substitutedArgs = substituteEnvVars(server.args, serverEnv);
         cmd.push(...substitutedArgs.split(" "));
