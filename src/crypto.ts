@@ -1,6 +1,8 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync, createHash } from "crypto";
 import { hostname, userInfo } from "os";
 import { join } from "path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { homedir } from "os";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
@@ -8,15 +10,54 @@ const SALT_LENGTH = 32;
 const TAG_LENGTH = 16;
 const KEY_LENGTH = 32;
 
+// Cache the encryption secret to avoid repeated file reads
+let cachedSecret: string | null = null;
+
+// Get the path for storing the encryption secret
+function getSecretPath(): string {
+  const dataDir = process.env.DATA_DIR || join(homedir(), ".apteva");
+  return join(dataDir, ".encryption-key");
+}
+
+// Get or create a persistent encryption secret
+// This ensures keys can be decrypted after container/app restarts
+function getOrCreateSecret(): string {
+  if (cachedSecret) return cachedSecret;
+
+  const secretPath = getSecretPath();
+
+  // Try to read existing secret
+  if (existsSync(secretPath)) {
+    try {
+      cachedSecret = readFileSync(secretPath, "utf8").trim();
+      if (cachedSecret && cachedSecret.length >= 32) {
+        return cachedSecret;
+      }
+    } catch {
+      // Fall through to create new
+    }
+  }
+
+  // Create new secret and persist it
+  cachedSecret = randomBytes(32).toString("hex");
+  try {
+    const dir = process.env.DATA_DIR || join(homedir(), ".apteva");
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(secretPath, cachedSecret, { mode: 0o600 });
+  } catch (err) {
+    console.error("[crypto] Warning: Could not persist encryption key:", err);
+    // Continue with in-memory key - will work for this session but not across restarts
+  }
+
+  return cachedSecret;
+}
+
 // Get a machine-specific identifier for key derivation
+// Now uses a persistent secret instead of volatile machine factors
 function getMachineId(): string {
-  const factors = [
-    hostname(),
-    userInfo().username,
-    process.env.HOME || process.env.USERPROFILE || "",
-    __dirname, // Installation path adds uniqueness
-  ];
-  return factors.join("|");
+  return getOrCreateSecret();
 }
 
 // Derive encryption key from machine ID and salt
