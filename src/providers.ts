@@ -107,6 +107,25 @@ export const PROVIDERS = {
       { value: "moonshot-v1-32k", label: "Kimi 32K (Fast)" },
     ],
   },
+  ollama: {
+    id: "ollama",
+    name: "Ollama",
+    displayName: "Ollama (Local)",
+    type: "llm" as const,
+    envVar: "OLLAMA_BASE_URL",
+    docsUrl: "https://ollama.ai/download",
+    testEndpoint: "", // Dynamic - uses configured base URL
+    isLocal: true,
+    defaultBaseUrl: "http://localhost:11434",
+    models: [
+      // Default models - actual list fetched dynamically from Ollama
+      { value: "llama3.3", label: "Llama 3.3 (70B)", recommended: true },
+      { value: "llama3.2", label: "Llama 3.2 (3B)" },
+      { value: "qwen2.5", label: "Qwen 2.5" },
+      { value: "mistral", label: "Mistral" },
+      { value: "deepseek-r1", label: "DeepSeek R1" },
+    ],
+  },
   // MCP Integrations
   composio: {
     id: "composio",

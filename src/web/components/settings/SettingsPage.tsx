@@ -793,6 +793,19 @@ function ProviderKeyCard({
   onSave,
   onDelete,
 }: ProviderKeyCardProps) {
+  const isOllama = provider.id === "ollama";
+  const [ollamaStatus, setOllamaStatus] = React.useState<{ connected: boolean; modelCount?: number } | null>(null);
+
+  // Check Ollama status when configured
+  React.useEffect(() => {
+    if (isOllama && provider.hasKey) {
+      fetch("/api/providers/ollama/status")
+        .then(res => res.json())
+        .then(data => setOllamaStatus({ connected: data.connected, modelCount: data.modelCount }))
+        .catch(() => setOllamaStatus({ connected: false }));
+    }
+  }, [isOllama, provider.hasKey]);
+
   return (
     <div className={`bg-[#111] border rounded-lg p-4 ${
       provider.hasKey ? 'border-green-500/20' : 'border-[#1a1a1a]'
@@ -803,13 +816,28 @@ function ProviderKeyCard({
           <p className="text-sm text-[#666] truncate">
             {provider.type === "integration"
               ? (provider.description || "MCP integration")
-              : `${provider.models.length} models`}
+              : isOllama
+                ? "Run models locally"
+                : `${provider.models.length} models`}
           </p>
         </div>
         {provider.hasKey ? (
-          <span className="text-green-400 text-xs flex items-center gap-1 bg-green-500/10 px-2 py-1 rounded whitespace-nowrap flex-shrink-0">
-            <CheckIcon className="w-3 h-3" />
-            {provider.keyHint}
+          <span className={`text-xs flex items-center gap-1 px-2 py-1 rounded whitespace-nowrap flex-shrink-0 ${
+            isOllama && ollamaStatus
+              ? ollamaStatus.connected
+                ? "text-green-400 bg-green-500/10"
+                : "text-yellow-400 bg-yellow-500/10"
+              : "text-green-400 bg-green-500/10"
+          }`}>
+            {isOllama && ollamaStatus ? (
+              ollamaStatus.connected ? (
+                <><CheckIcon className="w-3 h-3" />{ollamaStatus.modelCount} models</>
+              ) : (
+                <>Not running</>
+              )
+            ) : (
+              <><CheckIcon className="w-3 h-3" />{provider.keyHint}</>
+            )}
           </span>
         ) : (
           <span className="text-[#666] text-xs bg-[#1a1a1a] px-2 py-1 rounded whitespace-nowrap flex-shrink-0">
@@ -822,13 +850,20 @@ function ProviderKeyCard({
         {isEditing ? (
           <div className="space-y-3">
             <input
-              type="password"
+              type={isOllama ? "text" : "password"}
               value={apiKey}
               onChange={e => onApiKeyChange(e.target.value)}
-              placeholder={provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+              placeholder={isOllama
+                ? "http://localhost:11434"
+                : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
               autoFocus
               className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
             />
+            {isOllama && (
+              <p className="text-xs text-[#666]">
+                Enter your Ollama server URL. Default is http://localhost:11434
+              </p>
+            )}
             {error && <p className="text-red-400 text-sm">{error}</p>}
             {success && <p className="text-green-400 text-sm">{success}</p>}
             <div className="flex gap-2">
@@ -843,7 +878,7 @@ function ProviderKeyCard({
                 disabled={!apiKey || saving}
                 className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
               >
-                {testing ? "Validating..." : saving ? "Saving..." : "Save"}
+                {testing ? "Validating..." : saving ? "Saving..." : isOllama ? "Connect" : "Save"}
               </button>
             </div>
           </div>
@@ -855,14 +890,14 @@ function ProviderKeyCard({
               rel="noopener noreferrer"
               className="text-sm text-[#3b82f6] hover:underline"
             >
-              View docs
+              {isOllama ? "Download Ollama" : "View docs"}
             </a>
             <div className="flex items-center gap-3">
               <button
                 onClick={onStartEdit}
                 className="text-sm text-[#888] hover:text-[#e0e0e0]"
               >
-                Update key
+                {isOllama ? "Change URL" : "Update key"}
               </button>
               <button
                 onClick={onDelete}
@@ -880,13 +915,13 @@ function ProviderKeyCard({
               rel="noopener noreferrer"
               className="text-sm text-[#3b82f6] hover:underline"
             >
-              Get API key
+              {isOllama ? "Download Ollama" : "Get API key"}
             </a>
             <button
               onClick={onStartEdit}
               className="text-sm text-[#f97316] hover:text-[#fb923c]"
             >
-              + Add key
+              {isOllama ? "Configure" : "+ Add key"}
             </button>
           </div>
         )}

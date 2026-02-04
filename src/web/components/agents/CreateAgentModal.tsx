@@ -40,6 +40,31 @@ export function CreateAgentModal({
 }: CreateAgentModalProps) {
   const { projects, currentProjectId } = useProjects();
   const selectedProvider = providers.find(p => p.id === form.provider);
+  const [ollamaModels, setOllamaModels] = React.useState<Array<{ value: string; label: string }>>([]);
+  const [loadingOllamaModels, setLoadingOllamaModels] = React.useState(false);
+
+  // Fetch Ollama models when Ollama is selected
+  React.useEffect(() => {
+    if (form.provider === "ollama") {
+      setLoadingOllamaModels(true);
+      fetch("/api/providers/ollama/models")
+        .then(res => res.json())
+        .then(data => {
+          if (data.models && data.models.length > 0) {
+            setOllamaModels(data.models.map((m: { value: string; label?: string }) => ({
+              value: m.value,
+              label: m.label || m.value,
+            })));
+            // Auto-select first model if none selected
+            if (!form.model && data.models.length > 0) {
+              onFormChange({ ...form, model: data.models[0].value });
+            }
+          }
+        })
+        .catch(() => setOllamaModels([]))
+        .finally(() => setLoadingOllamaModels(false));
+    }
+  }, [form.provider]);
 
   const providerOptions = configuredProviders
     .filter(p => p.type === "llm")
@@ -48,11 +73,14 @@ export function CreateAgentModal({
       label: p.name,
     }));
 
-  const modelOptions = selectedProvider?.models.map(m => ({
-    value: m.value,
-    label: m.label,
-    recommended: m.recommended,
-  })) || [];
+  // Use dynamic Ollama models if available, otherwise use provider's default models
+  const modelOptions = form.provider === "ollama" && ollamaModels.length > 0
+    ? ollamaModels
+    : selectedProvider?.models.map(m => ({
+        value: m.value,
+        label: m.label,
+        recommended: m.recommended,
+      })) || [];
 
   const projectOptions = projects.map(p => ({ value: p.id, label: p.name }));
 
@@ -158,12 +186,20 @@ export function CreateAgentModal({
             </FormField>
 
             <FormField label="Model">
-              <Select
-                value={form.model}
-                options={modelOptions}
-                onChange={(value) => onFormChange({ ...form, model: value })}
-                placeholder="Select model..."
-              />
+              {loadingOllamaModels ? (
+                <div className="text-sm text-[#666] py-2">Loading Ollama models...</div>
+              ) : form.provider === "ollama" && modelOptions.length === 0 ? (
+                <div className="text-sm text-yellow-400/80 py-2">
+                  No models found. Run <code className="bg-[#1a1a1a] px-1 rounded">ollama pull llama3.3</code> to download a model.
+                </div>
+              ) : (
+                <Select
+                  value={form.model}
+                  options={modelOptions}
+                  onChange={(value) => onFormChange({ ...form, model: value })}
+                  placeholder="Select model..."
+                />
+              )}
             </FormField>
 
             <FormField label="System Prompt">

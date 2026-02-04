@@ -1490,6 +1490,63 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     return json({ providers });
   }
 
+  // GET /api/providers/ollama/models - Fetch available models from Ollama
+  if (path === "/api/providers/ollama/models" && method === "GET") {
+    // Get configured Ollama base URL or use default
+    const ollamaUrl = ProviderKeys.getDecrypted("ollama") || "http://localhost:11434";
+
+    try {
+      const response = await fetch(`${ollamaUrl}/api/tags`, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        return json({ error: "Failed to connect to Ollama", models: [] }, 200);
+      }
+
+      const data = await response.json() as { models?: Array<{ name: string; size: number; modified_at: string }> };
+      const models = (data.models || []).map((m: { name: string; size: number }) => ({
+        value: m.name,
+        label: m.name,
+        size: m.size,
+      }));
+
+      return json({ models, connected: true });
+    } catch (err) {
+      // Ollama not running or not reachable
+      return json({
+        error: "Ollama not reachable. Make sure Ollama is running.",
+        models: [],
+        connected: false,
+      }, 200);
+    }
+  }
+
+  // GET /api/providers/ollama/status - Check if Ollama is running
+  if (path === "/api/providers/ollama/status" && method === "GET") {
+    const ollamaUrl = ProviderKeys.getDecrypted("ollama") || "http://localhost:11434";
+
+    try {
+      const response = await fetch(`${ollamaUrl}/api/tags`, {
+        method: "GET",
+        signal: AbortSignal.timeout(3000),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as { models?: Array<{ name: string }> };
+        return json({
+          connected: true,
+          url: ollamaUrl,
+          modelCount: data.models?.length || 0,
+        });
+      }
+      return json({ connected: false, url: ollamaUrl, error: "Ollama not responding" });
+    } catch {
+      return json({ connected: false, url: ollamaUrl, error: "Ollama not reachable" });
+    }
+  }
+
   // ==================== ONBOARDING ====================
 
   // GET /api/onboarding/status - Check onboarding status

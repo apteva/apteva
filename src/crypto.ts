@@ -136,6 +136,14 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
     return { valid: false, error: "API key cannot be empty" };
   }
 
+  // Ollama uses base URL instead of API key - accept any valid URL
+  if (provider === "ollama") {
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      return { valid: true };
+    }
+    return { valid: false, error: "Ollama requires a valid URL (e.g., http://localhost:11434)" };
+  }
+
   // Provider-specific format validation
   const patterns: Record<string, { pattern: RegExp; example: string }> = {
     anthropic: {
