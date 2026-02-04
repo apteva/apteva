@@ -127,13 +127,26 @@ async function cleanupOrphanedProcesses(): Promise<void> {
     try {
       const res = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(200) });
       if (res.ok) {
-        // Orphaned process on this port - shut it down
+        // Orphaned process on this port - shut it down gracefully first
         try {
           await fetch(`http://localhost:${port}/shutdown`, { method: "POST", signal: AbortSignal.timeout(500) });
-          cleaned++;
+          await new Promise(r => setTimeout(r, 500)); // Wait for graceful shutdown
         } catch {
-          // Shutdown failed - will be handled when agent tries to start
+          // Graceful shutdown failed
         }
+
+        // Check if still running and force kill if needed
+        try {
+          const check = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(200) });
+          if (check.ok) {
+            // Still running - force kill via lsof
+            const { execSync } = await import("child_process");
+            execSync(`lsof -ti :${port} | xargs -r kill -9 2>/dev/null || true`, { stdio: "ignore" });
+          }
+        } catch {
+          // Not responding anymore - good
+        }
+        cleaned++;
       }
     } catch {
       // Port not in use - good
@@ -153,6 +166,44 @@ export const agentProcesses: Map<string, { proc: Subprocess; port: number }> = n
 
 // Track agents currently being started (to prevent race conditions)
 export const agentsStarting: Set<string> = new Set();
+
+// Graceful shutdown handler - stop all agents when server exits
+async function shutdownAllAgents() {
+  if (agentProcesses.size === 0) return;
+
+  console.log(`\n  Stopping ${agentProcesses.size} running agent(s)...`);
+
+  for (const [agentId, { proc, port }] of agentProcesses) {
+    try {
+      // Try graceful shutdown
+      await fetch(`http://localhost:${port}/shutdown`, {
+        method: "POST",
+        signal: AbortSignal.timeout(1000),
+      }).catch(() => {});
+
+      proc.kill();
+      AgentDB.setStatus(agentId, "stopped");
+    } catch {
+      // Ignore errors during shutdown
+    }
+  }
+  agentProcesses.clear();
+}
+
+// Handle process termination signals
+let shuttingDown = false;
+process.on("SIGINT", async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await shutdownAllAgents();
+  process.exit(0);
+});
+process.on("SIGTERM", async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await shutdownAllAgents();
+  process.exit(0);
+});
 
 // Binary path - can be overridden via environment variable, or found from npm/downloaded
 export function getBinaryPathForAgent(): string {
@@ -175,8 +226,8 @@ export const BINARY_PATH = getBinaryPathForAgent();
 // Export binary status function for API
 export { getBinaryStatus, BIN_DIR };
 
-// Base port for spawned agents
-export let nextAgentPort = 4100;
+// Base port for MCP server proxies (separate range from agents which use 4100-4199)
+export let nextMcpPort = 4200;
 
 // Check if a port is available by trying to connect to it
 async function isPortAvailable(port: number): Promise<boolean> {
@@ -201,11 +252,11 @@ async function isPortAvailable(port: number): Promise<boolean> {
   }
 }
 
-// Get next available port (checking that nothing is using it)
+// Get next available port for MCP servers (checking that nothing is using it)
 export async function getNextPort(): Promise<number> {
   const maxAttempts = 100; // Prevent infinite loop
   for (let i = 0; i < maxAttempts; i++) {
-    const port = nextAgentPort++;
+    const port = nextMcpPort++;
     const available = await isPortAvailable(port);
     if (available) {
       return port;

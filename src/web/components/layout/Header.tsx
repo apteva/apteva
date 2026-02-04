@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useTelemetryContext, useAuth, useProjects } from "../../context";
 import { MenuIcon, ChevronDownIcon } from "../common/Icons";
+import { MetaAgentButton } from "../meta-agent/MetaAgent";
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -9,7 +10,7 @@ interface HeaderProps {
 export function Header({ onMenuClick }: HeaderProps) {
   const { connected } = useTelemetryContext();
   const { user, logout } = useAuth();
-  const { projects, currentProjectId, currentProject, setCurrentProjectId, unassignedCount } = useProjects();
+  const { projects, currentProjectId, currentProject, setCurrentProjectId, unassignedCount, projectsEnabled } = useProjects();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProjectMenu, setShowProjectMenu] = useState(false);
 
@@ -52,7 +53,7 @@ export function Header({ onMenuClick }: HeaderProps) {
           </div>
 
           {/* Project Selector */}
-          {projects.length > 0 && (
+          {projectsEnabled && projects.length > 0 && (
             <div className="relative ml-2 md:ml-4">
               <button
                 onClick={() => setShowProjectMenu(!showProjectMenu)}
@@ -122,6 +123,7 @@ export function Header({ onMenuClick }: HeaderProps) {
               {connected ? "Live" : "Offline"}
             </span>
           </div>
+          <MetaAgentButton />
           {user && (
             <div className="relative">
               <button

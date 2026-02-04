@@ -892,6 +892,7 @@ interface AvailableSkill {
   description: string;
   version: string;
   enabled: boolean;
+  project_id: string | null;
 }
 
 function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
@@ -906,7 +907,10 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     provider: agent.provider,
     model: agent.model,
     systemPrompt: agent.systemPrompt,
-    features: { ...agent.features },
+    features: {
+      ...agent.features,
+      builtinTools: agent.features.builtinTools || { webSearch: false, webFetch: false },
+    },
     mcpServers: [...(agent.mcpServers || [])],
     skills: [...(agent.skills || [])],
   });
@@ -970,7 +974,10 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
       provider: agent.provider,
       model: agent.model,
       systemPrompt: agent.systemPrompt,
-      features: { ...agent.features },
+      features: {
+        ...agent.features,
+        builtinTools: agent.features.builtinTools || { webSearch: false, webFetch: false },
+      },
       mcpServers: [...(agent.mcpServers || [])],
       skills: [...(agent.skills || [])],
     });
@@ -1201,6 +1208,63 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
           </FormField>
         )}
 
+        {/* Agent Built-in Tools - Anthropic only */}
+        {form.provider === "anthropic" && (
+        <FormField label="Agent Built-in Tools">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setForm(prev => ({
+                ...prev,
+                features: {
+                  ...prev.features,
+                  builtinTools: {
+                    ...prev.features.builtinTools,
+                    webSearch: !prev.features.builtinTools?.webSearch,
+                  },
+                },
+              }))}
+              className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                form.features.builtinTools?.webSearch
+                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
+                  : "border-[#222] hover:border-[#333] text-[#888]"
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <span className="text-sm">Web Search</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm(prev => ({
+                ...prev,
+                features: {
+                  ...prev.features,
+                  builtinTools: {
+                    ...prev.features.builtinTools,
+                    webFetch: !prev.features.builtinTools?.webFetch,
+                  },
+                },
+              }))}
+              className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                form.features.builtinTools?.webFetch
+                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
+                  : "border-[#222] hover:border-[#333] text-[#888]"
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+              </svg>
+              <span className="text-sm">Web Fetch</span>
+            </button>
+          </div>
+          <p className="text-xs text-[#555] mt-2">
+            Provider-native tools for real-time web access
+          </p>
+        </FormField>
+        )}
+
         {/* MCP Server Selection - shown when MCP is enabled */}
         {form.features.mcp && (
           <FormField label="MCP Servers">
@@ -1210,7 +1274,9 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
               </p>
             ) : (
               <div className="space-y-2">
-                {availableMcpServers.map(server => {
+                {availableMcpServers
+                  .filter(server => server.project_id === null || server.project_id === agent.projectId)
+                  .map(server => {
                   const isRemote = server.type === "http" && server.url;
                   const isAvailable = isRemote || server.status === "running";
                   const serverInfo = isRemote
@@ -1231,8 +1297,13 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                         isAvailable ? "bg-green-400" : "bg-[#444]"
                       }`} />
                       <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium ${form.mcpServers.includes(server.id) ? "text-[#f97316]" : ""}`}>
-                          {server.name}
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-medium ${form.mcpServers.includes(server.id) ? "text-[#f97316]" : ""}`}>
+                            {server.name}
+                          </span>
+                          {server.project_id === null && (
+                            <span className="text-[10px] text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">Global</span>
+                          )}
                         </div>
                         <div className="text-xs text-[#666]">{serverInfo}</div>
                       </div>
@@ -1262,7 +1333,9 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             </p>
           ) : (
             <div className="space-y-2">
-              {availableSkills.filter(s => s.enabled).map(skill => (
+              {availableSkills
+                .filter(s => s.enabled && (s.project_id === null || s.project_id === agent.projectId))
+                .map(skill => (
                 <button
                   key={skill.id}
                   type="button"
@@ -1274,8 +1347,13 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                   }`}
                 >
                   <div className="flex-1 min-w-0">
-                    <div className={`text-sm font-medium ${form.skills.includes(skill.id) ? "text-[#f97316]" : ""}`}>
-                      {skill.name}
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-medium ${form.skills.includes(skill.id) ? "text-[#f97316]" : ""}`}>
+                        {skill.name}
+                      </span>
+                      {skill.project_id === null && (
+                        <span className="text-[10px] text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">Global</span>
+                      )}
                     </div>
                     <div className="text-xs text-[#666]">{skill.description}</div>
                   </div>

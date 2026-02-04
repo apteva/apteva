@@ -2,7 +2,7 @@ import { spawn } from "bun";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync } from "fs";
-import { agentProcesses, agentsStarting, BINARY_PATH, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
+import { agentProcesses, agentsStarting, getBinaryPathForAgent, getNextPort, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../server";
 import { AgentDB, McpServerDB, TelemetryDB, UserDB, ProjectDB, SkillDB, generateId, getMultiAgentConfig, type Agent, type AgentFeatures, type McpServer, type Project, type Skill } from "../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../providers";
 import { createUser, hashPassword, validatePassword } from "../auth";
@@ -37,6 +37,10 @@ registerProvider(ComposioProvider);
 const AGENTS_DATA_DIR = process.env.DATA_DIR
   ? join(process.env.DATA_DIR, "agents")
   : join(homedir(), ".apteva", "agents");
+
+// Meta Agent configuration
+const META_AGENT_ENABLED = process.env.META_AGENT_ENABLED === "true";
+const META_AGENT_ID = "apteva-assistant";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -168,6 +172,7 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
     id: agent.id,
     name: agent.name,
     description: agent.system_prompt,
+    public_url: `http://localhost:${agent.port}`,
     llm: {
       provider: agent.provider,
       model: agent.model,
@@ -193,6 +198,10 @@ function buildAgentConfig(agent: Agent, providerKey: string) {
         max_concurrent: 10,
       },
       tools: [], // Clear any old tool whitelist - agent uses all registered tools
+      builtin_tools: [
+        ...(features.builtinTools?.webSearch ? [{ type: "web_search_20250305", name: "web_search" }] : []),
+        ...(features.builtinTools?.webFetch ? [{ type: "web_fetch_20250910", name: "web_fetch" }] : []),
+      ],
     },
     tasks: {
       enabled: features.tasks,
@@ -479,16 +488,22 @@ export async function startAgentProcess(
     }
 
     // Build environment with provider key and agent API key
+    // CONFIG_PATH ensures each agent has its own config file (prevents sharing)
+    const agentConfigPath = join(agentDataDir, "agent-config.json");
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       PORT: String(port),
       DATA_DIR: agentDataDir,
+      CONFIG_PATH: agentConfigPath,
       AGENT_API_KEY: agentApiKey,
       [providerConfig.envVar]: providerKey,
     };
 
+    // Get binary path dynamically (allows hot-reload of new binary versions)
+    const binaryPath = getBinaryPathForAgent();
+
     const proc = spawn({
-      cmd: [BINARY_PATH],
+      cmd: [binaryPath],
       env,
       stdout: "inherit",
       stderr: "inherit",
@@ -628,14 +643,22 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     });
   }
 
+  // GET /api/features - Feature flags (no auth required)
+  if (path === "/api/features" && method === "GET") {
+    return json({
+      projects: process.env.PROJECTS_ENABLED === "true",
+      metaAgent: process.env.META_AGENT_ENABLED === "true",
+    });
+  }
+
   // GET /api/openapi - OpenAPI spec (no auth required)
   if (path === "/api/openapi" && method === "GET") {
     return json(openApiSpec);
   }
 
-  // GET /api/agents - List all agents
+  // GET /api/agents - List all agents (excludes meta agent)
   if (path === "/api/agents" && method === "GET") {
-    const agents = AgentDB.findAll();
+    const agents = AgentDB.findAll().filter(a => a.id !== META_AGENT_ID);
     return json({ agents: agents.map(toApiAgent) });
   }
 
@@ -752,9 +775,41 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
     // Stop the agent if running
     const agentProc = agentProcesses.get(agentId);
+    const port = agent.port;
+
     if (agentProc) {
-      agentProc.proc.kill();
+      // Try graceful shutdown first
+      if (port) {
+        try {
+          await fetch(`http://localhost:${port}/shutdown`, {
+            method: "POST",
+            signal: AbortSignal.timeout(2000),
+          });
+          await new Promise(r => setTimeout(r, 500));
+        } catch {
+          // Graceful shutdown failed
+        }
+      }
+
+      try {
+        agentProc.proc.kill();
+      } catch {
+        // Already dead
+      }
       agentProcesses.delete(agentId);
+
+      // Ensure port is freed
+      if (port) {
+        const isFree = await checkPortFree(port);
+        if (!isFree) {
+          try {
+            const { execSync } = await import("child_process");
+            execSync(`lsof -ti :${port} | xargs -r kill -9 2>/dev/null || true`, { stdio: "ignore" });
+          } catch {
+            // Ignore
+          }
+        }
+      }
     }
 
     // Delete agent's telemetry data
@@ -841,10 +896,45 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
 
     const agentProc = agentProcesses.get(agent.id);
+    const port = agent.port;
+
     if (agentProc) {
       console.log(`Stopping agent ${agent.name} (pid: ${agentProc.proc.pid})...`);
-      agentProc.proc.kill();
+
+      // Try graceful shutdown first
+      if (port) {
+        try {
+          await fetch(`http://localhost:${port}/shutdown`, {
+            method: "POST",
+            signal: AbortSignal.timeout(2000),
+          });
+          await new Promise(r => setTimeout(r, 500)); // Wait for graceful shutdown
+        } catch {
+          // Graceful shutdown failed or timed out
+        }
+      }
+
+      // Force kill if still running
+      try {
+        agentProc.proc.kill();
+      } catch {
+        // Already dead
+      }
       agentProcesses.delete(agent.id);
+
+      // Ensure port is freed
+      if (port) {
+        const isFree = await checkPortFree(port);
+        if (!isFree) {
+          // Force kill by port
+          try {
+            const { execSync } = await import("child_process");
+            execSync(`lsof -ti :${port} | xargs -r kill -9 2>/dev/null || true`, { stdio: "ignore" });
+          } catch {
+            // Ignore
+          }
+        }
+      }
     }
 
     const updated = AgentDB.setStatus(agent.id, "stopped");
@@ -1422,6 +1512,140 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
     }
   }
 
+  // ==================== META AGENT (Apteva Assistant) ====================
+
+  // GET /api/meta-agent/status - Get meta agent status and config
+  if (path === "/api/meta-agent/status" && method === "GET") {
+    if (!META_AGENT_ENABLED) {
+      return json({ enabled: false });
+    }
+
+    // Check if onboarding is complete
+    if (!Onboarding.isComplete()) {
+      return json({ enabled: true, available: false, reason: "onboarding_incomplete" });
+    }
+
+    // Get first configured provider
+    const configuredProviders = ProviderKeys.getConfiguredProviders();
+    if (configuredProviders.length === 0) {
+      return json({ enabled: true, available: false, reason: "no_provider" });
+    }
+
+    const providerId = configuredProviders[0] as keyof typeof PROVIDERS;
+    const provider = PROVIDERS[providerId];
+    if (!provider) {
+      return json({ enabled: true, available: false, reason: "invalid_provider" });
+    }
+
+    // Check if meta agent exists, create if not
+    let metaAgent = AgentDB.findById(META_AGENT_ID);
+    if (!metaAgent) {
+      // Find a recommended model or use first one
+      const defaultModel = provider.models.find(m => m.recommended)?.value || provider.models[0]?.value;
+      if (!defaultModel) {
+        return json({ enabled: true, available: false, reason: "no_model" });
+      }
+
+      // Create the meta agent
+      metaAgent = AgentDB.create({
+        id: META_AGENT_ID,
+        name: "Apteva Assistant",
+        model: defaultModel,
+        provider: providerId,
+        system_prompt: `You are the Apteva Assistant, a helpful guide for users of the Apteva agent management platform.
+
+You can help users with:
+- Creating and configuring AI agents
+- Setting up MCP servers for tool integrations
+- Managing projects and organizing agents
+- Explaining features like Memory, Tasks, Vision, Operator, Files, and Multi-Agent
+- Troubleshooting common issues
+
+Be concise, friendly, and helpful. When users ask about creating something, guide them step by step.
+Keep responses short and actionable. Use markdown formatting when helpful.`,
+        features: {
+          memory: false,
+          tasks: false,
+          vision: false,
+          operator: false,
+          mcp: false,
+          realtime: false,
+          files: false,
+          agents: false,
+        },
+        mcp_servers: [],
+        skills: [],
+        project_id: null, // Meta agent belongs to no project
+      });
+    }
+
+    // Return status
+    return json({
+      enabled: true,
+      available: true,
+      agent: {
+        id: metaAgent.id,
+        name: metaAgent.name,
+        status: metaAgent.status,
+        port: metaAgent.port,
+        provider: metaAgent.provider,
+        model: metaAgent.model,
+      },
+    });
+  }
+
+  // POST /api/meta-agent/start - Start the meta agent
+  if (path === "/api/meta-agent/start" && method === "POST") {
+    if (!META_AGENT_ENABLED) {
+      return json({ error: "Meta agent is not enabled" }, 400);
+    }
+
+    const metaAgent = AgentDB.findById(META_AGENT_ID);
+    if (!metaAgent) {
+      return json({ error: "Meta agent not found" }, 404);
+    }
+
+    if (metaAgent.status === "running") {
+      return json({ agent: toApiAgent(metaAgent), message: "Already running" });
+    }
+
+    // Start the agent using existing startAgentProcess function
+    const result = await startAgentProcess(metaAgent, { silent: true });
+    if (!result.success) {
+      return json({ error: result.error || "Failed to start meta agent" }, 500);
+    }
+
+    const updated = AgentDB.findById(META_AGENT_ID);
+    return json({ agent: updated ? toApiAgent(updated) : null });
+  }
+
+  // POST /api/meta-agent/stop - Stop the meta agent
+  if (path === "/api/meta-agent/stop" && method === "POST") {
+    if (!META_AGENT_ENABLED) {
+      return json({ error: "Meta agent is not enabled" }, 400);
+    }
+
+    const metaAgent = AgentDB.findById(META_AGENT_ID);
+    if (!metaAgent) {
+      return json({ error: "Meta agent not found" }, 404);
+    }
+
+    if (metaAgent.status === "stopped") {
+      return json({ agent: toApiAgent(metaAgent), message: "Already stopped" });
+    }
+
+    // Stop the agent
+    const proc = agentProcesses.get(META_AGENT_ID);
+    if (proc) {
+      proc.kill();
+      agentProcesses.delete(META_AGENT_ID);
+    }
+    AgentDB.setStatus(META_AGENT_ID, "stopped");
+
+    const updated = AgentDB.findById(META_AGENT_ID);
+    return json({ agent: updated ? toApiAgent(updated) : null });
+  }
+
   // ==================== USER MANAGEMENT (Admin only) ====================
 
   // GET /api/users - List all users
@@ -1672,7 +1896,48 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
         return json({ error: result.error }, 400);
       }
 
-      return json({ success: true, message: "API key saved successfully" });
+      // Restart any running agents that use this provider (including meta agent)
+      const runningAgents = AgentDB.findAll().filter(
+        a => a.status === "running" && a.provider === providerId
+      );
+
+      const restartResults: Array<{ id: string; name: string; success: boolean; error?: string }> = [];
+      for (const agent of runningAgents) {
+        try {
+          // Stop the agent
+          const agentProc = agentProcesses.get(agent.id);
+          if (agentProc) {
+            agentProc.proc.kill();
+            agentProcesses.delete(agent.id);
+          }
+          AgentDB.setStatus(agent.id, "stopped", null);
+
+          // Wait a moment for port to be released
+          await new Promise(r => setTimeout(r, 500));
+
+          // Restart the agent with new key
+          const startResult = await startAgentProcess(agent, { silent: true });
+          restartResults.push({
+            id: agent.id,
+            name: agent.name,
+            success: startResult.success,
+            error: startResult.error,
+          });
+        } catch (e) {
+          restartResults.push({
+            id: agent.id,
+            name: agent.name,
+            success: false,
+            error: String(e),
+          });
+        }
+      }
+
+      return json({
+        success: true,
+        message: "API key saved successfully",
+        restartedAgents: restartResults.length > 0 ? restartResults : undefined,
+      });
     } catch (e) {
       return json({ error: "Invalid request body" }, 400);
     }
@@ -1943,9 +2208,23 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
   // ============ MCP Server API ============
 
-  // GET /api/mcp/servers - List all MCP servers
+  // GET /api/mcp/servers - List MCP servers (optionally filtered by project)
   if (path === "/api/mcp/servers" && method === "GET") {
-    const servers = McpServerDB.findAll();
+    const url = new URL(req.url);
+    const projectFilter = url.searchParams.get("project"); // "all", "global", or project ID
+    const forAgent = url.searchParams.get("forAgent"); // agent's project ID (shows global + project)
+
+    let servers;
+    if (forAgent !== null) {
+      // Get servers available for an agent (global + agent's project)
+      servers = McpServerDB.findForAgent(forAgent || null);
+    } else if (projectFilter === "global") {
+      servers = McpServerDB.findGlobal();
+    } else if (projectFilter && projectFilter !== "all") {
+      servers = McpServerDB.findByProject(projectFilter);
+    } else {
+      servers = McpServerDB.findAll();
+    }
     return json({ servers });
   }
 
@@ -2406,7 +2685,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
   if (path === "/api/mcp/servers" && method === "POST") {
     try {
       const body = await req.json();
-      const { name, type, package: pkg, command, args, env, url, headers, source } = body;
+      const { name, type, package: pkg, command, args, env, url, headers, source, project_id } = body;
 
       if (!name) {
         return json({ error: "Name is required" }, 400);
@@ -2423,6 +2702,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
         url: url || null,
         headers: headers || {},
         source: source || null,
+        project_id: project_id || null,
       });
 
       return json({ server }, 201);
@@ -2459,6 +2739,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       if (body.command !== undefined) updates.command = body.command;
       if (body.args !== undefined) updates.args = body.args;
       if (body.env !== undefined) updates.env = body.env;
+      if (body.project_id !== undefined) updates.project_id = body.project_id;
 
       const updated = McpServerDB.update(mcpServerMatch[1], updates);
       return json({ server: updated });
@@ -2656,9 +2937,23 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
   // ============ Skills Endpoints ============
 
-  // GET /api/skills - List all skills
+  // GET /api/skills - List skills (optionally filtered by project)
   if (path === "/api/skills" && method === "GET") {
-    const skills = SkillDB.findAll();
+    const url = new URL(req.url);
+    const projectFilter = url.searchParams.get("project"); // "all", "global", or project ID
+    const forAgent = url.searchParams.get("forAgent"); // agent's project ID (shows global + project)
+
+    let skills;
+    if (forAgent !== null) {
+      // Get skills available for an agent (global + agent's project)
+      skills = SkillDB.findForAgent(forAgent || null);
+    } else if (projectFilter === "global") {
+      skills = SkillDB.findGlobal();
+    } else if (projectFilter && projectFilter !== "all") {
+      skills = SkillDB.findByProject(projectFilter);
+    } else {
+      skills = SkillDB.findAll();
+    }
     return json({ skills });
   }
 
@@ -2666,7 +2961,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
   if (path === "/api/skills" && method === "POST") {
     try {
       const body = await req.json();
-      const { name, description, content, version, license, compatibility, metadata, allowed_tools, source, source_url, enabled } = body;
+      const { name, description, content, version, license, compatibility, metadata, allowed_tools, source, source_url, enabled, project_id } = body;
 
       if (!name || !description || !content) {
         return json({ error: "name, description, and content are required" }, 400);
@@ -2693,6 +2988,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
         source: source || "local",
         source_url: source_url || null,
         enabled: enabled !== false,
+        project_id: project_id || null,
       });
 
       return json({ skill }, 201);
@@ -2731,6 +3027,7 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
       if (body.metadata !== undefined) updates.metadata = body.metadata;
       if (body.allowed_tools !== undefined) updates.allowed_tools = body.allowed_tools;
       if (body.enabled !== undefined) updates.enabled = body.enabled;
+      if (body.project_id !== undefined) updates.project_id = body.project_id;
 
       // Auto-increment version if content changed
       if (body.content !== undefined && body.content !== skill.content) {

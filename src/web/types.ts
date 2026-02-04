@@ -8,6 +8,11 @@ export interface MultiAgentConfig {
   group?: string; // Defaults to projectId if not specified
 }
 
+export interface AgentBuiltinTools {
+  webSearch: boolean;
+  webFetch: boolean;
+}
+
 export interface AgentFeatures {
   memory: boolean;
   tasks: boolean;
@@ -17,6 +22,7 @@ export interface AgentFeatures {
   realtime: boolean;
   files: boolean;
   agents: boolean | MultiAgentConfig; // Can be boolean for backwards compat or full config
+  builtinTools?: AgentBuiltinTools;
 }
 
 export const DEFAULT_FEATURES: AgentFeatures = {
@@ -28,6 +34,7 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   realtime: false,
   files: false,
   agents: false,
+  builtinTools: { webSearch: false, webFetch: false },
 };
 
 // Helper to normalize agents feature to MultiAgentConfig
@@ -91,6 +98,7 @@ export interface McpServer {
   port: number | null;
   status: "stopped" | "running";
   source: string | null; // "composio", "smithery", or null for local
+  project_id: string | null; // null = global, otherwise project-scoped
 }
 
 export interface McpTool {

@@ -13,6 +13,11 @@ export interface MultiAgentConfig {
   group?: string; // Defaults to projectId if not specified
 }
 
+export interface AgentBuiltinTools {
+  webSearch: boolean;
+  webFetch: boolean;
+}
+
 export interface AgentFeatures {
   memory: boolean;
   tasks: boolean;
@@ -22,6 +27,7 @@ export interface AgentFeatures {
   realtime: boolean;
   files: boolean;
   agents: boolean | MultiAgentConfig; // Can be boolean for backwards compat or full config
+  builtinTools?: AgentBuiltinTools;
 }
 
 export const DEFAULT_FEATURES: AgentFeatures = {
@@ -33,6 +39,7 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   realtime: false,
   files: false,
   agents: false,
+  builtinTools: { webSearch: false, webFetch: false },
 };
 
 // Helper to normalize agents feature to MultiAgentConfig
@@ -141,6 +148,7 @@ export interface McpServer {
   port: number | null;
   status: "stopped" | "running";
   source: string | null; // e.g., "composio", "smithery", null for local
+  project_id: string | null; // null = global, otherwise project-scoped
   created_at: string;
 }
 
@@ -158,6 +166,7 @@ export interface Skill {
   source: "local" | "skillsmp" | "github" | "import";
   source_url: string | null;
   enabled: boolean;
+  project_id: string | null; // null = global, otherwise project-scoped
   created_at: string;
   updated_at: string;
 }
@@ -175,6 +184,7 @@ export interface SkillRow {
   source: string;
   source_url: string | null;
   enabled: number;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -192,6 +202,7 @@ export interface McpServerRow {
   port: number | null;
   status: string;
   source: string | null;
+  project_id: string | null;
   created_at: string;
 }
 
@@ -465,6 +476,20 @@ function runMigrations() {
       name: "018_add_skill_version",
       sql: `
         ALTER TABLE skills ADD COLUMN version TEXT DEFAULT '1.0.0';
+      `,
+    },
+    {
+      name: "019_add_mcp_server_project_id",
+      sql: `
+        ALTER TABLE mcp_servers ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id);
+      `,
+    },
+    {
+      name: "020_add_skill_project_id",
+      sql: `
+        ALTER TABLE skills ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_skills_project ON skills(project_id);
       `,
     },
   ];
@@ -832,11 +857,12 @@ export const ProjectDB = {
     return row.count;
   },
 
-  // Get agent count per project
+  // Get agent count per project (excludes meta agent)
   getAgentCounts(): Map<string | null, number> {
     const rows = db.query(`
       SELECT project_id, COUNT(*) as count
       FROM agents
+      WHERE id != 'apteva-assistant'
       GROUP BY project_id
     `).all() as { project_id: string | null; count: number }[];
 
@@ -1053,12 +1079,12 @@ export const McpServerDB = {
     const envEncrypted = encryptObject(server.env || {});
     const headersEncrypted = encryptObject(server.headers || {});
     const stmt = db.prepare(`
-      INSERT INTO mcp_servers (id, name, type, package, command, args, env, url, headers, source, status, port, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
+      INSERT INTO mcp_servers (id, name, type, package, command, args, env, url, headers, source, project_id, status, port, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
     `);
     stmt.run(
       server.id, server.name, server.type, server.package, server.command, server.args,
-      envEncrypted, server.url || null, headersEncrypted, server.source || null, now
+      envEncrypted, server.url || null, headersEncrypted, server.source || null, server.project_id || null, now
     );
     return this.findById(server.id)!;
   },
@@ -1123,6 +1149,10 @@ export const McpServerDB = {
       fields.push("source = ?");
       values.push(updates.source);
     }
+    if (updates.project_id !== undefined) {
+      fields.push("project_id = ?");
+      values.push(updates.project_id);
+    }
     if (updates.port !== undefined) {
       fields.push("port = ?");
       values.push(updates.port);
@@ -1157,6 +1187,34 @@ export const McpServerDB = {
     const row = db.query("SELECT COUNT(*) as count FROM mcp_servers").get() as { count: number };
     return row.count;
   },
+
+  // Find servers by project (null = global only)
+  findByProject(projectId: string | null): McpServer[] {
+    if (projectId === null) {
+      const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY created_at DESC").all() as McpServerRow[];
+      return rows.map(rowToMcpServer);
+    }
+    const rows = db.query("SELECT * FROM mcp_servers WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as McpServerRow[];
+    return rows.map(rowToMcpServer);
+  },
+
+  // Find servers available for an agent (global + agent's project)
+  findForAgent(agentProjectId: string | null): McpServer[] {
+    if (agentProjectId === null) {
+      // Agent has no project, only show global servers
+      const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY created_at DESC").all() as McpServerRow[];
+      return rows.map(rowToMcpServer);
+    }
+    // Agent has a project, show global + project servers
+    const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL OR project_id = ? ORDER BY created_at DESC").all(agentProjectId) as McpServerRow[];
+    return rows.map(rowToMcpServer);
+  },
+
+  // Find global servers only
+  findGlobal(): McpServer[] {
+    const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY created_at DESC").all() as McpServerRow[];
+    return rows.map(rowToMcpServer);
+  },
 };
 
 // Helper to convert DB row to McpServer type
@@ -1177,6 +1235,7 @@ function rowToMcpServer(row: McpServerRow): McpServer {
     port: row.port,
     status: row.status as "stopped" | "running",
     source: row.source,
+    project_id: row.project_id,
     created_at: row.created_at,
   };
 }
@@ -1761,8 +1820,8 @@ export const SkillDB = {
     const allowedToolsJson = JSON.stringify(skill.allowed_tools || []);
 
     db.run(
-      `INSERT INTO skills (id, name, description, content, version, license, compatibility, metadata, allowed_tools, source, source_url, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO skills (id, name, description, content, version, license, compatibility, metadata, allowed_tools, source, source_url, enabled, project_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         skill.name,
@@ -1776,6 +1835,7 @@ export const SkillDB = {
         skill.source,
         skill.source_url || null,
         skill.enabled ? 1 : 0,
+        skill.project_id || null,
         now,
         now,
       ]
@@ -1860,6 +1920,10 @@ export const SkillDB = {
       fields.push("enabled = ?");
       values.push(updates.enabled ? 1 : 0);
     }
+    if (updates.project_id !== undefined) {
+      fields.push("project_id = ?");
+      values.push(updates.project_id);
+    }
 
     if (fields.length > 0) {
       fields.push("updated_at = ?");
@@ -1900,6 +1964,34 @@ export const SkillDB = {
     const row = db.query("SELECT COUNT(*) as count FROM skills WHERE name = ?").get(name) as { count: number };
     return row.count > 0;
   },
+
+  // Find skills by project (null = global only)
+  findByProject(projectId: string | null): Skill[] {
+    if (projectId === null) {
+      const rows = db.query("SELECT * FROM skills WHERE project_id IS NULL ORDER BY name ASC").all() as SkillRow[];
+      return rows.map(rowToSkill);
+    }
+    const rows = db.query("SELECT * FROM skills WHERE project_id = ? ORDER BY name ASC").all(projectId) as SkillRow[];
+    return rows.map(rowToSkill);
+  },
+
+  // Find skills available for an agent (global + agent's project)
+  findForAgent(agentProjectId: string | null): Skill[] {
+    if (agentProjectId === null) {
+      // Agent has no project, only show global skills
+      const rows = db.query("SELECT * FROM skills WHERE project_id IS NULL ORDER BY name ASC").all() as SkillRow[];
+      return rows.map(rowToSkill);
+    }
+    // Agent has a project, show global + project skills
+    const rows = db.query("SELECT * FROM skills WHERE project_id IS NULL OR project_id = ? ORDER BY name ASC").all(agentProjectId) as SkillRow[];
+    return rows.map(rowToSkill);
+  },
+
+  // Find global skills only
+  findGlobal(): Skill[] {
+    const rows = db.query("SELECT * FROM skills WHERE project_id IS NULL ORDER BY name ASC").all() as SkillRow[];
+    return rows.map(rowToSkill);
+  },
 };
 
 // Helper to convert DB row to Skill type
@@ -1933,6 +2025,7 @@ function rowToSkill(row: SkillRow): Skill {
     source: row.source as Skill["source"],
     source_url: row.source_url,
     enabled: row.enabled === 1,
+    project_id: row.project_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

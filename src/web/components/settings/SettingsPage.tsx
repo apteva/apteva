@@ -7,41 +7,56 @@ import type { Provider } from "../../types";
 type SettingsTab = "providers" | "projects" | "updates" | "data";
 
 export function SettingsPage() {
+  const { projectsEnabled } = useProjects();
   const [activeTab, setActiveTab] = useState<SettingsTab>("providers");
 
+  const tabs: { key: SettingsTab; label: string }[] = [
+    { key: "providers", label: "Providers" },
+    ...(projectsEnabled ? [{ key: "projects" as SettingsTab, label: "Projects" }] : []),
+    { key: "updates", label: "Updates" },
+    { key: "data", label: "Data" },
+  ];
+
   return (
-    <div className="flex-1 flex overflow-hidden">
-      {/* Settings Sidebar */}
-      <div className="w-48 border-r border-[#1a1a1a] p-4">
+    <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      {/* Mobile: Horizontal scrolling tabs */}
+      <div className="md:hidden border-b border-[#1a1a1a] bg-[#0a0a0a]">
+        <div className="flex overflow-x-auto" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+          {tabs.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition ${
+                activeTab === tab.key
+                  ? "border-[#f97316] text-[#f97316]"
+                  : "border-transparent text-[#666] hover:text-[#888]"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Desktop: Settings Sidebar */}
+      <div className="hidden md:block w-48 border-r border-[#1a1a1a] p-4 flex-shrink-0">
         <h2 className="text-sm font-medium text-[#666] uppercase tracking-wider mb-3">Settings</h2>
         <nav className="space-y-1">
-          <SettingsNavItem
-            label="Providers"
-            active={activeTab === "providers"}
-            onClick={() => setActiveTab("providers")}
-          />
-          <SettingsNavItem
-            label="Projects"
-            active={activeTab === "projects"}
-            onClick={() => setActiveTab("projects")}
-          />
-          <SettingsNavItem
-            label="Updates"
-            active={activeTab === "updates"}
-            onClick={() => setActiveTab("updates")}
-          />
-          <SettingsNavItem
-            label="Data"
-            active={activeTab === "data"}
-            onClick={() => setActiveTab("data")}
-          />
+          {tabs.map(tab => (
+            <SettingsNavItem
+              key={tab.key}
+              label={tab.label}
+              active={activeTab === tab.key}
+              onClick={() => setActiveTab(tab.key)}
+            />
+          ))}
         </nav>
       </div>
 
       {/* Settings Content */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {activeTab === "providers" && <ProvidersSettings />}
-        {activeTab === "projects" && <ProjectsSettings />}
+        {activeTab === "projects" && projectsEnabled && <ProjectsSettings />}
         {activeTab === "updates" && <UpdatesSettings />}
         {activeTab === "data" && <DataSettings />}
       </div>
@@ -121,11 +136,22 @@ function ProvidersSettings() {
         body: JSON.stringify({ key: apiKey }),
       });
 
+      const saveData = await saveRes.json();
       if (!saveRes.ok) {
-        const data = await saveRes.json();
-        setError(data.error || "Failed to save key");
+        setError(saveData.error || "Failed to save key");
       } else {
-        setSuccess("API key saved!");
+        // Build success message including agent restart info
+        let msg = "API key saved!";
+        if (saveData.restartedAgents && saveData.restartedAgents.length > 0) {
+          const successCount = saveData.restartedAgents.filter((a: { success: boolean }) => a.success).length;
+          const failCount = saveData.restartedAgents.length - successCount;
+          if (failCount === 0) {
+            msg += ` Restarted ${successCount} agent${successCount > 1 ? 's' : ''} with new key.`;
+          } else {
+            msg += ` Restarted ${successCount}/${saveData.restartedAgents.length} agents.`;
+          }
+        }
+        setSuccess(msg);
         setApiKey("");
         setSelectedProvider(null);
         fetchProviders();
@@ -148,10 +174,34 @@ function ProvidersSettings() {
   const llmConfiguredCount = llmProviders.filter(p => p.hasKey).length;
   const intConfiguredCount = integrations.filter(p => p.hasKey).length;
 
+  // Auto-dismiss success message after 5 seconds
+  useEffect(() => {
+    if (success && !selectedProvider) {
+      const timer = setTimeout(() => setSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success, selectedProvider]);
+
   return (
     <>
     {ConfirmDialog}
     <div className="space-y-10">
+      {/* Global Success Banner */}
+      {success && !selectedProvider && (
+        <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-green-400">
+            <CheckIcon className="w-5 h-5" />
+            <span>{success}</span>
+          </div>
+          <button
+            onClick={() => setSuccess(null)}
+            className="text-green-400 hover:text-green-300"
+          >
+            <CloseIcon className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* AI Providers Section */}
       <div>
         <div className="mb-6">
@@ -768,73 +818,79 @@ function ProviderKeyCard({
         )}
       </div>
 
-      {provider.hasKey ? (
-        <div className="flex items-center justify-between mt-3 pt-3 border-t border-[#1a1a1a]">
-          <a
-            href={provider.docsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-[#3b82f6] hover:underline"
-          >
-            View docs
-          </a>
-          <button
-            onClick={onDelete}
-            className="text-red-400 hover:text-red-300 text-sm"
-          >
-            Remove key
-          </button>
-        </div>
-      ) : (
-        <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
-          {isEditing ? (
-            <div className="space-y-3">
-              <input
-                type="password"
-                value={apiKey}
-                onChange={e => onApiKeyChange(e.target.value)}
-                placeholder="Enter API key..."
-                autoFocus
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
-              />
-              {error && <p className="text-red-400 text-sm">{error}</p>}
-              {success && <p className="text-green-400 text-sm">{success}</p>}
-              <div className="flex gap-2">
-                <button
-                  onClick={onCancelEdit}
-                  className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={onSave}
-                  disabled={!apiKey || saving}
-                  className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
-                >
-                  {testing ? "Validating..." : saving ? "Saving..." : "Save"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between">
-              <a
-                href={provider.docsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-[#3b82f6] hover:underline"
-              >
-                Get API key
-              </a>
+      <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
+        {isEditing ? (
+          <div className="space-y-3">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={e => onApiKeyChange(e.target.value)}
+              placeholder={provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+              autoFocus
+              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            />
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+            {success && <p className="text-green-400 text-sm">{success}</p>}
+            <div className="flex gap-2">
               <button
-                onClick={onStartEdit}
-                className="text-sm text-[#f97316] hover:text-[#fb923c]"
+                onClick={onCancelEdit}
+                className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
               >
-                + Add key
+                Cancel
+              </button>
+              <button
+                onClick={onSave}
+                disabled={!apiKey || saving}
+                className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+              >
+                {testing ? "Validating..." : saving ? "Saving..." : "Save"}
               </button>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        ) : provider.hasKey ? (
+          <div className="flex items-center justify-between">
+            <a
+              href={provider.docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-[#3b82f6] hover:underline"
+            >
+              View docs
+            </a>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onStartEdit}
+                className="text-sm text-[#888] hover:text-[#e0e0e0]"
+              >
+                Update key
+              </button>
+              <button
+                onClick={onDelete}
+                className="text-red-400 hover:text-red-300 text-sm"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <a
+              href={provider.docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-[#3b82f6] hover:underline"
+            >
+              Get API key
+            </a>
+            <button
+              onClick={onStartEdit}
+              className="text-sm text-[#f97316] hover:text-[#fb923c]"
+            >
+              + Add key
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -874,73 +930,79 @@ function IntegrationKeyCard({
         )}
       </div>
 
-      {provider.hasKey ? (
-        <div className="flex items-center justify-between mt-3 pt-3 border-t border-[#1a1a1a]">
-          <a
-            href={provider.docsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-[#3b82f6] hover:underline"
-          >
-            View docs
-          </a>
-          <button
-            onClick={onDelete}
-            className="text-red-400 hover:text-red-300 text-sm"
-          >
-            Remove key
-          </button>
-        </div>
-      ) : (
-        <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
-          {isEditing ? (
-            <div className="space-y-3">
-              <input
-                type="password"
-                value={apiKey}
-                onChange={e => onApiKeyChange(e.target.value)}
-                placeholder="Enter API key..."
-                autoFocus
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
-              />
-              {error && <p className="text-red-400 text-sm">{error}</p>}
-              {success && <p className="text-green-400 text-sm">{success}</p>}
-              <div className="flex gap-2">
-                <button
-                  onClick={onCancelEdit}
-                  className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={onSave}
-                  disabled={!apiKey || saving}
-                  className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
-                >
-                  {testing ? "Validating..." : saving ? "Saving..." : "Save"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between">
-              <a
-                href={provider.docsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-[#3b82f6] hover:underline"
-              >
-                Get API key
-              </a>
+      <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
+        {isEditing ? (
+          <div className="space-y-3">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={e => onApiKeyChange(e.target.value)}
+              placeholder={provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+              autoFocus
+              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            />
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+            {success && <p className="text-green-400 text-sm">{success}</p>}
+            <div className="flex gap-2">
               <button
-                onClick={onStartEdit}
-                className="text-sm text-[#f97316] hover:text-[#fb923c]"
+                onClick={onCancelEdit}
+                className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
               >
-                + Add key
+                Cancel
+              </button>
+              <button
+                onClick={onSave}
+                disabled={!apiKey || saving}
+                className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+              >
+                {testing ? "Validating..." : saving ? "Saving..." : "Save"}
               </button>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        ) : provider.hasKey ? (
+          <div className="flex items-center justify-between">
+            <a
+              href={provider.docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-[#3b82f6] hover:underline"
+            >
+              View docs
+            </a>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onStartEdit}
+                className="text-sm text-[#888] hover:text-[#e0e0e0]"
+              >
+                Update key
+              </button>
+              <button
+                onClick={onDelete}
+                className="text-red-400 hover:text-red-300 text-sm"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <a
+              href={provider.docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-[#3b82f6] hover:underline"
+            >
+              Get API key
+            </a>
+            <button
+              onClick={onStartEdit}
+              className="text-sm text-[#f97316] hover:text-[#fb923c]"
+            >
+              + Add key
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

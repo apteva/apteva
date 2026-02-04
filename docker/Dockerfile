@@ -24,8 +24,13 @@ RUN bun run build
 # ============ Production Stage ============
 FROM oven/bun:1-debian
 
-# Install curl for health checks and ca-certificates for HTTPS
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install curl for health checks, ca-certificates for HTTPS, and Node.js for MCP servers (npx)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

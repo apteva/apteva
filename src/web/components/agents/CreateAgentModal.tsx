@@ -41,10 +41,12 @@ export function CreateAgentModal({
   const { projects, currentProjectId } = useProjects();
   const selectedProvider = providers.find(p => p.id === form.provider);
 
-  const providerOptions = configuredProviders.map(p => ({
-    value: p.id,
-    label: p.name,
-  }));
+  const providerOptions = configuredProviders
+    .filter(p => p.type === "llm")
+    .map(p => ({
+      value: p.id,
+      label: p.name,
+    }));
 
   const modelOptions = selectedProvider?.models.map(m => ({
     value: m.value,
@@ -52,10 +54,7 @@ export function CreateAgentModal({
     recommended: m.recommended,
   })) || [];
 
-  const projectOptions = [
-    { value: "", label: "No Project" },
-    ...projects.map(p => ({ value: p.id, label: p.name })),
-  ];
+  const projectOptions = projects.map(p => ({ value: p.id, label: p.name }));
 
   // Set default project from current selection (but not "unassigned" or "all")
   React.useEffect(() => {
@@ -123,7 +122,7 @@ export function CreateAgentModal({
     <Modal>
       <h2 className="text-xl font-semibold mb-4">Create New Agent</h2>
 
-      {configuredProviders.length === 0 ? (
+      {providerOptions.length === 0 ? (
         <NoProvidersMessage onGoToSettings={onGoToSettings} />
       ) : (
         <>
@@ -242,6 +241,63 @@ export function CreateAgentModal({
                   </p>
                 )}
               </FormField>
+            )}
+
+            {/* Agent Built-in Tools - Anthropic only */}
+            {form.provider === "anthropic" && (
+            <FormField label="Agent Built-in Tools">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => onFormChange({
+                    ...form,
+                    features: {
+                      ...form.features,
+                      builtinTools: {
+                        ...form.features.builtinTools,
+                        webSearch: !form.features.builtinTools?.webSearch,
+                      },
+                    },
+                  })}
+                  className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                    form.features.builtinTools?.webSearch
+                      ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
+                      : "border-[#222] hover:border-[#333] text-[#888]"
+                  }`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  <span className="text-sm">Web Search</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onFormChange({
+                    ...form,
+                    features: {
+                      ...form.features,
+                      builtinTools: {
+                        ...form.features.builtinTools,
+                        webFetch: !form.features.builtinTools?.webFetch,
+                      },
+                    },
+                  })}
+                  className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                    form.features.builtinTools?.webFetch
+                      ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
+                      : "border-[#222] hover:border-[#333] text-[#888]"
+                  }`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                  </svg>
+                  <span className="text-sm">Web Fetch</span>
+                </button>
+              </div>
+              <p className="text-xs text-[#555] mt-2">
+                Provider-native tools for real-time web access
+              </p>
+            </FormField>
             )}
           </div>
 

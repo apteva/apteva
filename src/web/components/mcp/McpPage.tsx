@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { McpIcon } from "../common/Icons";
-import { useAuth } from "../../context";
+import { useAuth, useProjects } from "../../context";
 import { useConfirm, useAlert } from "../common/Modal";
+import { Select } from "../common/Select";
 import type { McpTool, McpToolCallResult } from "../../types";
 import { IntegrationsPanel } from "./IntegrationsPanel";
 
@@ -18,6 +19,7 @@ interface McpServer {
   port: number | null;
   status: "stopped" | "running";
   source: string | null; // "composio", "smithery", or null for local
+  project_id: string | null; // null = global
   created_at: string;
 }
 
@@ -35,12 +37,16 @@ interface RegistryServer {
 
 export function McpPage() {
   const { authFetch } = useAuth();
+  const { projects, currentProjectId } = useProjects();
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [editingServer, setEditingServer] = useState<McpServer | null>(null);
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
   const [activeTab, setActiveTab] = useState<"servers" | "hosted" | "registry">("servers");
   const { confirm, ConfirmDialog } = useConfirm();
+
+  const hasProjects = projects.length > 0;
 
   const fetchServers = async () => {
     try {
@@ -56,6 +62,15 @@ export function McpPage() {
   useEffect(() => {
     fetchServers();
   }, [authFetch]);
+
+  // Filter servers based on global project selector
+  // When a project is selected, show global + that project's servers
+  const filteredServers = servers.filter(server => {
+    if (!currentProjectId) return true; // "All Projects" - show everything
+    if (currentProjectId === "unassigned") return server.project_id === null; // Only global
+    // Project selected: show global + project-specific
+    return server.project_id === null || server.project_id === currentProjectId;
+  });
 
   const startServer = async (id: string) => {
     try {
@@ -86,6 +101,33 @@ export function McpPage() {
       fetchServers();
     } catch (e) {
       console.error("Failed to delete server:", e);
+    }
+  };
+
+  const renameServer = async (id: string, newName: string) => {
+    try {
+      await authFetch(`/api/mcp/servers/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      fetchServers();
+    } catch (e) {
+      console.error("Failed to rename server:", e);
+    }
+  };
+
+  const updateServer = async (id: string, updates: Partial<McpServer>) => {
+    try {
+      await authFetch(`/api/mcp/servers/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+      fetchServers();
+    } catch (e) {
+      console.error("Failed to update server:", e);
+      throw e;
     }
   };
 
@@ -155,7 +197,7 @@ export function McpPage() {
             )}
 
             {/* Empty State */}
-            {!loading && servers.length === 0 && (
+            {!loading && filteredServers.length === 0 && servers.length === 0 && (
               <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
                 <McpIcon className="w-12 h-12 text-[#333] mx-auto mb-4" />
                 <h3 className="text-lg font-medium mb-2">No MCP servers configured</h3>
@@ -180,23 +222,35 @@ export function McpPage() {
               </div>
             )}
 
+            {/* Empty filter state */}
+            {!loading && filteredServers.length === 0 && servers.length > 0 && (
+              <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center">
+                <p className="text-[#666]">No servers match this filter.</p>
+              </div>
+            )}
+
             {/* Main content with server list and tools panel */}
-            {!loading && servers.length > 0 && (
+            {!loading && filteredServers.length > 0 && (
               <div className="flex gap-6">
                 {/* Server List */}
                 <div className={`space-y-3 ${selectedServer ? "w-1/2" : "w-full"}`}>
-                  {servers.map(server => {
+                  {filteredServers.map(server => {
                     const isRemote = server.type === "http" && server.url;
                     const isAvailable = isRemote || server.status === "running";
+                    const project = hasProjects && server.project_id
+                      ? projects.find(p => p.id === server.project_id)
+                      : null;
                     return (
                       <McpServerCard
                         key={server.id}
                         server={server}
+                        project={project}
                         selected={selectedServer?.id === server.id}
                         onSelect={() => setSelectedServer(isAvailable ? server : null)}
                         onStart={() => startServer(server.id)}
                         onStop={() => stopServer(server.id)}
                         onDelete={() => deleteServer(server.id)}
+                        onEdit={() => setEditingServer(server)}
                       />
                     );
                   })}
@@ -262,6 +316,20 @@ export function McpPage() {
             setShowAdd(false);
             fetchServers();
           }}
+          projects={hasProjects ? projects : undefined}
+          defaultProjectId={currentProjectId && currentProjectId !== "unassigned" ? currentProjectId : null}
+        />
+      )}
+
+      {editingServer && (
+        <EditServerModal
+          server={editingServer}
+          projects={hasProjects ? projects : undefined}
+          onClose={() => setEditingServer(null)}
+          onSaved={() => {
+            setEditingServer(null);
+            fetchServers();
+          }}
         />
       )}
     </div>
@@ -271,18 +339,22 @@ export function McpPage() {
 
 function McpServerCard({
   server,
+  project,
   selected,
   onSelect,
   onStart,
   onStop,
   onDelete,
+  onEdit,
 }: {
   server: McpServer;
+  project?: { id: string; name: string; color: string } | null;
   selected: boolean;
   onSelect: () => void;
   onStart: () => void;
   onStop: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   // Remote/hosted servers (http type with url) are always available
   const isRemote = server.type === "http" && server.url;
@@ -300,6 +372,28 @@ function McpServerCard({
     }`;
   };
 
+  // Scope badge: Global or Project name
+  const getScopeBadge = () => {
+    if (project) {
+      return (
+        <span
+          className="text-xs px-1.5 py-0.5 rounded"
+          style={{ backgroundColor: `${project.color}20`, color: project.color }}
+        >
+          {project.name}
+        </span>
+      );
+    }
+    if (server.project_id === null) {
+      return (
+        <span className="text-xs text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">
+          Global
+        </span>
+      );
+    }
+    return null;
+  };
+
   return (
     <div
       className={`bg-[#111] border rounded-lg p-4 cursor-pointer transition ${
@@ -313,11 +407,21 @@ function McpServerCard({
             isAvailable ? "bg-green-400" : "bg-[#444]"
           }`} />
           <div>
-            <h3 className="font-medium">{server.name}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="font-medium">{server.name}</h3>
+              {getScopeBadge()}
+            </div>
             <p className="text-sm text-[#666]">{getServerInfo()}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); onEdit(); }}
+            className="text-sm text-[#666] hover:text-[#888] px-3 py-1 transition"
+            title="Edit server settings"
+          >
+            Edit
+          </button>
           {isRemote ? (
             // Remote servers: no start/stop, just delete
             <button
@@ -1221,9 +1325,13 @@ function parseCommandForCredentials(cmd: string): {
 function AddServerModal({
   onClose,
   onAdded,
+  projects,
+  defaultProjectId,
 }: {
   onClose: () => void;
   onAdded: () => void;
+  projects?: Array<{ id: string; name: string; color: string }>;
+  defaultProjectId?: string | null;
 }) {
   const { authFetch } = useAuth();
   const [mode, setMode] = useState<"npm" | "command" | "http">("npm");
@@ -1234,8 +1342,11 @@ function AddServerModal({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([]);
+  const [projectId, setProjectId] = useState<string | null>(defaultProjectId || null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const hasProjects = projects && projects.length > 0;
 
   const addEnvVar = () => {
     setEnvVars([...envVars, { key: "", value: "" }]);
@@ -1378,6 +1489,11 @@ function AddServerModal({
         body.env = env;
       }
 
+      // Add project_id if selected
+      if (projectId) {
+        body.project_id = projectId;
+      }
+
       const res = await authFetch("/api/mcp/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1481,6 +1597,25 @@ function AddServerModal({
               className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
             />
           </div>
+
+          {/* Project Scope - only show when projects exist */}
+          {hasProjects && (
+            <div>
+              <label className="block text-sm text-[#666] mb-1">Scope</label>
+              <Select
+                value={projectId || ""}
+                onChange={(value) => setProjectId(value || null)}
+                options={[
+                  { value: "", label: "Global (all projects)" },
+                  ...projects!.map(p => ({ value: p.id, label: p.name }))
+                ]}
+                placeholder="Select scope..."
+              />
+              <p className="text-xs text-[#555] mt-1">
+                Global servers are available to all agents. Project-scoped servers are only available to agents in that project.
+              </p>
+            </div>
+          )}
 
           {/* npm Package */}
           {mode === "npm" && (
@@ -1626,6 +1761,280 @@ function AddServerModal({
             className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-black rounded font-medium transition disabled:opacity-50"
           >
             {saving ? "Adding..." : "Add Server"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditServerModal({
+  server,
+  projects,
+  onClose,
+  onSaved,
+}: {
+  server: McpServer;
+  projects?: Array<{ id: string; name: string; color: string }>;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { authFetch } = useAuth();
+  const [name, setName] = useState(server.name);
+  const [pkg, setPkg] = useState(server.package || "");
+  const [command, setCommand] = useState(server.command || "");
+  const [args, setArgs] = useState(server.args || "");
+  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(() => {
+    // Convert env object to array format
+    return Object.entries(server.env || {}).map(([key, value]) => ({ key, value }));
+  });
+  const [projectId, setProjectId] = useState<string | null>(server.project_id);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const hasProjects = projects && projects.length > 0;
+  const isRemote = server.type === "http" && server.url;
+
+  const addEnvVar = () => {
+    setEnvVars([...envVars, { key: "", value: "" }]);
+  };
+
+  const updateEnvVar = (index: number, field: "key" | "value", value: string) => {
+    const updated = [...envVars];
+    updated[index][field] = value;
+    setEnvVars(updated);
+  };
+
+  const removeEnvVar = (index: number) => {
+    setEnvVars(envVars.filter((_, i) => i !== index));
+  };
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      setError("Name is required");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    // Build env object from envVars array
+    const env: Record<string, string> = {};
+    for (const { key, value } of envVars) {
+      if (key.trim()) {
+        env[key.trim()] = value;
+      }
+    }
+
+    try {
+      const updates: Record<string, unknown> = {
+        name: name.trim(),
+        env,
+      };
+
+      // Only include fields that are relevant to the server type
+      if (!isRemote) {
+        if (server.type === "npm" && pkg.trim()) {
+          updates.package = pkg.trim();
+        }
+        if (server.type === "custom") {
+          if (command.trim()) updates.command = command.trim();
+          if (args.trim()) updates.args = args.trim();
+        }
+      }
+
+      // Include project_id update
+      updates.project_id = projectId;
+
+      const res = await authFetch(`/api/mcp/servers/${server.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || "Failed to save changes");
+        setSaving(false);
+        return;
+      }
+
+      // If server was running, restart it to apply new env vars
+      if (server.status === "running" && !isRemote) {
+        try {
+          // Stop the server
+          await authFetch(`/api/mcp/servers/${server.id}/stop`, { method: "POST" });
+          // Start it again
+          await authFetch(`/api/mcp/servers/${server.id}/start`, { method: "POST" });
+        } catch (e) {
+          console.error("Failed to restart server:", e);
+          // Don't fail the save, just log the error
+        }
+      }
+
+      onSaved();
+    } catch (e) {
+      setError("Failed to save changes");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
+      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="p-4 border-b border-[#1a1a1a] flex items-center justify-between sticky top-0 bg-[#111]">
+          <h2 className="text-lg font-semibold">Edit MCP Server</h2>
+          <button onClick={onClose} className="text-[#666] hover:text-[#888]">
+            ✕
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {/* Server Type Info */}
+          <div className="text-sm text-[#666] bg-[#0a0a0a] border border-[#222] rounded p-3">
+            Type: <span className="text-[#888]">{server.type}</span>
+            {server.package && <> • Package: <span className="text-[#888] font-mono">{server.package}</span></>}
+            {server.command && <> • Command: <span className="text-[#888] font-mono">{server.command}</span></>}
+            {isRemote && server.url && <> • URL: <span className="text-[#888] font-mono text-xs">{server.url}</span></>}
+          </div>
+
+          {/* Name */}
+          <div>
+            <label className="block text-sm text-[#666] mb-1">Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            />
+          </div>
+
+          {/* Project Scope */}
+          {hasProjects && (
+            <div>
+              <label className="block text-sm text-[#666] mb-1">Scope</label>
+              <Select
+                value={projectId || ""}
+                onChange={(value) => setProjectId(value || null)}
+                options={[
+                  { value: "", label: "Global (all projects)" },
+                  ...projects!.map(p => ({ value: p.id, label: p.name }))
+                ]}
+                placeholder="Select scope..."
+              />
+            </div>
+          )}
+
+          {/* Package (for npm type) */}
+          {server.type === "npm" && (
+            <div>
+              <label className="block text-sm text-[#666] mb-1">npm Package</label>
+              <input
+                type="text"
+                value={pkg}
+                onChange={e => setPkg(e.target.value)}
+                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+              />
+            </div>
+          )}
+
+          {/* Command & Args (for custom type) */}
+          {server.type === "custom" && (
+            <>
+              <div>
+                <label className="block text-sm text-[#666] mb-1">Command</label>
+                <input
+                  type="text"
+                  value={command}
+                  onChange={e => setCommand(e.target.value)}
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-[#666] mb-1">Arguments</label>
+                <input
+                  type="text"
+                  value={args}
+                  onChange={e => setArgs(e.target.value)}
+                  placeholder="e.g., --token $TOKEN --verbose"
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                />
+              </div>
+            </>
+          )}
+
+          {/* Environment Variables */}
+          {!isRemote && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm text-[#666]">
+                  Environment Variables / Credentials
+                </label>
+                <button
+                  onClick={addEnvVar}
+                  className="text-xs text-[#f97316] hover:text-[#fb923c] transition"
+                >
+                  + Add Variable
+                </button>
+              </div>
+
+              {envVars.length === 0 && (
+                <p className="text-xs text-[#555] bg-[#0a0a0a] border border-[#222] rounded p-3">
+                  No environment variables configured.
+                </p>
+              )}
+
+              {envVars.length > 0 && (
+                <div className="space-y-2">
+                  {envVars.map((env, index) => (
+                    <div key={index} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={env.key}
+                        onChange={e => updateEnvVar(index, "key", e.target.value)}
+                        placeholder="KEY"
+                        className="w-1/3 bg-[#0a0a0a] border border-[#333] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[#f97316]"
+                      />
+                      <input
+                        type="password"
+                        value={env.value}
+                        onChange={e => updateEnvVar(index, "value", e.target.value)}
+                        placeholder="value"
+                        className="flex-1 bg-[#0a0a0a] border border-[#333] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[#f97316]"
+                      />
+                      <button
+                        onClick={() => removeEnvVar(index)}
+                        className="text-[#666] hover:text-red-400 px-2 transition"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <p className="text-xs text-[#555] mt-2">
+                {server.status === "running" ? "Server will be automatically restarted to apply changes." : "Changes will take effect when the server is started."}
+              </p>
+            </div>
+          )}
+
+          {error && <p className="text-red-400 text-sm">{error}</p>}
+        </div>
+
+        <div className="p-4 border-t border-[#1a1a1a] flex justify-end gap-2 sticky bottom-0 bg-[#111]">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 border border-[#333] hover:border-[#666] rounded transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || !name.trim()}
+            className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-black rounded font-medium transition disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save Changes"}
           </button>
         </div>
       </div>

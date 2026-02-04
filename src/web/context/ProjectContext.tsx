@@ -18,6 +18,7 @@ interface ProjectContextValue {
   isLoading: boolean;
   error: string | null;
   unassignedCount: number;
+  projectsEnabled: boolean; // Feature flag
   setCurrentProjectId: (id: string | null) => void;
   createProject: (data: { name: string; description?: string; color?: string }) => Promise<Project | null>;
   updateProject: (id: string, data: { name?: string; description?: string; color?: string }) => Promise<Project | null>;
@@ -54,6 +55,19 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [unassignedCount, setUnassignedCount] = useState(0);
+  const [projectsEnabled, setProjectsEnabled] = useState(false);
+
+  // Fetch feature flags on mount
+  useEffect(() => {
+    fetch("/api/features")
+      .then(res => res.json())
+      .then(data => {
+        setProjectsEnabled(data.projects === true);
+      })
+      .catch(() => {
+        setProjectsEnabled(false);
+      });
+  }, []);
 
   const setCurrentProjectId = useCallback((id: string | null) => {
     setCurrentProjectIdState(id);
@@ -69,6 +83,13 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
   const currentProject = projects.find(p => p.id === currentProjectId) || null;
 
   const refreshProjects = useCallback(async () => {
+    // Don't fetch if projects feature is disabled
+    if (!projectsEnabled) {
+      setProjects([]);
+      setIsLoading(false);
+      return;
+    }
+
     if (!isAuthenticated && !authLoading) {
       setProjects([]);
       setIsLoading(false);
@@ -95,7 +116,7 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [authFetch, isAuthenticated, authLoading, currentProjectId, setCurrentProjectId]);
+  }, [authFetch, isAuthenticated, authLoading, currentProjectId, setCurrentProjectId, projectsEnabled]);
 
   const createProject = useCallback(async (data: { name: string; description?: string; color?: string }): Promise<Project | null> => {
     try {
@@ -157,12 +178,12 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     }
   }, [authFetch, currentProjectId, setCurrentProjectId, refreshProjects]);
 
-  // Fetch projects when authenticated
+  // Fetch projects when authenticated and feature is enabled
   useEffect(() => {
-    if (!authLoading) {
+    if (!authLoading && projectsEnabled) {
       refreshProjects();
     }
-  }, [authLoading, refreshProjects]);
+  }, [authLoading, projectsEnabled, refreshProjects]);
 
   const value: ProjectContextValue = {
     projects,
@@ -171,6 +192,7 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     isLoading,
     error,
     unassignedCount,
+    projectsEnabled,
     setCurrentProjectId,
     createProject,
     updateProject,

@@ -30,6 +30,7 @@ import {
   LoginPage,
 } from "./components";
 import { ApiDocsPage } from "./components/api/ApiDocsPage";
+import { MetaAgentProvider, MetaAgentPanel } from "./components/meta-agent/MetaAgent";
 
 function AppContent() {
   // Auth state
@@ -63,6 +64,9 @@ function AppContent() {
     configuredProviders,
     fetchProviders,
   } = useProviders(shouldFetchData);
+
+  // Filter to only LLM providers for agent creation
+  const llmProviders = configuredProviders.filter(p => p.type === "llm");
 
   // UI state
   const [showCreate, setShowCreate] = useState(false);
@@ -106,8 +110,8 @@ function AppContent() {
 
   // Set default provider when providers are loaded
   useEffect(() => {
-    if (configuredProviders.length > 0 && !newAgent.provider) {
-      const defaultProvider = configuredProviders[0];
+    if (llmProviders.length > 0 && !newAgent.provider) {
+      const defaultProvider = llmProviders[0];
       const defaultModel = defaultProvider.models.find(m => m.recommended)?.value || defaultProvider.models[0]?.value || "";
       setNewAgent(prev => ({
         ...prev,
@@ -115,7 +119,7 @@ function AppContent() {
         model: defaultModel,
       }));
     }
-  }, [configuredProviders, newAgent.provider]);
+  }, [llmProviders, newAgent.provider]);
 
   // Update selected agent when agents list changes
   useEffect(() => {
@@ -143,7 +147,7 @@ function AppContent() {
     if (!newAgent.name) return;
     await createAgent(newAgent);
     await refreshProjects(); // Refresh project agent counts
-    const defaultProvider = configuredProviders[0];
+    const defaultProvider = llmProviders[0];
     const defaultModel = defaultProvider?.models.find(m => m.recommended)?.value || defaultProvider?.models[0]?.value || "";
     setNewAgent({
       name: "",
@@ -251,7 +255,7 @@ function AppContent() {
               onDeleteAgent={handleDeleteAgent}
               onUpdateAgent={updateAgent}
               onNewAgent={() => setShowCreate(true)}
-              canCreateAgent={configuredProviders.length > 0}
+              canCreateAgent={llmProviders.length > 0}
             />
           )}
 
@@ -293,6 +297,9 @@ function AppContent() {
           }}
         />
       )}
+
+      {/* Meta Agent - side drawer */}
+      <MetaAgentPanel />
     </div>
   );
 }
@@ -302,9 +309,11 @@ function App() {
   return (
     <AuthProvider>
       <ProjectProvider>
-        <TelemetryProvider>
-          <AppContent />
-        </TelemetryProvider>
+        <MetaAgentProvider>
+          <TelemetryProvider>
+            <AppContent />
+          </TelemetryProvider>
+        </MetaAgentProvider>
       </ProjectProvider>
     </AuthProvider>
   );

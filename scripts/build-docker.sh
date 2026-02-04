@@ -33,13 +33,14 @@ echo -e "${BLUE}Using container runtime: ${GREEN}$CONTAINER_CMD${NC}"
 # Default values
 PUSH=false
 TAG_LATEST=true
-IMAGE_NAME="apteva"
+IMAGE_NAME="apteva/apteva"
 REGISTRY=""
 
 # Registry presets
-REGISTRY_LOCAL="localhost:5000"
 REGISTRY_PRODUCTION="registry.omnikit.co"
-REGISTRY_AGENTS="159.69.221.243:5000"
+
+# Default to production registry
+DEFAULT_REGISTRY="$REGISTRY_PRODUCTION"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -61,24 +62,8 @@ while [[ $# -gt 0 ]]; do
             PUSH=true
             shift 2
             ;;
-        --local)
-            REGISTRY="$REGISTRY_LOCAL"
-            PUSH=true
-            shift
-            ;;
         --production)
             REGISTRY="$REGISTRY_PRODUCTION"
-            PUSH=true
-            shift
-            ;;
-        --agents)
-            REGISTRY="$REGISTRY_AGENTS"
-            PUSH=true
-            shift
-            ;;
-        --all)
-            # Push to all registries
-            PUSH_ALL=true
             PUSH=true
             shift
             ;;
@@ -86,16 +71,15 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --push         Push the image to registry after building"
+            echo "  --push         Push to registry.omnikit.co (default registry)"
+            echo "  --production   Same as --push"
             echo "  --no-latest    Skip tagging as 'latest' (latest is created by default)"
-            echo "  --image-name   Set custom image name (default: apteva)"
+            echo "  --image-name   Set custom image name (default: apteva/apteva)"
             echo "  --registry     Push to custom registry URL"
             echo ""
-            echo "Registry shortcuts:"
-            echo "  --local        Push to local registry ($REGISTRY_LOCAL)"
-            echo "  --production   Push to production registry ($REGISTRY_PRODUCTION)"
-            echo "  --agents       Push to agents server registry ($REGISTRY_AGENTS)"
-            echo "  --all          Push to both local and production registries"
+            echo "Examples:"
+            echo "  $0                           # Build locally only"
+            echo "  $0 --push                    # Build and push to registry.omnikit.co"
             exit 0
             ;;
         *)
@@ -169,23 +153,10 @@ push_to_registry() {
 
 # Push to registry if requested
 if [[ "$PUSH" == true ]]; then
-    if [[ "$PUSH_ALL" == true ]]; then
-        # Push to all registries
-        push_to_registry "$REGISTRY_LOCAL"
-        push_to_registry "$REGISTRY_PRODUCTION"
-    elif [[ -n "$REGISTRY" ]]; then
-        # Push to specified registry
+    if [[ -n "$REGISTRY" ]]; then
         push_to_registry "$REGISTRY"
     else
-        # Push to default registry (Docker Hub or configured default)
-        echo -e "${YELLOW}Pushing to default registry...${NC}"
-        $CONTAINER_CMD push "$IMAGE_NAME:$VERSION"
-
-        if [[ "$TAG_LATEST" == true ]]; then
-            $CONTAINER_CMD push "$IMAGE_NAME:latest"
-        fi
-
-        echo -e "${GREEN}✅ Successfully pushed to registry${NC}"
+        push_to_registry "$DEFAULT_REGISTRY"
     fi
 fi
 

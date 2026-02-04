@@ -22,6 +22,7 @@ const PUBLIC_PATHS = [
   "/api/auth/login",
   "/api/auth/refresh",
   "/api/health",
+  "/api/features", // Feature flags needed before auth
   "/api/telemetry", // Agents POST telemetry here
   "/api/telemetry/stream", // SSE doesn't support auth headers
 ];

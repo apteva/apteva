@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { useAuth } from "../../context";
+import { useAuth, useProjects } from "../../context";
 import { useConfirm, useAlert } from "../common/Modal";
+import { Select } from "../common/Select";
 
 interface Skill {
   id: string;
@@ -14,6 +15,7 @@ interface Skill {
   source: "local" | "skillsmp" | "github" | "import";
   source_url: string | null;
   enabled: boolean;
+  project_id: string | null; // null = global
   created_at: string;
   updated_at: string;
 }
@@ -35,6 +37,7 @@ interface MarketplaceSkill {
 
 export function SkillsPage() {
   const { authFetch } = useAuth();
+  const { projects, currentProjectId } = useProjects();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"installed" | "marketplace">("installed");
@@ -44,11 +47,22 @@ export function SkillsPage() {
   const { confirm, ConfirmDialog } = useConfirm();
   const { alert, AlertDialog } = useAlert();
 
+  const hasProjects = projects.length > 0;
+
   // Marketplace state
   const [searchQuery, setSearchQuery] = useState("");
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
   const [installing, setInstalling] = useState<string | null>(null);
+
+  // Filter skills based on global project selector
+  // When a project is selected, show global + that project's skills
+  const filteredSkills = skills.filter(skill => {
+    if (!currentProjectId) return true; // "All Projects" - show everything
+    if (currentProjectId === "unassigned") return skill.project_id === null; // Only global
+    // Project selected: show global + project-specific
+    return skill.project_id === null || skill.project_id === currentProjectId;
+  });
 
   const fetchSkills = async () => {
     try {
@@ -203,17 +217,27 @@ export function SkillsPage() {
                     Browse Marketplace
                   </button>
                 </div>
+              ) : filteredSkills.length === 0 ? (
+                <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center">
+                  <p className="text-[#666]">No skills match this filter.</p>
+                </div>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {skills.map((skill) => (
-                    <SkillCard
-                      key={skill.id}
-                      skill={skill}
-                      onToggle={() => toggleSkill(skill.id)}
-                      onDelete={() => deleteSkill(skill.id)}
-                      onView={() => setSelectedSkill(skill)}
-                    />
-                  ))}
+                  {filteredSkills.map((skill) => {
+                    const project = hasProjects && skill.project_id
+                      ? projects.find(p => p.id === skill.project_id)
+                      : null;
+                    return (
+                      <SkillCard
+                        key={skill.id}
+                        skill={skill}
+                        project={project}
+                        onToggle={() => toggleSkill(skill.id)}
+                        onDelete={() => deleteSkill(skill.id)}
+                        onView={() => setSelectedSkill(skill)}
+                      />
+                    );
+                  })}
                 </div>
               )}
             </>
@@ -277,6 +301,8 @@ export function SkillsPage() {
             setShowCreate(false);
             fetchSkills();
           }}
+          projects={hasProjects ? projects : undefined}
+          defaultProjectId={currentProjectId && currentProjectId !== "unassigned" ? currentProjectId : null}
         />
       )}
 
@@ -310,11 +336,13 @@ export function SkillsPage() {
 
 function SkillCard({
   skill,
+  project,
   onToggle,
   onDelete,
   onView,
 }: {
   skill: Skill;
+  project?: { id: string; name: string; color: string } | null;
   onToggle: () => void;
   onDelete: () => void;
   onView: () => void;
@@ -326,6 +354,28 @@ function SkillCard({
     import: "Imported",
   }[skill.source];
 
+  // Scope badge: Global or Project name
+  const getScopeBadge = () => {
+    if (project) {
+      return (
+        <span
+          className="text-xs px-1.5 py-0.5 rounded"
+          style={{ backgroundColor: `${project.color}20`, color: project.color }}
+        >
+          {project.name}
+        </span>
+      );
+    }
+    if (skill.project_id === null) {
+      return (
+        <span className="text-xs text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">
+          Global
+        </span>
+      );
+    }
+    return null;
+  };
+
   return (
     <div
       className={`bg-[#111] rounded-lg p-5 border transition cursor-pointer ${
@@ -335,7 +385,10 @@ function SkillCard({
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-lg truncate">{skill.name}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-lg truncate">{skill.name}</h3>
+            {getScopeBadge()}
+          </div>
           <p className="text-xs text-[#666] flex items-center gap-2 mt-0.5">
             <span className={`px-1.5 py-0.5 rounded text-[10px] ${
               skill.source === "skillsmp" ? "bg-purple-500/20 text-purple-400" :
@@ -450,16 +503,23 @@ function CreateSkillModal({
   authFetch,
   onClose,
   onCreated,
+  projects,
+  defaultProjectId,
 }: {
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
   onClose: () => void;
   onCreated: () => void;
+  projects?: Array<{ id: string; name: string; color: string }>;
+  defaultProjectId?: string | null;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [content, setContent] = useState("");
+  const [projectId, setProjectId] = useState<string | null>(defaultProjectId || null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const hasProjects = projects && projects.length > 0;
 
   const handleSave = async () => {
     if (!name || !description || !content) {
@@ -471,15 +531,22 @@ function CreateSkillModal({
     setError(null);
 
     try {
+      const body: Record<string, unknown> = {
+        name,
+        description,
+        content,  // Just the instructions, not wrapped in frontmatter
+        source: "local",
+      };
+
+      // Add project_id if selected
+      if (projectId) {
+        body.project_id = projectId;
+      }
+
       const res = await authFetch("/api/skills", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          description,
-          content,  // Just the instructions, not wrapped in frontmatter
-          source: "local",
-        }),
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();
@@ -535,6 +602,25 @@ function CreateSkillModal({
               className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
             />
           </div>
+
+          {/* Project Scope - only show when projects exist */}
+          {hasProjects && (
+            <div>
+              <label className="block text-sm text-[#888] mb-1">Scope</label>
+              <Select
+                value={projectId || ""}
+                onChange={(value) => setProjectId(value || null)}
+                options={[
+                  { value: "", label: "Global (all projects)" },
+                  ...projects!.map(p => ({ value: p.id, label: p.name }))
+                ]}
+                placeholder="Select scope..."
+              />
+              <p className="text-xs text-[#555] mt-1">
+                Global skills are available to all agents. Project-scoped skills are only available to agents in that project.
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm text-[#888] mb-1">Instructions (Markdown)</label>
