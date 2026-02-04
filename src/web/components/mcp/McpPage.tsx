@@ -1553,7 +1553,7 @@ function AddServerModal({
                 { name: "fetch", pkg: "@modelcontextprotocol/server-fetch", type: "npm" as const },
                 { name: "memory", pkg: "@modelcontextprotocol/server-memory", type: "npm" as const },
                 { name: "github", pkg: "@modelcontextprotocol/server-github", type: "npm" as const },
-                { name: "late", pkg: "late-sdk[mcp]", module: "late.mcp", type: "pip" as const },
+                { name: "time", pkg: "mcp-server-time", module: "mcp_server_time", type: "pip" as const },
               ].map(s => (
                 <button
                   key={s.name}
@@ -1563,6 +1563,8 @@ function AddServerModal({
                     setPkg(s.pkg);
                     if (s.type === "pip" && "module" in s) {
                       setPipModule(s.module || "");
+                    } else {
+                      setPipModule("");
                     }
                   }}
                   className="text-sm bg-[#1a1a1a] hover:bg-[#222] px-3 py-1 rounded transition"
@@ -1827,7 +1829,7 @@ function AddServerModal({
           </button>
           <button
             onClick={handleAdd}
-            disabled={saving || !name || (mode === "npm" ? !pkg : mode === "http" ? !url : !command)}
+            disabled={saving || !name || (mode === "npm" ? !pkg : mode === "pip" ? !pkg : mode === "http" ? !url : !command)}
             className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-black rounded font-medium transition disabled:opacity-50"
           >
             {saving ? "Adding..." : "Add Server"}
