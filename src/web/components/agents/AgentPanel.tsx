@@ -728,6 +728,10 @@ function FilesTab({ agent }: { agent: Agent }) {
   const [files, setFiles] = useState<AgentFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { confirm, ConfirmDialog } = useConfirm();
 
   // Reset state when agent changes
@@ -784,6 +788,60 @@ function FilesTab({ agent }: { agent: Agent }) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const uploadFile = async (file: File) => {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch(`/api/agents/${agent.id}/files`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Upload failed");
+      }
+
+      // Refresh file list
+      await fetchFiles();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      uploadFile(file);
+    }
+    // Reset input so same file can be selected again
+    e.target.value = "";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      uploadFile(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+  };
+
   const getFileIcon = (mimeType: string) => {
     if (mimeType.startsWith("image/")) return "🖼";
     if (mimeType.includes("pdf")) return "📕";
@@ -833,23 +891,62 @@ function FilesTab({ agent }: { agent: Agent }) {
   return (
     <>
     {ConfirmDialog}
-    <div className="flex-1 overflow-auto p-4">
+    <div
+      className={`flex-1 overflow-auto p-4 transition ${dragOver ? "bg-[#f97316]/5" : ""}`}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+    >
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleFileSelect}
+      />
+
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-medium text-[#888]">Agent Files ({files.length})</h3>
-        <button
-          onClick={fetchFiles}
-          className="text-xs text-[#666] hover:text-[#888]"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="text-xs bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-3 py-1 rounded font-medium transition"
+          >
+            {uploading ? "Uploading..." : "Upload"}
+          </button>
+          <button
+            onClick={fetchFiles}
+            className="text-xs text-[#666] hover:text-[#888]"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
-      {files.length === 0 ? (
+      {uploadError && (
+        <div className="mb-4 text-sm bg-red-500/10 text-red-400 px-3 py-2 rounded">
+          {uploadError}
+        </div>
+      )}
+
+      {dragOver && (
+        <div className="mb-4 border-2 border-dashed border-[#f97316] rounded-lg p-8 text-center">
+          <p className="text-[#f97316]">Drop file to upload</p>
+        </div>
+      )}
+
+      {files.length === 0 && !dragOver && (
         <div className="text-center py-10 text-[#666]">
           <p>No files stored yet</p>
-          <p className="text-sm mt-1">Files created or uploaded by the agent will appear here</p>
+          <p className="text-sm mt-1">Drop files here, click Upload, or attach files in Chat</p>
+          {agent.features?.memory && (
+            <p className="text-xs mt-2 text-[#555]">Files will be auto-ingested into memory</p>
+          )}
         </div>
-      ) : (
+      )}
+
+      {files.length > 0 && (
         <div className="space-y-2">
           {files.map(file => (
             <div key={file.id} className="bg-[#111] border border-[#1a1a1a] rounded p-3 flex items-center gap-3">

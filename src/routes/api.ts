@@ -499,6 +499,14 @@ export async function startAgentProcess(
       [providerConfig.envVar]: providerKey,
     };
 
+    // If memory is enabled and agent doesn't use OpenAI, also pass OpenAI key for embeddings
+    if (agent.features.memory && agent.provider !== "openai") {
+      const openaiKey = ProviderKeys.getDecrypted("openai");
+      if (openaiKey) {
+        env.OPENAI_API_KEY = openaiKey;
+      }
+    }
+
     // Get binary path dynamically (allows hot-reload of new binary versions)
     const binaryPath = getBinaryPathForAgent();
 
@@ -1234,8 +1242,45 @@ export async function handleApiRequest(req: Request, path: string, authContext?:
 
   // ==================== FILES PROXY ====================
 
-  // GET /api/agents/:id/files - List files for an agent
+  // POST /api/agents/:id/files - Upload a file
   const filesMatch = path.match(/^\/api\/agents\/([^/]+)\/files$/);
+  if (filesMatch && method === "POST") {
+    const agent = AgentDB.findById(filesMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      // Get the raw body and content-type to proxy the multipart upload
+      const contentType = req.headers.get("content-type") || "";
+      const body = await req.arrayBuffer();
+
+      const response = await agentFetch(agent.id, agent.port, "/files", {
+        method: "POST",
+        headers: {
+          "Content-Type": contentType,
+        },
+        body: body,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json({ error: `Agent error: ${errorText}` }, response.status);
+      }
+
+      const data = await response.json();
+      return json(data);
+    } catch (err) {
+      console.error(`File upload proxy error: ${err}`);
+      return json({ error: `Failed to upload file: ${err}` }, 500);
+    }
+  }
+
+  // GET /api/agents/:id/files - List files for an agent
   if (filesMatch && method === "GET") {
     const agent = AgentDB.findById(filesMatch[1]);
     if (!agent) {
