@@ -4,7 +4,7 @@ import { Modal, useConfirm } from "../common/Modal";
 import { useProjects, useAuth, type Project } from "../../context";
 import type { Provider } from "../../types";
 
-type SettingsTab = "providers" | "projects" | "updates" | "data";
+type SettingsTab = "providers" | "projects" | "account" | "updates" | "data";
 
 export function SettingsPage() {
   const { projectsEnabled } = useProjects();
@@ -13,6 +13,7 @@ export function SettingsPage() {
   const tabs: { key: SettingsTab; label: string }[] = [
     { key: "providers", label: "Providers" },
     ...(projectsEnabled ? [{ key: "projects" as SettingsTab, label: "Projects" }] : []),
+    { key: "account", label: "Account" },
     { key: "updates", label: "Updates" },
     { key: "data", label: "Data" },
   ];
@@ -57,6 +58,7 @@ export function SettingsPage() {
       <div className="flex-1 overflow-auto p-4 md:p-6">
         {activeTab === "providers" && <ProvidersSettings />}
         {activeTab === "projects" && projectsEnabled && <ProjectsSettings />}
+        {activeTab === "account" && <AccountSettings />}
         {activeTab === "updates" && <UpdatesSettings />}
         {activeTab === "data" && <DataSettings />}
       </div>
@@ -1037,6 +1039,146 @@ function IntegrationKeyCard({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function AccountSettings() {
+  const { authFetch, user } = useAuth();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const handleChangePassword = async () => {
+    // Validation
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setMessage({ type: "error", text: "All fields are required" });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setMessage({ type: "error", text: "New passwords do not match" });
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setMessage({ type: "error", text: "Password must be at least 8 characters" });
+      return;
+    }
+
+    setSaving(true);
+    setMessage(null);
+
+    try {
+      const res = await authFetch("/api/auth/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setMessage({ type: "success", text: "Password updated successfully" });
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+      } else {
+        setMessage({ type: "error", text: data.error || "Failed to update password" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to update password" });
+    }
+
+    setSaving(false);
+  };
+
+  return (
+    <div className="max-w-4xl w-full">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold mb-1">Account Settings</h1>
+        <p className="text-[#666]">Manage your account and security.</p>
+      </div>
+
+      {/* User Info */}
+      {user && (
+        <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 mb-6">
+          <h3 className="font-medium mb-3">Profile</h3>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-[#666]">Username</span>
+              <span>{user.username}</span>
+            </div>
+            {user.email && (
+              <div className="flex justify-between">
+                <span className="text-[#666]">Email</span>
+                <span>{user.email}</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-[#666]">Role</span>
+              <span className="capitalize">{user.role}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Password */}
+      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+        <h3 className="font-medium mb-4">Change Password</h3>
+
+        <div className="space-y-4 max-w-md">
+          <div>
+            <label className="block text-sm text-[#666] mb-1">Current Password</label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-[#666] mb-1">New Password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-[#666] mb-1">Confirm New Password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            />
+          </div>
+
+          {message && (
+            <div className={`p-3 rounded text-sm ${
+              message.type === "success"
+                ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                : "bg-red-500/10 text-red-400 border border-red-500/30"
+            }`}>
+              {message.text}
+            </div>
+          )}
+
+          <button
+            onClick={handleChangePassword}
+            disabled={saving || !currentPassword || !newPassword || !confirmPassword}
+            className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded text-sm font-medium transition"
+          >
+            {saving ? "Updating..." : "Update Password"}
+          </button>
+        </div>
       </div>
     </div>
   );
