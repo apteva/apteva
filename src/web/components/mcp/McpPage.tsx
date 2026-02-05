@@ -1856,6 +1856,29 @@ function EditServerModal({
   const [pkg, setPkg] = useState(server.package || "");
   const [command, setCommand] = useState(server.command || "");
   const [args, setArgs] = useState(server.args || "");
+  const [url, setUrl] = useState(server.url || "");
+  // Extract username/password from existing Basic Auth header
+  const [username, setUsername] = useState(() => {
+    const authHeader = server.headers?.["Authorization"] || "";
+    if (authHeader.startsWith("Basic ")) {
+      try {
+        const decoded = atob(authHeader.slice(6));
+        return decoded.split(":")[0] || "";
+      } catch { return ""; }
+    }
+    return "";
+  });
+  const [password, setPassword] = useState(() => {
+    const authHeader = server.headers?.["Authorization"] || "";
+    if (authHeader.startsWith("Basic ")) {
+      try {
+        const decoded = atob(authHeader.slice(6));
+        const parts = decoded.split(":");
+        return parts.slice(1).join(":") || "";
+      } catch { return ""; }
+    }
+    return "";
+  });
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(() => {
     // Convert env object to array format
     return Object.entries(server.env || {}).map(([key, value]) => ({ key, value }));
@@ -1865,7 +1888,7 @@ function EditServerModal({
   const [error, setError] = useState<string | null>(null);
 
   const hasProjects = projects && projects.length > 0;
-  const isRemote = server.type === "http" && server.url;
+  const isRemote = server.type === "http";
 
   const addEnvVar = () => {
     setEnvVars([...envVars, { key: "", value: "" }]);
@@ -1905,8 +1928,25 @@ function EditServerModal({
       };
 
       // Only include fields that are relevant to the server type
-      if (!isRemote) {
+      if (isRemote) {
+        // HTTP server - update URL and headers
+        if (url.trim()) {
+          updates.url = url.trim();
+        }
+        // Build headers with Basic Auth if credentials provided
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (username && password) {
+          const credentials = btoa(`${username}:${password}`);
+          headers["Authorization"] = `Basic ${credentials}`;
+        }
+        updates.headers = headers;
+      } else {
         if (server.type === "npm" && pkg.trim()) {
+          updates.package = pkg.trim();
+        }
+        if (server.type === "pip" && pkg.trim()) {
           updates.package = pkg.trim();
         }
         if (server.type === "custom") {
@@ -1967,7 +2007,6 @@ function EditServerModal({
             Type: <span className="text-[#888]">{server.type}</span>
             {server.package && <> • Package: <span className="text-[#888] font-mono">{server.package}</span></>}
             {server.command && <> • Command: <span className="text-[#888] font-mono">{server.command}</span></>}
-            {isRemote && server.url && <> • URL: <span className="text-[#888] font-mono text-xs">{server.url}</span></>}
           </div>
 
           {/* Name */}
@@ -2008,6 +2047,57 @@ function EditServerModal({
                 className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
               />
             </div>
+          )}
+
+          {/* Package (for pip type) */}
+          {server.type === "pip" && (
+            <div>
+              <label className="block text-sm text-[#666] mb-1">pip Package</label>
+              <input
+                type="text"
+                value={pkg}
+                onChange={e => setPkg(e.target.value)}
+                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+              />
+            </div>
+          )}
+
+          {/* URL & Credentials (for http type) */}
+          {isRemote && (
+            <>
+              <div>
+                <label className="block text-sm text-[#666] mb-1">Server URL</label>
+                <input
+                  type="text"
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  placeholder="https://example.com/mcp"
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-[#666] mb-1">Authentication (Basic Auth)</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    placeholder="Username"
+                    className="flex-1 bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                  />
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="Password / App Password"
+                    className="flex-1 bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                  />
+                </div>
+                <p className="text-xs text-[#555] mt-1">
+                  Leave empty if no authentication required
+                </p>
+              </div>
+            </>
           )}
 
           {/* Command & Args (for custom type) */}
