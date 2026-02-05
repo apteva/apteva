@@ -145,6 +145,13 @@ export interface OnboardingStatus {
 
 export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "skills" | "telemetry" | "settings" | "api";
 
+export interface TaskTrajectoryStep {
+  type: "thought" | "action" | "observation" | "tool_call" | "tool_result" | "message";
+  content: string;
+  tool?: string;
+  timestamp?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -156,9 +163,12 @@ export interface Task {
   created_at: string;
   execute_at?: string;
   executed_at?: string;
+  completed_at?: string;
   recurrence?: string;
   next_run?: string;
   result?: any;
+  error?: string;
+  trajectory?: TaskTrajectoryStep[];
   agentId: string;
   agentName: string;
 }
