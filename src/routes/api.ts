@@ -2839,9 +2839,12 @@ Keep responses short and actionable. Use markdown formatting when helpful.`,
       if (body.name !== undefined) updates.name = body.name;
       if (body.type !== undefined) updates.type = body.type;
       if (body.package !== undefined) updates.package = body.package;
+      if (body.pip_module !== undefined) updates.pip_module = body.pip_module;
       if (body.command !== undefined) updates.command = body.command;
       if (body.args !== undefined) updates.args = body.args;
       if (body.env !== undefined) updates.env = body.env;
+      if (body.url !== undefined) updates.url = body.url;
+      if (body.headers !== undefined) updates.headers = body.headers;
       if (body.project_id !== undefined) updates.project_id = body.project_id;
 
       const updated = McpServerDB.update(mcpServerMatch[1], updates);
