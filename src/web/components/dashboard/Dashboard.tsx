@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { useAgentActivity, useAuth, useProjects } from "../../context";
+import { useAgentActivity, useAuth, useProjects, useTelemetryContext } from "../../context";
+import type { TelemetryEvent } from "../../context";
 import type { Agent, Provider, Route, DashboardStats, Task } from "../../types";
 
 interface DashboardProps {
@@ -21,8 +22,10 @@ export function Dashboard({
 }: DashboardProps) {
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
+  const { events: realtimeEvents } = useTelemetryContext();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
+  const [historicalActivities, setHistoricalActivities] = useState<TelemetryEvent[]>([]);
 
   // Filter agents by current project
   const filteredAgents = useMemo(() => {
@@ -42,9 +45,10 @@ export function Dashboard({
 
   const fetchDashboardData = useCallback(async () => {
     try {
-      const [dashRes, tasksRes] = await Promise.all([
+      const [dashRes, tasksRes, activityRes] = await Promise.all([
         authFetch("/api/dashboard"),
         authFetch("/api/tasks?status=all"),
+        authFetch("/api/telemetry/events?type=thread_activity&limit=20"),
       ]);
 
       if (dashRes.ok) {
@@ -55,6 +59,11 @@ export function Dashboard({
       if (tasksRes.ok) {
         const data = await tasksRes.json();
         setRecentTasks((data.tasks || []).slice(0, 5));
+      }
+
+      if (activityRes.ok) {
+        const data = await activityRes.json();
+        setHistoricalActivities(data.events || []);
       }
     } catch (e) {
       console.error("Failed to fetch dashboard data:", e);
@@ -86,6 +95,36 @@ export function Dashboard({
     return { total, pending, running, completed };
   }, [stats, currentProjectId, filteredTasks]);
 
+  // Merge real-time + historical thread_activity events, deduplicate
+  const activities = useMemo(() => {
+    const realtimeActivities = realtimeEvents.filter(e => e.type === "thread_activity");
+    const seen = new Set(realtimeActivities.map(e => e.id));
+    const merged = [...realtimeActivities];
+    for (const evt of historicalActivities) {
+      if (!seen.has(evt.id)) {
+        merged.push(evt);
+        seen.add(evt.id);
+      }
+    }
+    // Filter by project
+    let filtered = merged;
+    if (currentProjectId) {
+      filtered = merged.filter(e => projectAgentIds.has(e.agent_id));
+    }
+    // Sort newest first
+    filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return filtered.slice(0, 8);
+  }, [realtimeEvents, historicalActivities, currentProjectId, projectAgentIds]);
+
+  // Build agent name lookup
+  const agentNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of agents) {
+      map.set(a.id, a.name);
+    }
+    return map;
+  }, [agents]);
+
   return (
     <div className="flex-1 overflow-auto p-6">
       {/* Stats Cards */}
@@ -96,7 +135,7 @@ export function Dashboard({
         <StatCard label="Providers" value={configuredProviders.length} color="text-[#f97316]" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Agents List */}
         <DashboardCard
           title="Agents"
@@ -111,6 +150,31 @@ export function Dashboard({
             <div className="divide-y divide-[#1a1a1a]">
               {filteredAgents.slice(0, 5).map((agent) => (
                 <AgentListItem key={agent.id} agent={agent} onSelect={() => onSelectAgent(agent)} showProject={!currentProjectId} />
+              ))}
+            </div>
+          )}
+        </DashboardCard>
+
+        {/* Activity Feed */}
+        <DashboardCard
+          title="Activity"
+          actionLabel="Telemetry"
+          onAction={() => onNavigate("telemetry")}
+        >
+          {activities.length === 0 ? (
+            <div className="p-4 text-center text-[#666]">
+              <p>No activity yet</p>
+              <p className="text-sm text-[#444] mt-1">Agent activity will appear here in real-time</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-[#1a1a1a]">
+              {activities.map((evt) => (
+                <ActivityItem
+                  key={evt.id}
+                  activity={(evt.data?.activity as string) || "Working..."}
+                  agentName={agentNameMap.get(evt.agent_id) || evt.agent_id}
+                  timestamp={evt.timestamp}
+                />
               ))}
             </div>
           )}
@@ -224,6 +288,31 @@ function AgentListItem({ agent, onSelect, showProject }: { agent: Agent; onSelec
             : "bg-[#444]"
         }`}
       />
+    </div>
+  );
+}
+
+function timeAgo(timestamp: string): string {
+  const seconds = Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function ActivityItem({ activity, agentName, timestamp }: { activity: string; agentName: string; timestamp: string }) {
+  return (
+    <div className="px-4 py-3">
+      <p className="text-sm truncate">{activity}</p>
+      <div className="flex items-center gap-2 text-xs text-[#555] mt-1">
+        <span className="text-[#666]">{agentName}</span>
+        <span className="text-[#444]">&middot;</span>
+        <span>{timeAgo(timestamp)}</span>
+      </div>
     </div>
   );
 }

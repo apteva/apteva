@@ -1447,6 +1447,7 @@ export const TelemetryDB = {
     agent_id?: string;
     project_id?: string | null; // Filter by project (null = unassigned agents)
     category?: string;
+    type?: string;
     level?: string;
     trace_id?: string;
     since?: string;
@@ -1472,6 +1473,10 @@ export const TelemetryDB = {
     if (filters.category) {
       conditions.push("t.category = ?");
       params.push(filters.category);
+    }
+    if (filters.type) {
+      conditions.push("t.type = ?");
+      params.push(filters.type);
     }
     if (filters.level) {
       conditions.push("t.level = ?");

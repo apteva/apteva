@@ -96,6 +96,7 @@ export async function handleTelemetryRoutes(
       agent_id: url.searchParams.get("agent_id") || undefined,
       project_id: projectIdParam === "null" ? null : projectIdParam || undefined,
       category: url.searchParams.get("category") || undefined,
+      type: url.searchParams.get("type") || undefined,
       level: url.searchParams.get("level") || undefined,
       trace_id: url.searchParams.get("trace_id") || undefined,
       since: url.searchParams.get("since") || undefined,
