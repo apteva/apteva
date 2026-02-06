@@ -360,7 +360,7 @@ export const Onboarding = {
 
 // Get provider list with configuration status for frontend
 export function getProvidersWithStatus() {
-  const configuredProviders = new Set(ProviderKeys.getConfiguredProviders());
+  const configuredProviders = new Set(ProviderKeysDB.getAllConfiguredProviders());
   const keyStatuses = new Map(
     ProviderKeys.getAll().map(k => [k.provider_id, k])
   );
