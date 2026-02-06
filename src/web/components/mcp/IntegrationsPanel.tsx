@@ -44,9 +44,11 @@ function hasMultipleAuthMethods(app: IntegrationApp): boolean {
 // Main component
 export function IntegrationsPanel({
   providerId = "composio",
+  projectId,
   onConnectionComplete,
 }: {
   providerId?: string;
+  projectId?: string | null;
   onConnectionComplete?: () => void;
 }) {
   const { authFetch } = useAuth();
@@ -80,10 +82,11 @@ export function IntegrationsPanel({
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
     try {
       const [appsRes, connectedRes] = await Promise.all([
-        authFetch(`/api/integrations/${providerId}/apps`),
-        authFetch(`/api/integrations/${providerId}/connected`),
+        authFetch(`/api/integrations/${providerId}/apps${projectParam}`),
+        authFetch(`/api/integrations/${providerId}/connected${projectParam}`),
       ]);
 
       const appsData = await appsRes.json();
@@ -96,7 +99,7 @@ export function IntegrationsPanel({
       setError("Failed to load integrations");
     }
     setLoading(false);
-  }, [authFetch, providerId]);
+  }, [authFetch, providerId, projectId]);
 
   useEffect(() => {
     fetchData();
@@ -118,11 +121,12 @@ export function IntegrationsPanel({
   // Poll for pending connection status
   useEffect(() => {
     if (!pendingConnection?.connectionId) return;
+    const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
 
     const pollInterval = setInterval(async () => {
       try {
         const res = await authFetch(
-          `/api/integrations/${providerId}/connection/${pendingConnection.connectionId}`
+          `/api/integrations/${providerId}/connection/${pendingConnection.connectionId}${projectParam}`
         );
         const data = await res.json();
 
@@ -142,7 +146,7 @@ export function IntegrationsPanel({
     }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [pendingConnection, authFetch, providerId, fetchData, onConnectionComplete]);
+  }, [pendingConnection, authFetch, providerId, projectId, fetchData, onConnectionComplete]);
 
   // Initiate connection
   const connectApp = async (app: IntegrationApp, apiKey?: string, forceOAuth?: boolean) => {
@@ -172,7 +176,8 @@ export function IntegrationsPanel({
         };
       }
 
-      const res = await authFetch(`/api/integrations/${providerId}/connect`, {
+      const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const res = await authFetch(`/api/integrations/${providerId}/connect${projectParam}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -231,9 +236,10 @@ export function IntegrationsPanel({
 
   // Disconnect (called after confirmation)
   const disconnectApp = async (account: ConnectedAccount) => {
+    const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
     try {
       const res = await authFetch(
-        `/api/integrations/${providerId}/connection/${account.id}`,
+        `/api/integrations/${providerId}/connection/${account.id}${projectParam}`,
         { method: "DELETE" }
       );
 
@@ -263,7 +269,8 @@ export function IntegrationsPanel({
     setError(null);
 
     try {
-      const res = await authFetch(`/api/integrations/${providerId}/configs`, {
+      const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const res = await authFetch(`/api/integrations/${providerId}/configs${projectParam}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

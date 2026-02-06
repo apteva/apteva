@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { TasksIcon, CloseIcon } from "../common/Icons";
 import { useAuth } from "../../context";
-import type { Task, TaskTrajectoryStep } from "../../types";
+import { useTelemetry } from "../../context/TelemetryContext";
+import type { Task, TaskTrajectoryStep, ToolUseBlock, ToolResultBlock } from "../../types";
 
 interface TasksPageProps {
   onSelectAgent?: (agentId: string) => void;
@@ -13,6 +14,11 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [loadingTask, setLoadingTask] = useState(false);
+  const lastProcessedEventRef = useRef<string | null>(null);
+
+  // Subscribe to task telemetry events for real-time updates
+  const { events: taskEvents } = useTelemetry({ category: "TASK" });
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -26,12 +32,55 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
     }
   }, [authFetch, filter]);
 
+  // Initial fetch
   useEffect(() => {
     fetchTasks();
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchTasks, 10000);
-    return () => clearInterval(interval);
   }, [fetchTasks]);
+
+  // Handle real-time task events from telemetry - use as trigger to refetch
+  // since telemetry data is incomplete (missing id, agentId, status, etc.)
+  useEffect(() => {
+    if (!taskEvents.length) return;
+
+    const latestEvent = taskEvents[0];
+    if (!latestEvent || latestEvent.id === lastProcessedEventRef.current) return;
+
+    // Only react to task mutation events
+    const eventType = latestEvent.type;
+    if (eventType === "task_created" || eventType === "task_updated" || eventType === "task_deleted") {
+      lastProcessedEventRef.current = latestEvent.id;
+      console.log("[TasksPage] Telemetry event:", eventType);
+      // Refetch to get complete task data
+      fetchTasks();
+    }
+  }, [taskEvents, fetchTasks]);
+
+  // Fetch full task details (including trajectory) when selecting a task
+  const selectTask = useCallback(async (task: Task) => {
+    // Set task immediately for quick feedback
+    setSelectedTask(task);
+    setLoadingTask(true);
+
+    try {
+      const res = await authFetch(`/api/tasks/${task.agentId}/${task.id}`);
+      console.log("[TasksPage] Fetch task response status:", res.status);
+      if (res.ok) {
+        const data = await res.json();
+        console.log("[TasksPage] Task data:", data);
+        console.log("[TasksPage] Has trajectory:", !!data.task?.trajectory, "Length:", data.task?.trajectory?.length);
+        if (data.task) {
+          // Merge with agentId/agentName since API might not include them
+          setSelectedTask({ ...data.task, agentId: task.agentId, agentName: task.agentName });
+        }
+      } else {
+        console.error("[TasksPage] Failed to fetch task:", res.status, await res.text());
+      }
+    } catch (e) {
+      console.error("Failed to fetch task details:", e);
+    } finally {
+      setLoadingTask(false);
+    }
+  }, [authFetch]);
 
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-500/20 text-yellow-400",
@@ -93,7 +142,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
               {tasks.map(task => (
                 <div
                   key={`${task.agentId}-${task.id}`}
-                  onClick={() => setSelectedTask(task)}
+                  onClick={() => selectTask(task)}
                   className={`bg-[#111] border rounded-lg p-4 cursor-pointer transition ${
                     selectedTask?.id === task.id && selectedTask?.agentId === task.agentId
                       ? "border-[#f97316]"
@@ -143,6 +192,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
           statusColors={statusColors}
           onClose={() => setSelectedTask(null)}
           onSelectAgent={onSelectAgent}
+          loading={loadingTask}
         />
       )}
     </div>
@@ -154,9 +204,10 @@ interface TaskDetailPanelProps {
   statusColors: Record<string, string>;
   onClose: () => void;
   onSelectAgent?: (agentId: string) => void;
+  loading?: boolean;
 }
 
-function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent }: TaskDetailPanelProps) {
+function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading }: TaskDetailPanelProps) {
   return (
     <div className="w-full md:w-1/2 lg:w-1/3 border-l border-[#1a1a1a] bg-[#0a0a0a] flex flex-col overflow-hidden">
       {/* Header */}
@@ -249,27 +300,33 @@ function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent }: TaskDet
 
         {/* Error */}
         {task.status === "failed" && task.error && (
-          <div>
+          <div className="min-w-0">
             <h4 className="text-xs text-red-400 uppercase tracking-wider mb-1">Error</h4>
-            <div className="bg-red-500/10 border border-red-500/20 rounded p-3">
-              <p className="text-sm text-red-400 whitespace-pre-wrap">{task.error}</p>
+            <div className="bg-red-500/10 border border-red-500/20 rounded p-3 overflow-x-auto">
+              <pre className="text-sm text-red-400 whitespace-pre-wrap break-words">{task.error}</pre>
             </div>
           </div>
         )}
 
         {/* Result */}
         {task.status === "completed" && task.result && (
-          <div>
+          <div className="min-w-0">
             <h4 className="text-xs text-green-400 uppercase tracking-wider mb-1">Result</h4>
-            <div className="bg-green-500/10 border border-green-500/20 rounded p-3">
-              <p className="text-sm text-green-400 whitespace-pre-wrap">
+            <div className="bg-green-500/10 border border-green-500/20 rounded p-3 overflow-x-auto">
+              <pre className="text-sm text-green-400 whitespace-pre-wrap break-words">
                 {typeof task.result === "string" ? task.result : JSON.stringify(task.result, null, 2)}
-              </p>
+              </pre>
             </div>
           </div>
         )}
 
         {/* Trajectory */}
+        {loading && !task.trajectory && (
+          <div>
+            <h4 className="text-xs text-[#666] uppercase tracking-wider mb-2">Trajectory</h4>
+            <div className="text-sm text-[#555]">Loading trajectory...</div>
+          </div>
+        )}
         {task.trajectory && task.trajectory.length > 0 && (
           <div>
             <h4 className="text-xs text-[#666] uppercase tracking-wider mb-2">
@@ -284,70 +341,142 @@ function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent }: TaskDet
 }
 
 function TrajectoryView({ trajectory }: { trajectory: TaskTrajectoryStep[] }) {
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const toggleStep = (index: number) => {
+  const toggleStep = (id: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
-      if (next.has(index)) {
-        next.delete(index);
+      if (next.has(id)) {
+        next.delete(id);
       } else {
-        next.add(index);
+        next.add(id);
       }
       return next;
     });
   };
 
-  const stepColors: Record<string, { bg: string; text: string; icon: string }> = {
-    thought: { bg: "bg-purple-500/10", text: "text-purple-400", icon: "💭" },
-    action: { bg: "bg-blue-500/10", text: "text-blue-400", icon: "⚡" },
-    observation: { bg: "bg-green-500/10", text: "text-green-400", icon: "👁" },
-    tool_call: { bg: "bg-orange-500/10", text: "text-orange-400", icon: "🔧" },
-    tool_result: { bg: "bg-teal-500/10", text: "text-teal-400", icon: "📋" },
-    message: { bg: "bg-gray-500/10", text: "text-gray-400", icon: "💬" },
+  const roleStyles = {
+    user: { bg: "bg-blue-500/10", text: "text-blue-400", icon: "👤", label: "User" },
+    assistant: { bg: "bg-purple-500/10", text: "text-purple-400", icon: "🤖", label: "Assistant" },
+  };
+
+  // Render content which can be string or array of blocks
+  const renderContent = (step: TaskTrajectoryStep) => {
+    const content = step.content;
+
+    // String content (text message)
+    if (typeof content === "string") {
+      const isLong = content.length > 200;
+      const isExpanded = expanded.has(step.id);
+
+      return (
+        <div>
+          <p className={`text-sm text-[#ccc] whitespace-pre-wrap break-words ${!isExpanded && isLong ? 'line-clamp-4' : ''}`}>
+            {content}
+          </p>
+          {isLong && (
+            <button
+              onClick={() => toggleStep(step.id)}
+              className="text-xs text-[#666] hover:text-[#888] mt-1"
+            >
+              {isExpanded ? "Show less" : "Show more..."}
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    // Array content (tool_use or tool_result blocks)
+    return (
+      <div className="space-y-2">
+        {content.map((block, idx) => {
+          if (block.type === "tool_use") {
+            const inputStr = JSON.stringify(block.input, null, 2);
+            const isLong = inputStr.length > 150;
+            const blockId = `${step.id}-${idx}`;
+            const isExpanded = expanded.has(blockId);
+
+            return (
+              <div key={idx} className="bg-orange-500/10 border border-orange-500/20 rounded p-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-orange-400">🔧</span>
+                  <span className="text-xs font-medium text-orange-400">Tool Call</span>
+                  <span className="text-xs text-[#888]">{block.name}</span>
+                </div>
+                <pre className={`text-xs text-[#888] overflow-x-auto ${!isExpanded && isLong ? 'line-clamp-3' : ''}`}>
+                  {inputStr}
+                </pre>
+                {isLong && (
+                  <button
+                    onClick={() => toggleStep(blockId)}
+                    className="text-xs text-[#666] hover:text-[#888] mt-1"
+                  >
+                    {isExpanded ? "Show less" : "Show more..."}
+                  </button>
+                )}
+              </div>
+            );
+          }
+
+          if (block.type === "tool_result") {
+            const isError = block.is_error;
+            const blockId = `${step.id}-${idx}`;
+            const isExpanded = expanded.has(blockId);
+            const isLong = block.content.length > 150;
+
+            return (
+              <div
+                key={idx}
+                className={`${isError ? 'bg-red-500/10 border-red-500/20' : 'bg-teal-500/10 border-teal-500/20'} border rounded p-2`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span>{isError ? "❌" : "📋"}</span>
+                  <span className={`text-xs font-medium ${isError ? 'text-red-400' : 'text-teal-400'}`}>
+                    Tool Result
+                  </span>
+                </div>
+                <pre className={`text-xs text-[#888] overflow-x-auto whitespace-pre-wrap break-words ${!isExpanded && isLong ? 'line-clamp-3' : ''}`}>
+                  {block.content}
+                </pre>
+                {isLong && (
+                  <button
+                    onClick={() => toggleStep(blockId)}
+                    className="text-xs text-[#666] hover:text-[#888] mt-1"
+                  >
+                    {isExpanded ? "Show less" : "Show more..."}
+                  </button>
+                )}
+              </div>
+            );
+          }
+
+          return null;
+        })}
+      </div>
+    );
   };
 
   return (
     <div className="space-y-2">
-      {trajectory.map((step, index) => {
-        const colors = stepColors[step.type] || stepColors.message;
-        const isExpanded = expanded.has(index);
-        const isLong = step.content.length > 150;
+      {trajectory.map((step) => {
+        const style = roleStyles[step.role] || roleStyles.assistant;
 
         return (
           <div
-            key={index}
-            className={`${colors.bg} border border-[#1a1a1a] rounded overflow-hidden`}
+            key={step.id}
+            className={`${style.bg} border border-[#1a1a1a] rounded overflow-hidden p-3`}
           >
-            <button
-              onClick={() => isLong && toggleStep(index)}
-              className={`w-full p-2 text-left flex items-start gap-2 ${isLong ? 'cursor-pointer' : ''}`}
-            >
-              <span className="flex-shrink-0">{colors.icon}</span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className={`text-xs font-medium ${colors.text} capitalize`}>
-                    {step.type.replace("_", " ")}
-                  </span>
-                  {step.tool && (
-                    <span className="text-xs text-[#666]">· {step.tool}</span>
-                  )}
-                  {step.timestamp && (
-                    <span className="text-xs text-[#555]">
-                      · {new Date(step.timestamp).toLocaleTimeString()}
-                    </span>
-                  )}
-                </div>
-                <p className={`text-sm text-[#888] whitespace-pre-wrap ${!isExpanded && isLong ? 'line-clamp-3' : ''}`}>
-                  {step.content}
-                </p>
-                {isLong && (
-                  <span className="text-xs text-[#666] mt-1 inline-block">
-                    {isExpanded ? "Click to collapse" : "Click to expand..."}
-                  </span>
-                )}
-              </div>
-            </button>
+            <div className="flex items-center gap-2 mb-2">
+              <span>{style.icon}</span>
+              <span className={`text-xs font-medium ${style.text}`}>{style.label}</span>
+              {step.model && (
+                <span className="text-xs text-[#555]">· {step.model}</span>
+              )}
+              <span className="text-xs text-[#555]">
+                · {new Date(step.created_at).toLocaleTimeString()}
+              </span>
+            </div>
+            {renderContent(step)}
           </div>
         );
       })}

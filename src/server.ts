@@ -421,7 +421,7 @@ if (hasRestarts) {
   // Restart in background to not block startup
   (async () => {
     // Import startAgentProcess dynamically to avoid circular dependency
-    const { startAgentProcess } = await import("./routes/api");
+    const { startAgentProcess } = await import("./routes/api/agent-utils");
 
     // Restart MCP servers first (agents may depend on them)
     if (mcpServersToRestart.length > 0) {

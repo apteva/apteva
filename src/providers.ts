@@ -175,7 +175,13 @@ export type ProviderId = keyof typeof PROVIDERS;
 // Provider Keys Management
 export const ProviderKeys = {
   // Save an API key (encrypts before storing)
-  async save(providerId: string, apiKey: string): Promise<{ success: boolean; error?: string }> {
+  // projectId: null = global key, string = project-scoped key
+  async save(
+    providerId: string,
+    apiKey: string,
+    projectId: string | null = null,
+    name: string | null = null
+  ): Promise<{ success: boolean; error?: string; id?: string }> {
     // Validate format
     const validation = validateKeyFormat(providerId, apiKey);
     if (!validation.valid) {
@@ -185,14 +191,14 @@ export const ProviderKeys = {
     try {
       const encryptedKey = encrypt(apiKey.trim());
       const keyHint = createKeyHint(apiKey.trim());
-      ProviderKeysDB.save(providerId, encryptedKey, keyHint);
-      return { success: true };
+      const record = ProviderKeysDB.save(providerId, encryptedKey, keyHint, projectId, name);
+      return { success: true, id: record.id };
     } catch (err) {
       return { success: false, error: `Failed to save key: ${err}` };
     }
   },
 
-  // Get decrypted API key for a provider
+  // Get decrypted API key for a provider (global key)
   getDecrypted(providerId: string): string | null {
     const record = ProviderKeysDB.findByProvider(providerId);
     if (!record) return null;
@@ -205,31 +211,91 @@ export const ProviderKeys = {
     }
   },
 
-  // Check if a provider has a key configured
+  // Get decrypted API key for a provider and project
+  // Falls back to global key if no project-specific key exists
+  getDecryptedForProject(providerId: string, projectId: string | null): string | null {
+    // Try project-specific key first
+    if (projectId) {
+      const projectRecord = ProviderKeysDB.findByProviderAndProject(providerId, projectId);
+      if (projectRecord) {
+        try {
+          return decrypt(projectRecord.encrypted_key);
+        } catch (err) {
+          console.error(`Failed to decrypt project key for ${providerId}/${projectId}:`, err);
+        }
+      }
+    }
+    // Fall back to global key
+    return this.getDecrypted(providerId);
+  },
+
+  // Check if a provider has a key configured (global)
   hasKey(providerId: string): boolean {
+    return ProviderKeysDB.findByProvider(providerId) !== null;
+  },
+
+  // Check if a provider has a key for a specific project (or global)
+  hasKeyForProject(providerId: string, projectId: string | null): boolean {
+    if (projectId && ProviderKeysDB.findByProviderAndProject(providerId, projectId)) {
+      return true;
+    }
     return ProviderKeysDB.findByProvider(providerId) !== null;
   },
 
   // Get all configured providers with their status (without exposing keys)
   getAll(): Array<{
+    id: string;
     provider_id: string;
     key_hint: string;
     is_valid: boolean;
     last_tested_at: string | null;
     created_at: string;
+    project_id: string | null;
+    name: string | null;
   }> {
     return ProviderKeysDB.findAll().map(k => ({
+      id: k.id,
       provider_id: k.provider_id,
       key_hint: k.key_hint,
       is_valid: k.is_valid,
       last_tested_at: k.last_tested_at,
       created_at: k.created_at,
+      project_id: k.project_id,
+      name: k.name,
     }));
   },
 
-  // Delete a provider key
+  // Get all keys for a specific provider
+  getAllByProvider(providerId: string): Array<{
+    id: string;
+    provider_id: string;
+    key_hint: string;
+    is_valid: boolean;
+    last_tested_at: string | null;
+    created_at: string;
+    project_id: string | null;
+    name: string | null;
+  }> {
+    return ProviderKeysDB.findAllByProvider(providerId).map(k => ({
+      id: k.id,
+      provider_id: k.provider_id,
+      key_hint: k.key_hint,
+      is_valid: k.is_valid,
+      last_tested_at: k.last_tested_at,
+      created_at: k.created_at,
+      project_id: k.project_id,
+      name: k.name,
+    }));
+  },
+
+  // Delete a provider key (global)
   delete(providerId: string): boolean {
     return ProviderKeysDB.delete(providerId);
+  },
+
+  // Delete a provider key by ID
+  deleteById(id: string): boolean {
+    return ProviderKeysDB.deleteById(id);
   },
 
   // Test if an API key is valid by making a test request
@@ -254,9 +320,14 @@ export const ProviderKeys = {
     return { valid: true };
   },
 
-  // Get list of provider IDs that have valid keys
+  // Get list of provider IDs that have valid keys (global only)
   getConfiguredProviders(): string[] {
     return ProviderKeysDB.getConfiguredProviders();
+  },
+
+  // Get list of all provider IDs that have keys (including project-scoped)
+  getAllConfiguredProviders(): string[] {
+    return ProviderKeysDB.getAllConfiguredProviders();
   },
 };
 

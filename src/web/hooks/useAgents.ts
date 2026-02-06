@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Agent, AgentFeatures } from "../types";
 import { useAuth } from "../context";
+import { useAgentStatusChange } from "../context/TelemetryContext";
 
 export function useAgents(enabled: boolean) {
   const { accessToken } = useAuth();
@@ -21,6 +22,14 @@ export function useAgents(enabled: boolean) {
     setAgents(data.agents || []);
     setLoading(false);
   }, [getHeaders]);
+
+  // Auto-refetch when agents start/stop/crash (via SSE telemetry)
+  const statusChangeCounter = useAgentStatusChange();
+  useEffect(() => {
+    if (enabled && statusChangeCounter > 0) {
+      fetchAgents();
+    }
+  }, [enabled, statusChangeCounter, fetchAgents]);
 
   useEffect(() => {
     if (enabled) {

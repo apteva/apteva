@@ -51,6 +51,256 @@ const METHOD_COLORS: Record<string, string> = {
   patch: "#50e3c2",
 };
 
+// Try It Out component
+function TryItOut({
+  method,
+  path,
+  parameters,
+  requestBody,
+  authFetch,
+}: {
+  method: string;
+  path: string;
+  parameters?: Array<{
+    name: string;
+    in: string;
+    required?: boolean;
+    schema?: { type: string };
+  }>;
+  requestBody?: any;
+  authFetch: (url: string, options?: RequestInit) => Promise<Response>;
+}) {
+  const [paramValues, setParamValues] = useState<Record<string, string>>({});
+  const [bodyValue, setBodyValue] = useState("");
+  const [response, setResponse] = useState<{ status: number; data: any } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Initialize body with example if available
+  useEffect(() => {
+    if (requestBody?.content?.["application/json"]?.schema) {
+      const schema = requestBody.content["application/json"].schema;
+      if (schema.example) {
+        setBodyValue(JSON.stringify(schema.example, null, 2));
+      } else if (schema.properties) {
+        // Generate example from properties
+        const example: Record<string, any> = {};
+        for (const [key, prop] of Object.entries(schema.properties) as [string, any][]) {
+          if (prop.example !== undefined) {
+            example[key] = prop.example;
+          } else if (prop.type === "string") {
+            example[key] = "";
+          } else if (prop.type === "number" || prop.type === "integer") {
+            example[key] = 0;
+          } else if (prop.type === "boolean") {
+            example[key] = false;
+          } else if (prop.type === "array") {
+            example[key] = [];
+          } else if (prop.type === "object") {
+            example[key] = {};
+          }
+        }
+        setBodyValue(JSON.stringify(example, null, 2));
+      }
+    }
+  }, [requestBody]);
+
+  const execute = async () => {
+    setLoading(true);
+    setError(null);
+    setResponse(null);
+
+    try {
+      // Build URL with path parameters
+      let url = path;
+      const queryParams: string[] = [];
+
+      for (const param of parameters || []) {
+        const value = paramValues[param.name] || "";
+        if (param.in === "path") {
+          url = url.replace(`{${param.name}}`, encodeURIComponent(value));
+        } else if (param.in === "query" && value) {
+          queryParams.push(`${param.name}=${encodeURIComponent(value)}`);
+        }
+      }
+
+      if (queryParams.length > 0) {
+        url += `?${queryParams.join("&")}`;
+      }
+
+      const options: RequestInit = {
+        method: method.toUpperCase(),
+      };
+
+      if (bodyValue && ["post", "put", "patch"].includes(method)) {
+        options.headers = { "Content-Type": "application/json" };
+        options.body = bodyValue;
+      }
+
+      const res = await authFetch(`/api${url}`, options);
+      let data;
+      const contentType = res.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        data = await res.json();
+      } else {
+        data = await res.text();
+      }
+
+      setResponse({ status: res.status, data });
+    } catch (err: any) {
+      setError(err.message || "Request failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pathParams = parameters?.filter((p) => p.in === "path") || [];
+  const queryParams = parameters?.filter((p) => p.in === "query") || [];
+  const hasBody = ["post", "put", "patch"].includes(method) && requestBody;
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, background: "#0a0a14", borderRadius: 6, border: "1px solid #222" }}>
+      <h4 style={{ fontSize: 13, color: "#f97316", marginBottom: 12, fontWeight: 600 }}>Try it out</h4>
+
+      {/* Path Parameters */}
+      {pathParams.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>Path Parameters</div>
+          {pathParams.map((param) => (
+            <div key={param.name} style={{ marginBottom: 8 }}>
+              <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 4 }}>
+                {param.name} {param.required && <span style={{ color: "#f66" }}>*</span>}
+              </label>
+              <input
+                type="text"
+                value={paramValues[param.name] || ""}
+                onChange={(e) => setParamValues({ ...paramValues, [param.name]: e.target.value })}
+                placeholder={param.schema?.type || "string"}
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  background: "#111",
+                  border: "1px solid #333",
+                  borderRadius: 4,
+                  color: "#fff",
+                  fontSize: 13,
+                  fontFamily: "monospace",
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Query Parameters */}
+      {queryParams.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>Query Parameters</div>
+          {queryParams.map((param) => (
+            <div key={param.name} style={{ marginBottom: 8 }}>
+              <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 4 }}>
+                {param.name} {param.required && <span style={{ color: "#f66" }}>*</span>}
+              </label>
+              <input
+                type="text"
+                value={paramValues[param.name] || ""}
+                onChange={(e) => setParamValues({ ...paramValues, [param.name]: e.target.value })}
+                placeholder={param.schema?.type || "string"}
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  background: "#111",
+                  border: "1px solid #333",
+                  borderRadius: 4,
+                  color: "#fff",
+                  fontSize: 13,
+                  fontFamily: "monospace",
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Request Body */}
+      {hasBody && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>Request Body (JSON)</div>
+          <textarea
+            value={bodyValue}
+            onChange={(e) => setBodyValue(e.target.value)}
+            rows={6}
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: 4,
+              color: "#fff",
+              fontSize: 12,
+              fontFamily: "monospace",
+              resize: "vertical",
+            }}
+          />
+        </div>
+      )}
+
+      {/* Execute Button */}
+      <button
+        onClick={execute}
+        disabled={loading}
+        style={{
+          padding: "10px 20px",
+          background: loading ? "#333" : "#f97316",
+          color: loading ? "#666" : "#000",
+          border: "none",
+          borderRadius: 4,
+          cursor: loading ? "not-allowed" : "pointer",
+          fontSize: 13,
+          fontWeight: 600,
+        }}
+      >
+        {loading ? "Executing..." : "Execute"}
+      </button>
+
+      {/* Error */}
+      {error && (
+        <div style={{ marginTop: 12, padding: 12, background: "#2a1515", borderRadius: 4, color: "#f66", fontSize: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {/* Response */}
+      {response && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+            Response{" "}
+            <span style={{ color: response.status >= 200 && response.status < 300 ? "#49cc90" : "#f66" }}>
+              {response.status}
+            </span>
+          </div>
+          <pre
+            style={{
+              padding: 12,
+              background: "#111",
+              borderRadius: 4,
+              color: "#888",
+              fontSize: 11,
+              fontFamily: "monospace",
+              overflow: "auto",
+              maxHeight: 300,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {typeof response.data === "string" ? response.data : JSON.stringify(response.data, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ApiDocsPage() {
   const { authFetch } = useAuth();
   const [spec, setSpec] = useState<OpenApiSpec | null>(null);
@@ -516,6 +766,15 @@ export function ApiDocsPage() {
                           </div>
                         </div>
                       )}
+
+                      {/* Try It Out */}
+                      <TryItOut
+                        method={method}
+                        path={path}
+                        parameters={details.parameters}
+                        requestBody={details.requestBody}
+                        authFetch={authFetch}
+                      />
                     </div>
                   )}
                 </div>

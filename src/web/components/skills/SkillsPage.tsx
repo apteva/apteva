@@ -35,12 +35,20 @@ interface MarketplaceSkill {
   repository: string | null;
 }
 
+interface GitHubSkill {
+  name: string;
+  description: string;
+  path: string;
+  size: number;
+  downloadUrl: string;
+}
+
 export function SkillsPage() {
   const { authFetch } = useAuth();
   const { projects, currentProjectId } = useProjects();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"installed" | "marketplace">("installed");
+  const [activeTab, setActiveTab] = useState<"installed" | "marketplace" | "github">("installed");
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
@@ -54,6 +62,17 @@ export function SkillsPage() {
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
   const [installing, setInstalling] = useState<string | null>(null);
+
+  // GitHub state
+  const [githubRepo, setGithubRepo] = useState("");
+  const [githubSkills, setGithubSkills] = useState<GitHubSkill[]>([]);
+  const [githubLoading, setGithubLoading] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
+  const [githubRepoInfo, setGithubRepoInfo] = useState<{ owner: string; repo: string; url: string } | null>(null);
+  const [installingGithub, setInstallingGithub] = useState<string | null>(null);
+  const [githubProjectId, setGithubProjectId] = useState<string | null>(
+    currentProjectId && currentProjectId !== "unassigned" ? currentProjectId : null
+  );
 
   // Filter skills based on global project selector
   // When a project is selected, show global + that project's skills
@@ -145,6 +164,125 @@ export function SkillsPage() {
 
   const isInstalled = (name: string) => skills.some((s) => s.name === name);
 
+  // GitHub functions
+  const browseGitHubRepo = async (repoInput?: string) => {
+    const input = repoInput || githubRepo;
+    if (!input.trim()) return;
+
+    // Parse repo input: "owner/repo" or full URL
+    let owner = "";
+    let repo = "";
+
+    if (input.includes("github.com")) {
+      const match = input.match(/github\.com\/([^/]+)\/([^/]+)/);
+      if (match) {
+        owner = match[1];
+        repo = match[2].replace(/\.git$/, "");
+      }
+    } else if (input.includes("/")) {
+      const parts = input.split("/");
+      owner = parts[0];
+      repo = parts[1];
+    }
+
+    if (!owner || !repo) {
+      setGithubError("Invalid repo format. Use 'owner/repo' or GitHub URL");
+      return;
+    }
+
+    setGithubLoading(true);
+    setGithubError(null);
+    setGithubSkills([]);
+    setGithubRepoInfo(null);
+
+    try {
+      const res = await authFetch(`/api/skills/github/${owner}/${repo}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setGithubError(data.error || "Failed to fetch repository");
+        setGithubLoading(false);
+        return;
+      }
+
+      setGithubSkills(data.skills || []);
+      setGithubRepoInfo(data.repo || null);
+    } catch (e) {
+      setGithubError("Failed to fetch repository");
+    }
+    setGithubLoading(false);
+  };
+
+  const installFromGitHub = async (skill: GitHubSkill) => {
+    if (!githubRepoInfo) return;
+
+    setInstallingGithub(skill.name);
+    try {
+      const res = await authFetch("/api/skills/github/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          owner: githubRepoInfo.owner,
+          repo: githubRepoInfo.repo,
+          skillName: skill.name,
+          downloadUrl: skill.downloadUrl,
+          projectId: githubProjectId,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        await alert(`Installed "${skill.name}" successfully!`, { title: "Skill Installed" });
+        fetchSkills();
+      } else {
+        await alert(data.error || "Failed to install skill", { title: "Installation Failed", variant: "error" });
+      }
+    } catch (e) {
+      await alert("Failed to install skill", { title: "Error", variant: "error" });
+    }
+    setInstallingGithub(null);
+  };
+
+  const installAllFromGitHub = async () => {
+    if (!githubRepoInfo || githubSkills.length === 0) return;
+
+    const uninstalled = githubSkills.filter(s => !isInstalled(s.name));
+    if (uninstalled.length === 0) {
+      await alert("All skills are already installed", { title: "Info" });
+      return;
+    }
+
+    const confirmed = await confirm(
+      `Install ${uninstalled.length} skill(s) from ${githubRepoInfo.owner}/${githubRepoInfo.repo}?`,
+      { confirmText: "Install All", title: "Install Skills" }
+    );
+    if (!confirmed) return;
+
+    let installed = 0;
+    for (const skill of uninstalled) {
+      setInstallingGithub(skill.name);
+      try {
+        const res = await authFetch("/api/skills/github/install", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            owner: githubRepoInfo.owner,
+            repo: githubRepoInfo.repo,
+            skillName: skill.name,
+            downloadUrl: skill.downloadUrl,
+            projectId: githubProjectId,
+          }),
+        });
+        if (res.ok) installed++;
+      } catch (e) {
+        // Continue with others
+      }
+    }
+    setInstallingGithub(null);
+    fetchSkills();
+    await alert(`Installed ${installed} of ${uninstalled.length} skills`, { title: "Installation Complete" });
+  };
+
   return (
     <>
       {ConfirmDialog}
@@ -188,6 +326,16 @@ export function SkillsPage() {
               }`}
             >
               Installed ({skills.length})
+            </button>
+            <button
+              onClick={() => setActiveTab("github")}
+              className={`px-4 py-2 rounded text-sm font-medium transition ${
+                activeTab === "github"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              Browse GitHub
             </button>
             <button
               onClick={() => setActiveTab("marketplace")}
@@ -241,6 +389,187 @@ export function SkillsPage() {
                 </div>
               )}
             </>
+          )}
+
+          {/* GitHub Tab */}
+          {activeTab === "github" && (
+            <div className="space-y-6">
+              {/* Search */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  browseGitHubRepo();
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={githubRepo}
+                  onChange={(e) => setGithubRepo(e.target.value)}
+                  placeholder="Enter GitHub repo (e.g., WordPress/agent-skills)"
+                  className="flex-1 bg-[#111] border border-[#333] rounded-lg px-4 py-3 focus:outline-none focus:border-[#f97316]"
+                />
+                <button
+                  type="submit"
+                  disabled={githubLoading}
+                  className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-6 py-3 rounded-lg font-medium transition"
+                >
+                  {githubLoading ? "..." : "Browse"}
+                </button>
+              </form>
+
+              {/* Project Scope Selector */}
+              {hasProjects && githubSkills.length > 0 && (
+                <div className="flex items-center gap-3 p-3 bg-[#0a0a0a] border border-[#222] rounded-lg">
+                  <span className="text-sm text-[#666]">Install to:</span>
+                  <Select
+                    value={githubProjectId || ""}
+                    onChange={(value) => setGithubProjectId(value || null)}
+                    options={[
+                      { value: "", label: "Global (all projects)" },
+                      ...projects.map(p => ({ value: p.id, label: p.name }))
+                    ]}
+                    placeholder="Select scope..."
+                  />
+                </div>
+              )}
+
+              {/* Error */}
+              {githubError && (
+                <div className="text-red-400 text-sm p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                  {githubError}
+                </div>
+              )}
+
+              {/* Repo Info Header */}
+              {githubRepoInfo && githubSkills.length > 0 && (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <a
+                      href={githubRepoInfo.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#f97316] hover:underline font-medium"
+                    >
+                      {githubRepoInfo.owner}/{githubRepoInfo.repo}
+                    </a>
+                    <span className="text-sm text-[#666]">
+                      {githubSkills.length} skill{githubSkills.length !== 1 ? "s" : ""} found
+                    </span>
+                  </div>
+                  {githubSkills.some(s => !isInstalled(s.name)) && (
+                    <button
+                      onClick={installAllFromGitHub}
+                      disabled={!!installingGithub}
+                      className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-4 py-2 rounded transition disabled:opacity-50"
+                    >
+                      Install All
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Loading */}
+              {githubLoading && (
+                <div className="text-center py-8 text-[#666]">
+                  Fetching skills from repository...
+                </div>
+              )}
+
+              {/* Empty State */}
+              {!githubLoading && !githubRepoInfo && !githubError && (
+                <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
+                  <div className="text-4xl mb-4">📦</div>
+                  <h3 className="text-lg font-medium mb-2">Browse Skills from GitHub</h3>
+                  <p className="text-[#666] mb-6 max-w-md mx-auto">
+                    Enter a GitHub repository to browse and install skills. Skills are markdown files with instructions that teach agents how to perform specific tasks.
+                  </p>
+                  <div className="flex flex-wrap gap-2 justify-center">
+                    {[
+                      { label: "WordPress Skills", repo: "WordPress/agent-skills" },
+                    ].map(({ label, repo }) => (
+                      <button
+                        key={repo}
+                        onClick={() => {
+                          setGithubRepo(repo);
+                          browseGitHubRepo(repo);
+                        }}
+                        className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* No Skills Found */}
+              {!githubLoading && githubRepoInfo && githubSkills.length === 0 && (
+                <div className="text-center py-8 text-[#666]">
+                  No skills found in this repository. Skills should be in subdirectories with a SKILL.md file.
+                </div>
+              )}
+
+              {/* Skills Grid */}
+              {githubSkills.length > 0 && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {githubSkills.map((skill) => {
+                    const installed = isInstalled(skill.name);
+                    const isInstalling = installingGithub === skill.name;
+
+                    return (
+                      <div
+                        key={skill.name}
+                        className={`bg-[#111] border rounded-lg p-4 transition ${
+                          installed ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-medium truncate">{skill.name}</h3>
+                              {installed && (
+                                <span className="text-xs text-green-400">✓ Installed</span>
+                              )}
+                            </div>
+                            <p className="text-sm text-[#666] mt-1 line-clamp-2">
+                              {skill.description || "No description"}
+                            </p>
+                            <div className="flex items-center gap-2 mt-2 text-xs text-[#555]">
+                              <span>{(skill.size / 1024).toFixed(1)}KB</span>
+                              <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">
+                                GitHub
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex-shrink-0">
+                            {installed ? (
+                              <span className="text-xs text-[#555] px-3 py-1.5">Added</span>
+                            ) : (
+                              <button
+                                onClick={() => installFromGitHub(skill)}
+                                disabled={isInstalling}
+                                className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition disabled:opacity-50"
+                              >
+                                {isInstalling ? "Installing..." : "Install"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Info */}
+              <div className="p-4 bg-[#111] border border-[#1a1a1a] rounded-lg text-sm text-[#666]">
+                <p>
+                  Skills are sourced from GitHub repositories. Each skill should be in its own directory with a{" "}
+                  <code className="text-[#888] bg-[#0a0a0a] px-1 rounded">SKILL.md</code> file containing instructions.
+                </p>
+              </div>
+            </div>
           )}
 
           {/* Marketplace Tab */}

@@ -273,7 +273,7 @@ export function McpPage() {
 
         {/* Hosted Services Tab */}
         {activeTab === "hosted" && (
-          <HostedServices onServerAdded={fetchServers} />
+          <HostedServices onServerAdded={fetchServers} projectId={currentProjectId} />
         )}
 
         {/* Browse Registry Tab */}
@@ -932,8 +932,9 @@ interface ComposioConfig {
   createdAt?: string;
 }
 
-function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
+function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => void; projectId?: string | null }) {
   const { authFetch } = useAuth();
+  const [activeProvider, setActiveProvider] = useState<"composio" | "smithery" | "agentdojo">("composio");
   const [subTab, setSubTab] = useState<"configs" | "connect">("configs");
   const [composioConnected, setComposioConnected] = useState(false);
   const [smitheryConnected, setSmitheryConnected] = useState(false);
@@ -973,12 +974,22 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
       const composio = providers.find((p: any) => p.id === "composio");
       const smithery = providers.find((p: any) => p.id === "smithery");
       const agentdojo = providers.find((p: any) => p.id === "agentdojo");
-      setComposioConnected(composio?.hasKey || false);
-      setSmitheryConnected(smithery?.hasKey || false);
-      setAgentDojoConnected(agentdojo?.hasKey || false);
+      const composioHasKey = composio?.hasKey || false;
+      const smitheryHasKey = smithery?.hasKey || false;
+      const agentdojoHasKey = agentdojo?.hasKey || false;
 
-      if (composio?.hasKey) {
+      setComposioConnected(composioHasKey);
+      setSmitheryConnected(smitheryHasKey);
+      setAgentDojoConnected(agentdojoHasKey);
+
+      // Set initial active provider to first connected one
+      if (composioHasKey) {
+        setActiveProvider("composio");
         fetchComposioConfigs();
+      } else if (smitheryHasKey) {
+        setActiveProvider("smithery");
+      } else if (agentdojoHasKey) {
+        setActiveProvider("agentdojo");
       }
     } catch (e) {
       console.error("Failed to fetch providers:", e);
@@ -989,7 +1000,8 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
   const fetchComposioConfigs = async () => {
     setLoadingConfigs(true);
     try {
-      const res = await authFetch("/api/integrations/composio/configs");
+      const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const res = await authFetch(`/api/integrations/composio/configs${projectParam}`);
       const data = await res.json();
       setComposioConfigs(data.configs || []);
     } catch (e) {
@@ -1001,7 +1013,8 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
   const addComposioConfig = async (configId: string) => {
     setAddingConfig(configId);
     try {
-      const res = await authFetch(`/api/integrations/composio/configs/${configId}/add`, {
+      const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const res = await authFetch(`/api/integrations/composio/configs/${configId}/add${projectParam}`, {
         method: "POST",
       });
       if (res.ok) {
@@ -1031,6 +1044,7 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
   }
 
   const hasAnyConnection = composioConnected || smitheryConnected || agentDojoConnected;
+  const connectedCount = [composioConnected, smitheryConnected, agentDojoConnected].filter(Boolean).length;
 
   if (!hasAnyConnection) {
     return (
@@ -1053,210 +1067,255 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
     <>
     {AlertDialog}
     <div className="space-y-6">
-      {/* Sub-tabs for Composio */}
-      {composioConnected && (
+      {/* Provider Tabs - show when multiple providers are connected */}
+      {connectedCount > 1 && (
         <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded-lg p-1 w-fit">
-          <button
-            onClick={() => setSubTab("configs")}
-            className={`px-4 py-2 rounded text-sm font-medium transition ${
-              subTab === "configs"
-                ? "bg-[#1a1a1a] text-white"
-                : "text-[#666] hover:text-[#888]"
-            }`}
-          >
-            MCP Configs
-          </button>
-          <button
-            onClick={() => setSubTab("connect")}
-            className={`px-4 py-2 rounded text-sm font-medium transition ${
-              subTab === "connect"
-                ? "bg-[#1a1a1a] text-white"
-                : "text-[#666] hover:text-[#888]"
-            }`}
-          >
-            Connect Apps
-          </button>
-        </div>
-      )}
-
-      {/* Connect Apps Tab */}
-      {composioConnected && subTab === "connect" && (
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="font-medium">Connect Apps via Composio</h2>
-              <p className="text-sm text-[#666] mt-1">
-                Connect your accounts to enable tools in MCP configs
-              </p>
-            </div>
-          </div>
-          <IntegrationsPanel
-            providerId="composio"
-            onConnectionComplete={() => {
-              // Refresh configs after connecting an app
-              fetchComposioConfigs();
-            }}
-          />
-        </div>
-      )}
-
-      {/* MCP Configs Tab */}
-      {composioConnected && subTab === "configs" && (
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <h2 className="font-medium">Composio MCP Configs</h2>
-              <span className="text-xs text-green-400">Connected</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={fetchComposioConfigs}
-                disabled={loadingConfigs}
-                className="text-xs text-[#666] hover:text-[#888] transition"
-              >
-                {loadingConfigs ? "Loading..." : "Refresh"}
-              </button>
-              <a
-                href="https://app.composio.dev/mcp_configs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-[#666] hover:text-[#f97316] transition"
-              >
-                Create Config →
-              </a>
-            </div>
-          </div>
-
-          {loadingConfigs ? (
-            <div className="text-center py-6 text-[#666]">Loading configs...</div>
-          ) : composioConfigs.length === 0 ? (
-            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
-              <p className="text-sm text-[#666]">No MCP configs found</p>
-              <p className="text-xs text-[#555] mt-2">
-                First <button onClick={() => setSubTab("connect")} className="text-[#f97316] hover:text-[#fb923c]">connect some apps</button>, then create a config.
-              </p>
-              <a
-                href="https://app.composio.dev/mcp_configs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-[#f97316] hover:text-[#fb923c] mt-2 inline-block"
-              >
-                Create in Composio →
-              </a>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {composioConfigs.map((config) => {
-                const added = isConfigAdded(config.id);
-                const isAdding = addingConfig === config.id;
-                return (
-                  <div
-                    key={config.id}
-                    className={`bg-[#111] border rounded-lg p-3 transition flex items-center justify-between ${
-                      added ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">{config.name}</span>
-                        <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
-                        {added && (
-                          <span className="text-xs text-green-400">Added</span>
-                        )}
-                      </div>
-                      {config.toolkits.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {config.toolkits.slice(0, 4).map((toolkit) => (
-                            <span
-                              key={toolkit}
-                              className="text-xs bg-[#1a1a1a] text-[#666] px-1.5 py-0.5 rounded"
-                            >
-                              {toolkit}
-                            </span>
-                          ))}
-                          {config.toolkits.length > 4 && (
-                            <span className="text-xs text-[#555]">+{config.toolkits.length - 4}</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 ml-3">
-                      {added ? (
-                        <span className="text-xs text-[#555] px-2 py-1">In Servers</span>
-                      ) : (
-                        <button
-                          onClick={() => addComposioConfig(config.id)}
-                          disabled={isAdding}
-                          className="text-xs bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
-                        >
-                          {isAdding ? "Adding..." : "Add"}
-                        </button>
-                      )}
-                      <a
-                        href={`https://app.composio.dev/mcp_configs/${config.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-[#666] hover:text-[#888] transition"
-                      >
-                        Edit
-                      </a>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          {composioConnected && (
+            <button
+              onClick={() => { setActiveProvider("composio"); setSubTab("configs"); }}
+              className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
+                activeProvider === "composio"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-purple-500" />
+              Composio
+            </button>
+          )}
+          {smitheryConnected && (
+            <button
+              onClick={() => setActiveProvider("smithery")}
+              className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
+                activeProvider === "smithery"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-blue-500" />
+              Smithery
+            </button>
+          )}
+          {agentDojoConnected && (
+            <button
+              onClick={() => setActiveProvider("agentdojo")}
+              className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
+                activeProvider === "agentdojo"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-green-500" />
+              AgentDojo
+            </button>
           )}
         </div>
       )}
 
-      {/* Smithery - placeholder for when we have API support */}
-      {smitheryConnected && (
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <h2 className="font-medium">Smithery</h2>
-              <span className="text-xs text-green-400">Connected</span>
+      {/* Composio Content */}
+      {composioConnected && (connectedCount === 1 || activeProvider === "composio") && (
+        <>
+          {/* Sub-tabs for Composio */}
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded-lg p-1">
+              <button
+                onClick={() => setSubTab("configs")}
+                className={`px-4 py-2 rounded text-sm font-medium transition ${
+                  subTab === "configs"
+                    ? "bg-[#1a1a1a] text-white"
+                    : "text-[#666] hover:text-[#888]"
+                }`}
+              >
+                MCP Configs
+              </button>
+              <button
+                onClick={() => setSubTab("connect")}
+                className={`px-4 py-2 rounded text-sm font-medium transition ${
+                  subTab === "connect"
+                    ? "bg-[#1a1a1a] text-white"
+                    : "text-[#666] hover:text-[#888]"
+                }`}
+              >
+                Connect Apps
+              </button>
             </div>
+            {connectedCount === 1 && (
+              <div className="flex items-center gap-2 text-xs text-[#666]">
+                <span className="w-2 h-2 rounded-full bg-purple-500" />
+                Composio
+                <span className="text-green-400">Connected</span>
+              </div>
+            )}
+          </div>
+
+          {/* Connect Apps Tab */}
+          {subTab === "connect" && (
+            <div>
+              <p className="text-sm text-[#666] mb-4">
+                Connect your accounts to enable tools in MCP configs
+              </p>
+              <IntegrationsPanel
+                providerId="composio"
+                projectId={projectId}
+                onConnectionComplete={() => {
+                  // Refresh configs after connecting an app
+                  fetchComposioConfigs();
+                }}
+              />
+            </div>
+          )}
+
+          {/* MCP Configs Tab */}
+          {subTab === "configs" && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-[#666]">
+                  Your MCP configs from Composio
+                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={fetchComposioConfigs}
+                    disabled={loadingConfigs}
+                    className="text-xs text-[#666] hover:text-[#888] transition"
+                  >
+                    {loadingConfigs ? "Loading..." : "Refresh"}
+                  </button>
+                  <a
+                    href="https://app.composio.dev/mcp_configs"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-[#666] hover:text-[#f97316] transition"
+                  >
+                    Create Config →
+                  </a>
+                </div>
+              </div>
+
+              {loadingConfigs ? (
+                <div className="text-center py-6 text-[#666]">Loading configs...</div>
+              ) : composioConfigs.length === 0 ? (
+                <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
+                  <p className="text-sm text-[#666]">No MCP configs found</p>
+                  <p className="text-xs text-[#555] mt-2">
+                    First <button onClick={() => setSubTab("connect")} className="text-[#f97316] hover:text-[#fb923c]">connect some apps</button>, then create a config.
+                  </p>
+                  <a
+                    href="https://app.composio.dev/mcp_configs"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-[#f97316] hover:text-[#fb923c] mt-2 inline-block"
+                  >
+                    Create in Composio →
+                  </a>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {composioConfigs.map((config) => {
+                    const added = isConfigAdded(config.id);
+                    const isAdding = addingConfig === config.id;
+                    return (
+                      <div
+                        key={config.id}
+                        className={`bg-[#111] border rounded-lg p-3 transition flex items-center justify-between ${
+                          added ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm">{config.name}</span>
+                            <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
+                            {added && (
+                              <span className="text-xs text-green-400">Added</span>
+                            )}
+                          </div>
+                          {config.toolkits.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {config.toolkits.slice(0, 4).map((toolkit) => (
+                                <span
+                                  key={toolkit}
+                                  className="text-xs bg-[#1a1a1a] text-[#666] px-1.5 py-0.5 rounded"
+                                >
+                                  {toolkit}
+                                </span>
+                              ))}
+                              {config.toolkits.length > 4 && (
+                                <span className="text-xs text-[#555]">+{config.toolkits.length - 4}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 ml-3">
+                          {added ? (
+                            <span className="text-xs text-[#555] px-2 py-1">In Servers</span>
+                          ) : (
+                            <button
+                              onClick={() => addComposioConfig(config.id)}
+                              disabled={isAdding}
+                              className="text-xs bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
+                            >
+                              {isAdding ? "Adding..." : "Add"}
+                            </button>
+                          )}
+                          <a
+                            href={`https://app.composio.dev/mcp_configs/${config.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-[#666] hover:text-[#888] transition"
+                          >
+                            Edit
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Smithery Content */}
+      {smitheryConnected && (connectedCount === 1 || activeProvider === "smithery") && (
+        <div>
+          {connectedCount === 1 && (
+            <div className="flex items-center gap-2 text-xs text-[#666] mb-4">
+              <span className="w-2 h-2 rounded-full bg-blue-500" />
+              Smithery
+              <span className="text-green-400">Connected</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm text-[#666]">
+              Add MCP servers from the Smithery registry
+            </p>
             <a
               href="https://smithery.ai/servers"
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-[#666] hover:text-[#f97316] transition"
             >
-              View Servers →
+              Browse Smithery →
             </a>
           </div>
           <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
             <p className="text-sm text-[#666]">
-              Smithery servers can be added from the Registry tab.
+              Smithery servers can be added from the <strong>Browse Registry</strong> tab.
+            </p>
+            <p className="text-xs text-[#555] mt-2">
+              Your API key will be used automatically when adding Smithery servers.
             </p>
           </div>
         </div>
       )}
 
-      {/* AgentDojo - hosted MCP tools */}
-      {agentDojoConnected && (
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <h2 className="font-medium">AgentDojo</h2>
-              <span className="text-xs text-green-400">Connected</span>
-            </div>
-            <a
-              href="https://agentdojo.com/tools"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-[#666] hover:text-[#f97316] transition"
-            >
-              Browse Tools →
-            </a>
-          </div>
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
-            <p className="text-sm text-[#666]">
-              AgentDojo integration coming soon. Browse available tools on their platform.
-            </p>
-          </div>
-        </div>
+      {/* AgentDojo Content */}
+      {agentDojoConnected && (connectedCount === 1 || activeProvider === "agentdojo") && (
+        <AgentDojoContent
+          projectId={projectId}
+          onServerAdded={onServerAdded}
+          showProviderBadge={connectedCount === 1}
+        />
       )}
 
       <div className="p-3 bg-[#0a0a0a] border border-[#222] rounded text-xs text-[#666]">
@@ -1265,6 +1324,231 @@ function HostedServices({ onServerAdded }: { onServerAdded?: () => void }) {
         <a href="/settings" className="text-[#f97316] hover:text-[#fb923c]">Add more providers in Settings</a>
       </div>
     </div>
+    </>
+  );
+}
+
+// AgentDojo Content Component
+interface AgentDojoConfig {
+  id: string;
+  name: string;
+  slug: string;
+  toolkits: string[];
+  toolsCount: number;
+  mcpUrl: string;
+  createdAt?: string;
+}
+
+function AgentDojoContent({
+  projectId,
+  onServerAdded,
+  showProviderBadge,
+}: {
+  projectId?: string | null;
+  onServerAdded?: () => void;
+  showProviderBadge?: boolean;
+}) {
+  const { authFetch } = useAuth();
+  const [subTab, setSubTab] = useState<"configs" | "toolkits">("configs");
+  const [configs, setConfigs] = useState<AgentDojoConfig[]>([]);
+  const [addedServers, setAddedServers] = useState<Set<string>>(new Set());
+  const [loadingConfigs, setLoadingConfigs] = useState(false);
+  const [addingConfig, setAddingConfig] = useState<string | null>(null);
+  const { alert, AlertDialog } = useAlert();
+
+  const fetchConfigs = async () => {
+    setLoadingConfigs(true);
+    try {
+      const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const [configsRes, serversRes] = await Promise.all([
+        authFetch(`/api/integrations/agentdojo/configs${projectParam}`),
+        authFetch("/api/mcp/servers"),
+      ]);
+      const configsData = await configsRes.json();
+      const serversData = await serversRes.json();
+
+      setConfigs(configsData.configs || []);
+
+      // Track which configs are already added as local servers
+      const agentdojoServerIds = new Set(
+        (serversData.servers || [])
+          .filter((s: any) => s.source === "agentdojo")
+          .map((s: any) => {
+            // Extract config ID from URL or match by name
+            const match = s.url?.match(/\/mcp\/([^/?]+)/);
+            return match ? match[1] : s.name;
+          })
+      );
+      setAddedServers(agentdojoServerIds);
+    } catch (e) {
+      console.error("Failed to fetch AgentDojo configs:", e);
+    }
+    setLoadingConfigs(false);
+  };
+
+  const addConfig = async (configId: string) => {
+    setAddingConfig(configId);
+    try {
+      const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const res = await authFetch(`/api/integrations/agentdojo/configs/${configId}/add${projectParam}`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const config = configs.find(c => c.id === configId);
+        setAddedServers(prev => new Set([...prev, config?.slug || configId]));
+        onServerAdded?.();
+      } else {
+        const data = await res.json();
+        await alert(data.error || "Failed to add config", { title: "Error", variant: "error" });
+      }
+    } catch (e) {
+      console.error("Failed to add config:", e);
+    }
+    setAddingConfig(null);
+  };
+
+  const isConfigAdded = (config: AgentDojoConfig) => {
+    return addedServers.has(config.slug) || addedServers.has(config.id) || addedServers.has(config.name);
+  };
+
+  useEffect(() => {
+    fetchConfigs();
+  }, [authFetch, projectId]);
+
+  return (
+    <>
+      {AlertDialog}
+      <div>
+        {showProviderBadge && (
+          <div className="flex items-center gap-2 text-xs text-[#666] mb-4">
+            <span className="w-2 h-2 rounded-full bg-green-500" />
+            AgentDojo
+            <span className="text-green-400">Connected</span>
+          </div>
+        )}
+
+        {/* Sub-tabs */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded-lg p-1">
+            <button
+              onClick={() => setSubTab("configs")}
+              className={`px-4 py-2 rounded text-sm font-medium transition ${
+                subTab === "configs"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              MCP Servers
+            </button>
+            <button
+              onClick={() => setSubTab("toolkits")}
+              className={`px-4 py-2 rounded text-sm font-medium transition ${
+                subTab === "toolkits"
+                  ? "bg-[#1a1a1a] text-white"
+                  : "text-[#666] hover:text-[#888]"
+              }`}
+            >
+              Browse Toolkits
+            </button>
+          </div>
+        </div>
+
+        {/* MCP Servers Tab */}
+        {subTab === "configs" && (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm text-[#666]">
+                Your MCP servers from AgentDojo
+              </p>
+              <button
+                onClick={fetchConfigs}
+                disabled={loadingConfigs}
+                className="text-xs text-[#666] hover:text-[#888] transition"
+              >
+                {loadingConfigs ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+
+            {loadingConfigs ? (
+              <div className="text-center py-6 text-[#666]">Loading servers...</div>
+            ) : configs.length === 0 ? (
+              <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
+                <p className="text-sm text-[#666]">No MCP servers found</p>
+                <p className="text-xs text-[#555] mt-2">
+                  <button onClick={() => setSubTab("toolkits")} className="text-[#f97316] hover:text-[#fb923c]">
+                    Browse toolkits
+                  </button>
+                  {" "}to create a new MCP server.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {configs.map((config) => {
+                  const added = isConfigAdded(config);
+                  const isAdding = addingConfig === config.id;
+                  return (
+                    <div
+                      key={config.id}
+                      className={`bg-[#111] border rounded-lg p-3 transition flex items-center justify-between ${
+                        added ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm">{config.name}</span>
+                          <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
+                          {added && (
+                            <span className="text-xs text-green-400">Added</span>
+                          )}
+                        </div>
+                        {config.mcpUrl && (
+                          <code className="text-xs text-[#555] mt-1 block truncate">
+                            {config.mcpUrl}
+                          </code>
+                        )}
+                        {!config.mcpUrl && config.slug && (
+                          <code className="text-xs text-[#555] mt-1 block truncate">
+                            {config.slug}
+                          </code>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 ml-3">
+                        {added ? (
+                          <span className="text-xs text-[#555] px-2 py-1">In Servers</span>
+                        ) : (
+                          <button
+                            onClick={() => addConfig(config.id)}
+                            disabled={isAdding}
+                            className="text-xs bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
+                          >
+                            {isAdding ? "Adding..." : "Add"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Browse Toolkits Tab */}
+        {subTab === "toolkits" && (
+          <div>
+            <p className="text-sm text-[#666] mb-4">
+              Browse available toolkits and create MCP servers
+            </p>
+            <IntegrationsPanel
+              providerId="agentdojo"
+              projectId={projectId}
+              onConnectionComplete={() => {
+                fetchConfigs();
+              }}
+            />
+          </div>
+        )}
+      </div>
     </>
   );
 }

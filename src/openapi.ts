@@ -69,6 +69,7 @@ The new access token will be returned and a new refresh token cookie will be set
     { name: "MCP", description: "Model Context Protocol servers" },
     { name: "Providers", description: "LLM providers and API keys" },
     { name: "Projects", description: "Agent grouping" },
+    { name: "Skills", description: "Agent skills management" },
     { name: "System", description: "Health and version info" },
   ],
   security: [{ BearerAuth: [] }],
@@ -1297,6 +1298,169 @@ eventSource.onmessage = (event) => {
         },
       },
     },
+    // Skills endpoints
+    "/skills": {
+      get: {
+        tags: ["Skills"],
+        summary: "List all skills",
+        description: "Returns all installed skills. Can filter by project.",
+        parameters: [
+          { name: "project", in: "query", schema: { type: "string" }, description: "Filter: 'all', 'global', or project ID" },
+          { name: "forAgent", in: "query", schema: { type: "string" }, description: "Agent's project ID (shows global + project)" },
+        ],
+        responses: {
+          "200": {
+            description: "List of skills",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    skills: { type: "array", items: { $ref: "#/components/schemas/Skill" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        tags: ["Skills"],
+        summary: "Create a new skill",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/SkillCreate" },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Skill created",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Skill" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/skills/github/{owner}/{repo}": {
+      get: {
+        tags: ["Skills"],
+        summary: "List skills from GitHub repo",
+        description: "Fetches and lists all skills from a GitHub repository. Skills should be in subdirectories with SKILL.md files.",
+        parameters: [
+          { name: "owner", in: "path", required: true, schema: { type: "string" }, description: "GitHub repo owner" },
+          { name: "repo", in: "path", required: true, schema: { type: "string" }, description: "GitHub repo name" },
+        ],
+        responses: {
+          "200": {
+            description: "List of skills from repo",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          name: { type: "string" },
+                          description: { type: "string" },
+                          path: { type: "string" },
+                          size: { type: "integer" },
+                          downloadUrl: { type: "string" },
+                        },
+                      },
+                    },
+                    repo: {
+                      type: "object",
+                      properties: {
+                        owner: { type: "string" },
+                        repo: { type: "string" },
+                        url: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "404": { description: "Repository not found" },
+        },
+      },
+    },
+    "/skills/github/install": {
+      post: {
+        tags: ["Skills"],
+        summary: "Install skill from GitHub",
+        description: "Downloads and installs a skill from a GitHub repository.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["owner", "repo", "skillName", "downloadUrl"],
+                properties: {
+                  owner: { type: "string", description: "GitHub repo owner" },
+                  repo: { type: "string", description: "GitHub repo name" },
+                  skillName: { type: "string", description: "Name of the skill to install" },
+                  downloadUrl: { type: "string", description: "Raw URL to the SKILL.md file" },
+                  projectId: { type: "string", nullable: true, description: "Project ID (null for global)" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Skill installed",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Skill" },
+              },
+            },
+          },
+          "400": { description: "Skill already exists or invalid request" },
+        },
+      },
+    },
+    "/skills/{skillId}": {
+      get: {
+        tags: ["Skills"],
+        summary: "Get skill by ID",
+        parameters: [
+          { name: "skillId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "Skill details",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Skill" },
+              },
+            },
+          },
+          "404": { description: "Skill not found" },
+        },
+      },
+      delete: {
+        tags: ["Skills"],
+        summary: "Delete skill",
+        parameters: [
+          { name: "skillId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "Skill deleted" },
+          "404": { description: "Skill not found" },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -1491,6 +1655,37 @@ eventSource.onmessage = (event) => {
           executedAt: { type: "string", format: "date-time" },
           agentId: { type: "string" },
           agentName: { type: "string" },
+        },
+      },
+      Skill: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          name: { type: "string" },
+          description: { type: "string" },
+          content: { type: "string" },
+          version: { type: "string" },
+          license: { type: "string", nullable: true },
+          compatibility: { type: "string", nullable: true },
+          metadata: { type: "object" },
+          allowed_tools: { type: "array", items: { type: "string" } },
+          source: { type: "string", enum: ["local", "skillsmp", "github", "import"] },
+          source_url: { type: "string", nullable: true },
+          enabled: { type: "boolean" },
+          project_id: { type: "string", nullable: true },
+          created_at: { type: "string", format: "date-time" },
+          updated_at: { type: "string", format: "date-time" },
+        },
+      },
+      SkillCreate: {
+        type: "object",
+        required: ["name", "description", "content"],
+        properties: {
+          name: { type: "string", description: "Skill name (lowercase, hyphens allowed)" },
+          description: { type: "string", description: "What this skill does" },
+          content: { type: "string", description: "Skill instructions in markdown" },
+          source: { type: "string", enum: ["local", "skillsmp", "github", "import"] },
+          project_id: { type: "string", nullable: true, description: "Project ID (null for global)" },
         },
       },
       McpServer: {

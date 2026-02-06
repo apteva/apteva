@@ -145,11 +145,29 @@ export interface OnboardingStatus {
 
 export type Route = "dashboard" | "agents" | "tasks" | "mcp" | "skills" | "telemetry" | "settings" | "api";
 
-export interface TaskTrajectoryStep {
-  type: "thought" | "action" | "observation" | "tool_call" | "tool_result" | "message";
+// Tool use content block in trajectory
+export interface ToolUseBlock {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+// Tool result content block in trajectory
+export interface ToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
   content: string;
-  tool?: string;
-  timestamp?: string;
+  is_error?: boolean;
+}
+
+// Trajectory step from the agent API (chat message format)
+export interface TaskTrajectoryStep {
+  id: string;
+  role: "user" | "assistant";
+  content: string | Array<ToolUseBlock | ToolResultBlock>;
+  created_at: string;
+  model?: string;
 }
 
 export interface Task {

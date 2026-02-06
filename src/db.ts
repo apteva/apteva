@@ -123,6 +123,8 @@ export interface ProviderKey {
   is_valid: boolean;
   last_tested_at: string | null;
   created_at: string;
+  project_id: string | null;  // NULL = global, otherwise project-scoped
+  name: string | null;        // Optional display name (e.g., "Production", "Development")
 }
 
 export interface ProviderKeyRow {
@@ -133,6 +135,8 @@ export interface ProviderKeyRow {
   is_valid: number;
   last_tested_at: string | null;
   created_at: string;
+  project_id: string | null;
+  name: string | null;
 }
 
 export interface McpServer {
@@ -498,6 +502,22 @@ function runMigrations() {
       name: "021_add_mcp_server_pip_module",
       sql: `
         ALTER TABLE mcp_servers ADD COLUMN pip_module TEXT;
+      `,
+    },
+    {
+      name: "022_add_provider_keys_project_id",
+      sql: `
+        -- Add project_id column for project-scoped integration keys
+        -- NULL project_id means global (default)
+        ALTER TABLE provider_keys ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE;
+        ALTER TABLE provider_keys ADD COLUMN name TEXT;
+
+        -- Create index for project lookups
+        CREATE INDEX IF NOT EXISTS idx_provider_keys_project ON provider_keys(project_id);
+
+        -- Create unique index on (provider_id, project_id) - allows one key per provider per project
+        -- Note: SQLite treats NULL as distinct, so we use COALESCE
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_unique ON provider_keys(provider_id, COALESCE(project_id, ''));
       `,
     },
   ];
@@ -1000,56 +1020,102 @@ function rowToAgent(row: AgentRow): Agent {
 
 // Provider Keys operations
 export const ProviderKeysDB = {
-  // Save or update a provider key
-  save(providerId: string, encryptedKey: string, keyHint: string): ProviderKey {
-    const existing = this.findByProvider(providerId);
+  // Save or update a provider key (project_id: null = global)
+  save(providerId: string, encryptedKey: string, keyHint: string, projectId: string | null = null, name: string | null = null): ProviderKey {
+    const existing = this.findByProviderAndProject(providerId, projectId);
     const now = new Date().toISOString();
 
     if (existing) {
       db.run(
-        "UPDATE provider_keys SET encrypted_key = ?, key_hint = ?, is_valid = 1, last_tested_at = NULL, created_at = ? WHERE provider_id = ?",
-        [encryptedKey, keyHint, now, providerId]
+        "UPDATE provider_keys SET encrypted_key = ?, key_hint = ?, name = ?, is_valid = 1, last_tested_at = NULL, created_at = ? WHERE id = ?",
+        [encryptedKey, keyHint, name, now, existing.id]
       );
+      return this.findById(existing.id)!;
     } else {
       const id = generateId();
       db.run(
-        "INSERT INTO provider_keys (id, provider_id, encrypted_key, key_hint, is_valid, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-        [id, providerId, encryptedKey, keyHint, now]
+        "INSERT INTO provider_keys (id, provider_id, encrypted_key, key_hint, is_valid, created_at, project_id, name) VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+        [id, providerId, encryptedKey, keyHint, now, projectId, name]
       );
+      return this.findById(id)!;
     }
-
-    return this.findByProvider(providerId)!;
   },
 
-  // Find key by provider
-  findByProvider(providerId: string): ProviderKey | null {
-    const row = db.query("SELECT * FROM provider_keys WHERE provider_id = ?").get(providerId) as ProviderKeyRow | null;
+  // Find key by ID
+  findById(id: string): ProviderKey | null {
+    const row = db.query("SELECT * FROM provider_keys WHERE id = ?").get(id) as ProviderKeyRow | null;
     return row ? rowToProviderKey(row) : null;
   },
 
-  // Get all provider keys (without the actual encrypted key for listing)
-  findAll(): ProviderKey[] {
-    const rows = db.query("SELECT * FROM provider_keys ORDER BY created_at DESC").all() as ProviderKeyRow[];
+  // Find key by provider (global only - for backwards compatibility)
+  findByProvider(providerId: string): ProviderKey | null {
+    const row = db.query("SELECT * FROM provider_keys WHERE provider_id = ? AND project_id IS NULL").get(providerId) as ProviderKeyRow | null;
+    return row ? rowToProviderKey(row) : null;
+  },
+
+  // Find key by provider and project
+  findByProviderAndProject(providerId: string, projectId: string | null): ProviderKey | null {
+    const row = projectId
+      ? db.query("SELECT * FROM provider_keys WHERE provider_id = ? AND project_id = ?").get(providerId, projectId) as ProviderKeyRow | null
+      : db.query("SELECT * FROM provider_keys WHERE provider_id = ? AND project_id IS NULL").get(providerId) as ProviderKeyRow | null;
+    return row ? rowToProviderKey(row) : null;
+  },
+
+  // Find all keys for a provider (global + all projects)
+  findAllByProvider(providerId: string): ProviderKey[] {
+    const rows = db.query("SELECT * FROM provider_keys WHERE provider_id = ? ORDER BY project_id NULLS FIRST, created_at DESC").all(providerId) as ProviderKeyRow[];
     return rows.map(rowToProviderKey);
   },
 
-  // Get list of provider IDs that have keys configured
+  // Find all keys for a project
+  findByProject(projectId: string): ProviderKey[] {
+    const rows = db.query("SELECT * FROM provider_keys WHERE project_id = ? ORDER BY provider_id, created_at DESC").all(projectId) as ProviderKeyRow[];
+    return rows.map(rowToProviderKey);
+  },
+
+  // Get all provider keys
+  findAll(): ProviderKey[] {
+    const rows = db.query("SELECT * FROM provider_keys ORDER BY provider_id, project_id NULLS FIRST, created_at DESC").all() as ProviderKeyRow[];
+    return rows.map(rowToProviderKey);
+  },
+
+  // Get list of provider IDs that have keys configured (global keys only for backwards compat)
   getConfiguredProviders(): string[] {
-    const rows = db.query("SELECT provider_id FROM provider_keys").all() as { provider_id: string }[];
+    const rows = db.query("SELECT DISTINCT provider_id FROM provider_keys WHERE project_id IS NULL").all() as { provider_id: string }[];
+    return rows.map(r => r.provider_id);
+  },
+
+  // Get list of provider IDs that have keys configured (including project-scoped)
+  getAllConfiguredProviders(): string[] {
+    const rows = db.query("SELECT DISTINCT provider_id FROM provider_keys").all() as { provider_id: string }[];
     return rows.map(r => r.provider_id);
   },
 
   // Update validity status after testing
-  setValidity(providerId: string, isValid: boolean): void {
+  setValidity(id: string, isValid: boolean): void {
     db.run(
-      "UPDATE provider_keys SET is_valid = ?, last_tested_at = ? WHERE provider_id = ?",
-      [isValid ? 1 : 0, new Date().toISOString(), providerId]
+      "UPDATE provider_keys SET is_valid = ?, last_tested_at = ? WHERE id = ?",
+      [isValid ? 1 : 0, new Date().toISOString(), id]
     );
   },
 
-  // Delete a provider key
+  // Delete a provider key by ID
+  deleteById(id: string): boolean {
+    const result = db.run("DELETE FROM provider_keys WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+
+  // Delete a provider key (global only - for backwards compatibility)
   delete(providerId: string): boolean {
-    const result = db.run("DELETE FROM provider_keys WHERE provider_id = ?", [providerId]);
+    const result = db.run("DELETE FROM provider_keys WHERE provider_id = ? AND project_id IS NULL", [providerId]);
+    return result.changes > 0;
+  },
+
+  // Delete provider key by provider and project
+  deleteByProviderAndProject(providerId: string, projectId: string | null): boolean {
+    const result = projectId
+      ? db.run("DELETE FROM provider_keys WHERE provider_id = ? AND project_id = ?", [providerId, projectId])
+      : db.run("DELETE FROM provider_keys WHERE provider_id = ? AND project_id IS NULL", [providerId]);
     return result.changes > 0;
   },
 
@@ -1076,6 +1142,8 @@ function rowToProviderKey(row: ProviderKeyRow): ProviderKey {
     is_valid: row.is_valid === 1,
     last_tested_at: row.last_tested_at,
     created_at: row.created_at,
+    project_id: row.project_id,
+    name: row.name,
   };
 }
 
@@ -1867,6 +1935,12 @@ export const SkillDB = {
   findByName(name: string): Skill | null {
     const row = db.query("SELECT * FROM skills WHERE name = ?").get(name) as SkillRow | null;
     return row ? rowToSkill(row) : null;
+  },
+
+  // Check if skill exists by name
+  exists(name: string): boolean {
+    const row = db.query("SELECT 1 FROM skills WHERE name = ?").get(name);
+    return row !== null;
   },
 
   // Get all skills
