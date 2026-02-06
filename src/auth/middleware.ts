@@ -25,6 +25,7 @@ const PUBLIC_PATHS = [
   "/api/features", // Feature flags needed before auth
   "/api/telemetry", // Agents POST telemetry here
   "/api/telemetry/stream", // SSE doesn't support auth headers
+  "/api/mcp/platform", // Built-in MCP server for agent communication
 ];
 
 // Path prefixes that don't require authentication (for agent communication)
