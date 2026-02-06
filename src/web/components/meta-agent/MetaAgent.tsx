@@ -1,6 +1,6 @@
-import React, { useState, useEffect, createContext, useContext, type ReactNode } from "react";
+import React, { useState, useEffect, useMemo, createContext, useContext, type ReactNode } from "react";
 import { Chat } from "@apteva/apteva-kit";
-import { useAuth } from "../../context";
+import { useAuth, useProjects } from "../../context";
 
 interface MetaAgentStatus {
   enabled: boolean;
@@ -129,9 +129,23 @@ export function MetaAgentButton() {
 // Chat panel component - renders as a right-side drawer
 export function MetaAgentPanel() {
   const ctx = useMetaAgent();
+  const { currentProjectId, currentProject } = useProjects();
   if (!ctx?.isAvailable || !ctx.isOpen) return null;
 
   const { agent, isRunning, error, isStarting, startAgent, close } = ctx;
+
+  // Build context string for the meta agent
+  const chatContext = useMemo(() => {
+    const parts: string[] = [];
+    if (currentProject) {
+      parts.push(`Current project: "${currentProject.name}" (id: ${currentProject.id})`);
+    } else if (currentProjectId === "unassigned") {
+      parts.push("Viewing: unassigned agents (no project)");
+    } else {
+      parts.push("Viewing: All Projects");
+    }
+    return parts.join("\n");
+  }, [currentProjectId, currentProject]);
 
   return (
     <>
@@ -166,6 +180,7 @@ export function MetaAgentPanel() {
               placeholder="Ask me anything about Apteva..."
               variant="terminal"
               showHeader={false}
+              context={chatContext}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
