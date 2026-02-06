@@ -50,7 +50,9 @@ export async function handleIntegrationRoutes(
       return json({ error: `Unknown provider: ${providerId}` }, 404);
     }
 
-    const apiKey = ProviderKeys.getDecrypted(providerId);
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id") || null;
+    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
       return json({ error: `${provider.name} API key not configured`, apps: [] }, 200);
     }
@@ -73,7 +75,9 @@ export async function handleIntegrationRoutes(
       return json({ error: `Unknown provider: ${providerId}` }, 404);
     }
 
-    const apiKey = ProviderKeys.getDecrypted(providerId);
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id") || null;
+    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
       return json({ error: `${provider.name} API key not configured`, accounts: [] }, 200);
     }
@@ -99,14 +103,13 @@ export async function handleIntegrationRoutes(
       return json({ error: `Unknown provider: ${providerId}` }, 404);
     }
 
-    const apiKey = ProviderKeys.getDecrypted(providerId);
-    if (!apiKey) {
-      return json({ error: `${provider.name} API key not configured` }, 401);
-    }
-
     try {
       const body = await req.json();
-      const { appSlug, redirectUrl, credentials } = body;
+      const { appSlug, redirectUrl, credentials, project_id } = body;
+      const apiKey = ProviderKeys.getDecryptedForProject(providerId, project_id || null);
+      if (!apiKey) {
+        return json({ error: `${provider.name} API key not configured` }, 401);
+      }
 
       if (!appSlug) {
         return json({ error: "appSlug is required" }, 400);
@@ -136,7 +139,9 @@ export async function handleIntegrationRoutes(
       return json({ error: `Unknown provider: ${providerId}` }, 404);
     }
 
-    const apiKey = ProviderKeys.getDecrypted(providerId);
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id") || null;
+    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
       return json({ error: `${provider.name} API key not configured` }, 401);
     }
@@ -162,7 +167,9 @@ export async function handleIntegrationRoutes(
       return json({ error: `Unknown provider: ${providerId}` }, 404);
     }
 
-    const apiKey = ProviderKeys.getDecrypted(providerId);
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id") || null;
+    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
       return json({ error: `${provider.name} API key not configured` }, 401);
     }
