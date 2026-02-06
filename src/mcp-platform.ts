@@ -48,24 +48,47 @@ const PLATFORM_TOOLS = [
   },
   {
     name: "create_agent",
-    description: "Create a new AI agent. Requires a name, provider, and model. The provider must have an API key configured.",
+    description: `Create a new AI agent. The provider must have an API key configured — use list_providers first to check.
+
+PROVIDERS & MODELS (use list_providers to see which have keys):
+- anthropic: claude-sonnet-4-5 (recommended), claude-haiku-4-5 (fast/cheap)
+- openai: gpt-4o (recommended), gpt-4o-mini (fast/cheap)
+- groq: llama-3.3-70b-versatile (recommended), llama-3.1-8b-instant (fast)
+- gemini: gemini-3-pro-preview (recommended), gemini-3-flash-preview (fast)
+- xai: grok-2 (recommended), grok-2-mini (fast)
+- together: moonshotai/Kimi-K2.5 (recommended), moonshotai/Kimi-K2-Thinking (reasoning)
+- fireworks: accounts/fireworks/models/kimi-k2p5, accounts/fireworks/models/kimi-k2-thinking
+- moonshot: moonshot-v1-128k (recommended), moonshot-v1-32k (fast)
+- ollama: llama3.3, llama3.2, qwen2.5, mistral, deepseek-r1 (local, no API key needed)
+
+FEATURES (all optional, default false):
+- memory: Persistent memory across conversations — agent remembers past interactions. Requires OpenAI key for embeddings.
+- tasks: Task scheduling — agent can create, schedule, and track tasks. Supports recurring tasks.
+- vision: Image & PDF understanding — agent can analyze uploaded images and PDFs.
+- mcp: MCP tool use — agent can use tools from assigned MCP servers. Enable this if you plan to assign MCP servers.
+- files: File management — agent can read, write, and manage files in its workspace.
+
+TIPS:
+- Always provide a descriptive system_prompt that tells the agent what it does and how to behave.
+- Assign to a project_id to organize agents. Use list_projects to see available projects.
+- After creating, use start_agent to run it. Then assign MCP servers or skills as needed.`,
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Agent name" },
-        provider: { type: "string", description: "LLM provider ID (e.g. anthropic, openai, groq, gemini, xai, together, fireworks, ollama)" },
-        model: { type: "string", description: "Model ID (e.g. claude-sonnet-4-5, gpt-4o, llama-3.3-70b-versatile)" },
-        system_prompt: { type: "string", description: "System prompt for the agent (optional)" },
-        project_id: { type: "string", description: "Project ID to assign the agent to (optional)" },
+        name: { type: "string", description: "Agent name (e.g. 'Customer Support', 'Code Reviewer')" },
+        provider: { type: "string", description: "LLM provider ID: anthropic, openai, groq, gemini, xai, together, fireworks, moonshot, ollama" },
+        model: { type: "string", description: "Model ID — see tool description for full list per provider" },
+        system_prompt: { type: "string", description: "Instructions for the agent. Describe its role, personality, and capabilities. This is the most important field for agent behavior." },
+        project_id: { type: "string", description: "Project ID to assign the agent to (optional). Use list_projects to find IDs." },
         features: {
           type: "object",
-          description: "Feature flags (optional). All default to false.",
+          description: "Feature flags to enable. All default to false. See tool description for details on each feature.",
           properties: {
-            memory: { type: "boolean" },
-            tasks: { type: "boolean" },
-            vision: { type: "boolean" },
-            mcp: { type: "boolean" },
-            files: { type: "boolean" },
+            memory: { type: "boolean", description: "Persistent memory across conversations (requires OpenAI key for embeddings)" },
+            tasks: { type: "boolean", description: "Task scheduling and tracking" },
+            vision: { type: "boolean", description: "Image and PDF understanding" },
+            mcp: { type: "boolean", description: "MCP tool use — required if assigning MCP servers" },
+            files: { type: "boolean", description: "File read/write in agent workspace" },
           },
         },
       },
@@ -74,17 +97,27 @@ const PLATFORM_TOOLS = [
   },
   {
     name: "update_agent",
-    description: "Update an existing agent's configuration. Only provide fields you want to change.",
+    description: "Update an existing agent's configuration. Only provide fields you want to change. If the agent is running, restart it after updating for changes to take effect.",
     inputSchema: {
       type: "object",
       properties: {
         agent_id: { type: "string", description: "The agent ID to update" },
-        name: { type: "string", description: "New name" },
-        model: { type: "string", description: "New model ID" },
-        provider: { type: "string", description: "New provider ID" },
-        system_prompt: { type: "string", description: "New system prompt" },
-        project_id: { type: "string", description: "New project ID (or null to unassign)" },
-        features: { type: "object", description: "Feature flags to update" },
+        name: { type: "string", description: "New display name" },
+        model: { type: "string", description: "New model ID (see create_agent for available models per provider)" },
+        provider: { type: "string", description: "New provider ID (the new provider must have an API key configured)" },
+        system_prompt: { type: "string", description: "New system prompt / instructions" },
+        project_id: { type: "string", description: "New project ID, or null to unassign from project" },
+        features: {
+          type: "object",
+          description: "Feature flags to update (only provided flags are changed, others remain as-is)",
+          properties: {
+            memory: { type: "boolean" },
+            tasks: { type: "boolean" },
+            vision: { type: "boolean" },
+            mcp: { type: "boolean" },
+            files: { type: "boolean" },
+          },
+        },
       },
       required: ["agent_id"],
     },
@@ -102,7 +135,7 @@ const PLATFORM_TOOLS = [
   },
   {
     name: "start_agent",
-    description: "Start a stopped agent. The agent's provider must have an API key configured.",
+    description: "Start a stopped agent. The agent's provider must have an API key configured. Starting spawns a process, waits for health check, and pushes configuration (model, features, MCP servers, skills). Takes a few seconds.",
     inputSchema: {
       type: "object",
       properties: {
@@ -174,18 +207,26 @@ const PLATFORM_TOOLS = [
   },
   {
     name: "create_mcp_server",
-    description: "Create a new MCP server. For HTTP (remote) servers, provide url and optional headers. For npm package servers, provide a package name.",
+    description: `Create a new MCP server configuration. MCP servers provide tools that agents can use (web search, file access, APIs, etc).
+
+SERVER TYPES:
+- http: Remote MCP server accessible via URL. Provide url and optional auth headers. Ready to use immediately.
+- npm: Node.js MCP server from npm. Provide package name (e.g. '@modelcontextprotocol/server-filesystem'). Needs to be started.
+- pip: Python MCP server from PyPI. Provide package name. Needs to be started.
+- custom: Custom command. Provide command and args. Needs to be started.
+
+After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers work immediately; npm/pip/custom servers need to be started from the MCP page in the UI.`,
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Server display name" },
-        type: { type: "string", description: "Server type: 'http' (remote URL), 'npm' (npm package), 'pip' (Python package), 'custom' (custom command)" },
-        url: { type: "string", description: "For http type: the remote MCP server URL" },
-        headers: { type: "object", description: "For http type: auth headers (e.g. {\"Authorization\": \"Bearer ...\"})" },
-        package: { type: "string", description: "For npm/pip type: the package name (e.g. '@modelcontextprotocol/server-filesystem')" },
-        command: { type: "string", description: "For custom type: the command to run" },
-        args: { type: "string", description: "Command arguments (optional)" },
-        project_id: { type: "string", description: "Project ID to scope the server to (optional, null = global)" },
+        name: { type: "string", description: "Display name (e.g. 'Filesystem', 'Web Search', 'GitHub')" },
+        type: { type: "string", description: "Server type: http, npm, pip, or custom" },
+        url: { type: "string", description: "For http type: the remote MCP server URL (e.g. 'https://mcp.example.com/sse')" },
+        headers: { type: "object", description: "For http type: auth headers as key-value pairs" },
+        package: { type: "string", description: "For npm/pip type: package name" },
+        command: { type: "string", description: "For custom type: executable command" },
+        args: { type: "string", description: "Command arguments string (optional)" },
+        project_id: { type: "string", description: "Scope to a project (optional). null = available globally to all agents." },
       },
       required: ["name", "type"],
     },
@@ -203,7 +244,7 @@ const PLATFORM_TOOLS = [
   },
   {
     name: "assign_mcp_server_to_agent",
-    description: "Assign an MCP server to an agent so the agent can use its tools. The agent must have MCP feature enabled.",
+    description: "Assign an MCP server to an agent so the agent can use its tools. This automatically enables the MCP feature on the agent. If the agent is running, restart it for changes to take effect.",
     inputSchema: {
       type: "object",
       properties: {
@@ -248,7 +289,7 @@ const PLATFORM_TOOLS = [
   // Skills management
   {
     name: "list_skills",
-    description: "List all installed skills. Skills are reusable instruction sets that give agents specialized capabilities.",
+    description: "List all installed skills. Skills are reusable instruction sets (like prompt templates with tool permissions) that give agents specialized capabilities. Skills can be installed from the SkillsMP marketplace or created locally.",
     inputSchema: {
       type: "object",
       properties: {
@@ -281,7 +322,7 @@ const PLATFORM_TOOLS = [
   },
   {
     name: "assign_skill_to_agent",
-    description: "Assign a skill to an agent so it can use those instructions.",
+    description: "Assign a skill to an agent. The skill's instructions and tool permissions will be pushed to the agent on next start/restart.",
     inputSchema: {
       type: "object",
       properties: {
@@ -772,7 +813,17 @@ export async function handlePlatformMcpRequest(req: Request): Promise<Response> 
           name: "apteva-platform",
           version: "1.0.0",
         },
-        instructions: "This MCP server provides tools to control the Apteva AI agent platform. You can create, start, stop, and manage agents, projects, and view system status.",
+        instructions: `This MCP server controls the Apteva AI agent management platform.
+
+You can manage:
+- AGENTS: Create, configure, start, stop, and delete AI agents. Each agent has a provider (LLM), model, system prompt, and optional features (memory, tasks, vision, MCP tools, files).
+- PROJECTS: Organize agents into projects for grouping.
+- MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Assign servers to agents.
+- SKILLS: Reusable instruction sets that specialize agent behavior. Assign skills to agents.
+- PROVIDERS: View which LLM providers have API keys configured.
+
+Typical workflow: list_providers → create_agent → assign MCP servers/skills → start_agent.
+Always use list_providers first to check which providers have API keys before creating agents.`,
       };
       break;
     }
