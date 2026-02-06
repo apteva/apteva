@@ -147,6 +147,18 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
     }
   }
 
+  // Auto-inject built-in platform MCP server for meta agent
+  if (agent.id === META_AGENT_ID) {
+    const baseUrl = `http://localhost:${process.env.PORT || 4280}`;
+    mcpServers.push({
+      name: "Apteva Platform",
+      type: "http",
+      url: `${baseUrl}/api/mcp/platform`,
+      headers: {},
+      enabled: true,
+    });
+  }
+
   return {
     id: agent.id,
     name: agent.name,
@@ -215,7 +227,7 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
       max_actions_per_turn: 5,
     },
     mcp: {
-      enabled: features.mcp,
+      enabled: features.mcp || agent.id === META_AGENT_ID,
       base_url: "http://localhost:3000/mcp",
       timeout: "30s",
       retry_count: 3,

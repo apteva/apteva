@@ -10,6 +10,7 @@ import { handleSkillRoutes } from "./api/skills";
 import { handleIntegrationRoutes } from "./api/integrations";
 import { handleMetaAgentRoutes } from "./api/meta-agent";
 import { handleTelemetryRoutes } from "./api/telemetry";
+import { handlePlatformMcpRequest } from "../mcp-platform";
 
 // Re-export for backward compatibility (server.ts dynamic import)
 export { startAgentProcess } from "./api/agent-utils";
@@ -20,6 +21,11 @@ export async function handleApiRequest(
   authContext?: AuthContext,
 ): Promise<Response> {
   const method = req.method;
+
+  // Built-in platform MCP server (for meta agent)
+  if (path === "/api/mcp/platform" && method === "POST") {
+    return handlePlatformMcpRequest(req);
+  }
 
   return (
     (await handleSystemRoutes(req, path, method, authContext)) ??
