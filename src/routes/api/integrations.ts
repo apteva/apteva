@@ -341,7 +341,7 @@ export async function handleIntegrationRoutes(
         url: mcpUrlWithUser,
         headers: { "x-api-key": apiKey },
         source: "composio",
-        project_id: null,
+        project_id: projectId,
       });
 
       return json({ server, message: "Server added successfully" });
