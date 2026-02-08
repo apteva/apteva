@@ -243,8 +243,8 @@ export async function handleMcpRoutes(
       return json({ error: "No command or package specified" }, 400);
     }
 
-    // Get a port for the HTTP proxy
-    const port = await getNextPort();
+    // Use permanently assigned port from DB, fallback to dynamic
+    const port = server.port || await getNextPort();
 
     console.log(`Starting MCP server ${server.name}...`);
     console.log(`  Command: ${cmd.join(" ")}`);

@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { join } from "path";
 import { mkdirSync, existsSync } from "fs";
 import { encrypt, decrypt, encryptObject, decryptObject } from "./crypto";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
 
 // Types
 export type AgentMode = "coordinator" | "worker";
@@ -520,6 +520,146 @@ function runMigrations() {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_unique ON provider_keys(provider_id, COALESCE(project_id, ''));
       `,
     },
+    {
+      name: "023_create_test_cases",
+      sql: `
+        CREATE TABLE IF NOT EXISTS test_cases (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          agent_id TEXT NOT NULL,
+          input_message TEXT NOT NULL,
+          eval_criteria TEXT NOT NULL,
+          timeout_ms INTEGER DEFAULT 60000,
+          project_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_cases_agent ON test_cases(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_test_cases_project ON test_cases(project_id);
+      `,
+    },
+    {
+      name: "025_create_api_keys",
+      sql: `
+        CREATE TABLE IF NOT EXISTS api_keys (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          key_hash TEXT NOT NULL UNIQUE,
+          key_prefix TEXT NOT NULL,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          expires_at TEXT,
+          last_used_at TEXT,
+          is_active INTEGER DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash) WHERE is_active = 1;
+        CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+      `,
+    },
+    {
+      name: "026_behavior_tests",
+      sql: `
+        -- Recreate test_cases with nullable agent_id and input_message
+        CREATE TABLE IF NOT EXISTS test_cases_new (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          behavior TEXT,
+          agent_id TEXT,
+          input_message TEXT,
+          eval_criteria TEXT NOT NULL DEFAULT '',
+          timeout_ms INTEGER DEFAULT 300000,
+          project_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT OR IGNORE INTO test_cases_new (id, name, description, agent_id, input_message, eval_criteria, timeout_ms, project_id, created_at, updated_at)
+          SELECT id, name, description, agent_id, input_message, eval_criteria, timeout_ms, project_id, created_at, updated_at FROM test_cases;
+        DROP TABLE IF EXISTS test_cases;
+        ALTER TABLE test_cases_new RENAME TO test_cases;
+        CREATE INDEX IF NOT EXISTS idx_test_cases_agent ON test_cases(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_test_cases_project ON test_cases(project_id);
+
+        -- Add planner columns to test_runs
+        ALTER TABLE test_runs ADD COLUMN generated_message TEXT;
+        ALTER TABLE test_runs ADD COLUMN selected_agent_id TEXT;
+        ALTER TABLE test_runs ADD COLUMN selected_agent_name TEXT;
+        ALTER TABLE test_runs ADD COLUMN planner_reasoning TEXT;
+      `,
+    },
+    {
+      name: "027_fix_test_cases_nullable",
+      sql: `
+        -- Recreate test_cases with nullable agent_id and input_message
+        CREATE TABLE IF NOT EXISTS test_cases_new (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          behavior TEXT,
+          agent_id TEXT,
+          input_message TEXT,
+          eval_criteria TEXT NOT NULL DEFAULT '',
+          timeout_ms INTEGER DEFAULT 300000,
+          project_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT OR IGNORE INTO test_cases_new (id, name, description, behavior, agent_id, input_message, eval_criteria, timeout_ms, project_id, created_at, updated_at)
+          SELECT id, name, description, behavior, agent_id, input_message, eval_criteria, timeout_ms, project_id, created_at, updated_at FROM test_cases;
+        DROP TABLE IF EXISTS test_cases;
+        ALTER TABLE test_cases_new RENAME TO test_cases;
+        CREATE INDEX IF NOT EXISTS idx_test_cases_agent ON test_cases(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_test_cases_project ON test_cases(project_id);
+      `,
+    },
+    {
+      name: "028_add_test_run_score",
+      sql: `ALTER TABLE test_runs ADD COLUMN score INTEGER;`,
+    },
+    {
+      name: "024_create_test_runs",
+      sql: `
+        CREATE TABLE IF NOT EXISTS test_runs (
+          id TEXT PRIMARY KEY,
+          test_case_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          agent_response TEXT,
+          judge_reasoning TEXT,
+          duration_ms INTEGER,
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_runs_test_case ON test_runs(test_case_id);
+        CREATE INDEX IF NOT EXISTS idx_test_runs_status ON test_runs(status);
+      `,
+    },
+    {
+      name: "029_fix_provider_keys_unique_constraint",
+      sql: `
+        -- Recreate provider_keys table without UNIQUE constraint on provider_id alone
+        -- This allows multiple keys per provider (one per project)
+        CREATE TABLE IF NOT EXISTS provider_keys_new (
+          id TEXT PRIMARY KEY,
+          provider_id TEXT NOT NULL,
+          encrypted_key TEXT NOT NULL,
+          key_hint TEXT,
+          is_valid INTEGER DEFAULT 1,
+          last_tested_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+          name TEXT
+        );
+        INSERT OR IGNORE INTO provider_keys_new (id, provider_id, encrypted_key, key_hint, is_valid, last_tested_at, created_at, project_id, name)
+          SELECT id, provider_id, encrypted_key, key_hint, is_valid, last_tested_at, created_at, project_id, name FROM provider_keys;
+        DROP TABLE IF EXISTS provider_keys;
+        ALTER TABLE provider_keys_new RENAME TO provider_keys;
+        CREATE INDEX IF NOT EXISTS idx_provider_keys_provider ON provider_keys(provider_id);
+        CREATE INDEX IF NOT EXISTS idx_provider_keys_project ON provider_keys(project_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_unique ON provider_keys(provider_id, COALESCE(project_id, ''));
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -597,6 +737,19 @@ function runSchemaUpgrades() {
 
     if (existingUsers.length > 0) {
       console.log(`[db] Migrated ${existingUsers.length} user(s). Usernames derived from email addresses.`);
+    }
+  }
+
+  // Assign permanent ports to MCP servers that don't have one yet
+  // (HTTP-type servers don't need a local proxy port)
+  const mcpWithoutPort = db.query("SELECT id FROM mcp_servers WHERE port IS NULL AND type != 'http'").all() as { id: string }[];
+  if (mcpWithoutPort.length > 0) {
+    const MCP_BASE_PORT = 4500;
+    const maxRow = db.query("SELECT MAX(port) as max_port FROM mcp_servers").get() as { max_port: number | null };
+    let nextPort = maxRow.max_port !== null ? maxRow.max_port + 1 : MCP_BASE_PORT;
+    for (const row of mcpWithoutPort) {
+      db.run("UPDATE mcp_servers SET port = ? WHERE id = ?", [nextPort, row.id]);
+      nextPort++;
     }
   }
 }
@@ -1149,18 +1302,31 @@ function rowToProviderKey(row: ProviderKeyRow): ProviderKey {
 
 // MCP Server operations
 export const McpServerDB = {
+  // Get the next available port for a new MCP server (starting from 4500)
+  getNextAvailablePort(): number {
+    const BASE_PORT = 4500;
+    const row = db.query("SELECT MAX(port) as max_port FROM mcp_servers").get() as { max_port: number | null };
+    if (row.max_port === null) {
+      return BASE_PORT;
+    }
+    return row.max_port + 1;
+  },
+
   create(server: Omit<McpServer, "created_at" | "status" | "port">): McpServer {
     const now = new Date().toISOString();
     // Encrypt env vars and headers (credentials) before storing
     const envEncrypted = encryptObject(server.env || {});
     const headersEncrypted = encryptObject(server.headers || {});
+    // Assign port permanently at creation time (like agents)
+    // HTTP-type servers don't need a local proxy port
+    const port = server.type === "http" ? null : this.getNextAvailablePort();
     const stmt = db.prepare(`
       INSERT INTO mcp_servers (id, name, type, package, pip_module, command, args, env, url, headers, source, project_id, status, port, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', NULL, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?)
     `);
     stmt.run(
       server.id, server.name, server.type, server.package, server.pip_module || null, server.command, server.args,
-      envEncrypted, server.url || null, headersEncrypted, server.source || null, server.project_id || null, now
+      envEncrypted, server.url || null, headersEncrypted, server.source || null, server.project_id || null, port, now
     );
     return this.findById(server.id)!;
   },
@@ -1251,7 +1417,12 @@ export const McpServerDB = {
   },
 
   setStatus(id: string, status: "stopped" | "running", port?: number): McpServer | null {
-    return this.update(id, { status, port: port ?? null });
+    // Port is permanently assigned — only update if explicitly provided
+    const updates: Partial<Omit<McpServer, "id" | "created_at">> = { status };
+    if (port !== undefined) {
+      updates.port = port;
+    }
+    return this.update(id, updates);
   },
 
   delete(id: string): boolean {
@@ -1260,7 +1431,8 @@ export const McpServerDB = {
   },
 
   resetAllStatus(): void {
-    db.run("UPDATE mcp_servers SET status = 'stopped', port = NULL");
+    // Keep ports as they're permanently assigned (like agents)
+    db.run("UPDATE mcp_servers SET status = 'stopped'");
   },
 
   count(): number {
@@ -1895,6 +2067,131 @@ function rowToSession(row: SessionRow): Session {
     created_at: row.created_at,
   };
 }
+
+// API Key types
+export interface ApiKey {
+  id: string;
+  name: string;
+  key_hash: string;
+  key_prefix: string;
+  user_id: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+interface ApiKeyRow {
+  id: string;
+  name: string;
+  key_hash: string;
+  key_prefix: string;
+  user_id: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  is_active: number;
+  created_at: string;
+}
+
+function rowToApiKey(row: ApiKeyRow): ApiKey {
+  return {
+    id: row.id,
+    name: row.name,
+    key_hash: row.key_hash,
+    key_prefix: row.key_prefix,
+    user_id: row.user_id,
+    expires_at: row.expires_at,
+    last_used_at: row.last_used_at,
+    is_active: row.is_active === 1,
+    created_at: row.created_at,
+  };
+}
+
+// API Key operations
+export const ApiKeyDB = {
+  // Create a new API key (returns the raw key only at creation time)
+  create(data: { name: string; user_id: string; expires_at?: string | null }): { apiKey: ApiKey; rawKey: string } {
+    const id = generateId();
+    const rawKey = `apt_${randomBytes(24).toString("hex")}`;
+    const keyHash = createHash("sha256").update(rawKey).digest("hex");
+    const keyPrefix = rawKey.slice(0, 10);
+    const now = new Date().toISOString();
+
+    db.run(
+      `INSERT INTO api_keys (id, name, key_hash, key_prefix, user_id, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, data.name, keyHash, keyPrefix, data.user_id, data.expires_at || null, now]
+    );
+
+    return { apiKey: this.findById(id)!, rawKey };
+  },
+
+  // Find by ID
+  findById(id: string): ApiKey | null {
+    const row = db.query("SELECT * FROM api_keys WHERE id = ?").get(id) as ApiKeyRow | null;
+    return row ? rowToApiKey(row) : null;
+  },
+
+  // Validate a raw key - returns the API key record and user if valid
+  validate(rawKey: string): { apiKey: ApiKey; user: User } | null {
+    const keyHash = createHash("sha256").update(rawKey).digest("hex");
+    const row = db.query(
+      "SELECT * FROM api_keys WHERE key_hash = ? AND is_active = 1"
+    ).get(keyHash) as ApiKeyRow | null;
+
+    if (!row) return null;
+
+    const apiKey = rowToApiKey(row);
+
+    // Check expiration
+    if (apiKey.expires_at && new Date(apiKey.expires_at) < new Date()) {
+      return null;
+    }
+
+    // Load the user
+    const user = UserDB.findById(apiKey.user_id);
+    if (!user) return null;
+
+    // Update last_used_at
+    db.run("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [new Date().toISOString(), apiKey.id]);
+
+    return { apiKey, user };
+  },
+
+  // List all keys for a user (does not expose hash)
+  findByUser(userId: string): ApiKey[] {
+    const rows = db.query(
+      "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC"
+    ).all(userId) as ApiKeyRow[];
+    return rows.map(rowToApiKey);
+  },
+
+  // Revoke a key
+  revoke(id: string, userId: string): boolean {
+    const result = db.run(
+      "UPDATE api_keys SET is_active = 0 WHERE id = ? AND user_id = ?",
+      [id, userId]
+    );
+    return result.changes > 0;
+  },
+
+  // Delete a key
+  delete(id: string, userId: string): boolean {
+    const result = db.run(
+      "DELETE FROM api_keys WHERE id = ? AND user_id = ?",
+      [id, userId]
+    );
+    return result.changes > 0;
+  },
+
+  // Count active keys for a user
+  countByUser(userId: string): number {
+    const row = db.query(
+      "SELECT COUNT(*) as count FROM api_keys WHERE user_id = ? AND is_active = 1"
+    ).get(userId) as { count: number };
+    return row.count;
+  },
+};
 
 // Skill operations
 export const SkillDB = {

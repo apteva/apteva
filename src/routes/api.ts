@@ -10,6 +10,8 @@ import { handleSkillRoutes } from "./api/skills";
 import { handleIntegrationRoutes } from "./api/integrations";
 import { handleMetaAgentRoutes } from "./api/meta-agent";
 import { handleTelemetryRoutes } from "./api/telemetry";
+import { handleTestRoutes } from "./api/tests";
+import { handleApiKeyRoutes } from "./api/api-keys";
 import { handlePlatformMcpRequest } from "../mcp-platform";
 
 // Re-export for backward compatibility (server.ts dynamic import)
@@ -29,6 +31,7 @@ export async function handleApiRequest(
 
   return (
     (await handleSystemRoutes(req, path, method, authContext)) ??
+    (await handleApiKeyRoutes(req, path, method, authContext)) ?? // Must be before provider routes to handle /api/keys/personal
     (await handleProviderRoutes(req, path, method, authContext)) ??
     (await handleUserRoutes(req, path, method, authContext)) ??
     (await handleProjectRoutes(req, path, method, authContext)) ??
@@ -38,6 +41,7 @@ export async function handleApiRequest(
     (await handleIntegrationRoutes(req, path, method)) ??
     (await handleMetaAgentRoutes(req, path, method)) ??
     (await handleTelemetryRoutes(req, path, method)) ??
+    (await handleTestRoutes(req, path, method)) ??
     json({ error: "Not found" }, 404)
   );
 }

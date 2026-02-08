@@ -456,7 +456,8 @@ if (hasRestarts) {
             continue;
           }
 
-          const port = await getNextPort();
+          // Use permanently assigned port from DB, fallback to dynamic
+          const port = server.port || await getNextPort();
           const result = await startMcpProcess(server.id, cmd, serverEnv, port);
 
           if (result.success) {

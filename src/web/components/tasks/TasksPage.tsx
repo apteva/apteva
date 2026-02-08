@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { TasksIcon, CloseIcon } from "../common/Icons";
-import { useAuth } from "../../context";
+import { useAuth, useProjects } from "../../context";
 import { useTelemetry } from "../../context/TelemetryContext";
 import type { Task, TaskTrajectoryStep, ToolUseBlock, ToolResultBlock } from "../../types";
 
@@ -10,6 +10,7 @@ interface TasksPageProps {
 
 export function TasksPage({ onSelectAgent }: TasksPageProps) {
   const { authFetch } = useAuth();
+  const { currentProjectId } = useProjects();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
@@ -22,7 +23,11 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
 
   const fetchTasks = useCallback(async () => {
     try {
-      const res = await authFetch(`/api/tasks?status=${filter}`);
+      let url = `/api/tasks?status=${filter}`;
+      if (currentProjectId !== null) {
+        url += `&project_id=${encodeURIComponent(currentProjectId)}`;
+      }
+      const res = await authFetch(url);
       const data = await res.json();
       setTasks(data.tasks || []);
     } catch (e) {
@@ -30,7 +35,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
     } finally {
       setLoading(false);
     }
-  }, [authFetch, filter]);
+  }, [authFetch, filter, currentProjectId]);
 
   // Initial fetch
   useEffect(() => {

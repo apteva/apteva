@@ -2,6 +2,8 @@
 // This allows the meta agent (Apteva Assistant) to control the platform
 
 import { AgentDB, ProjectDB, McpServerDB, SkillDB, TelemetryDB, generateId } from "./db";
+import { TestCaseDB, TestRunDB } from "./db-tests";
+import { runTest, runAll } from "./test-runner";
 import { getProvidersWithStatus, PROVIDERS } from "./providers";
 import { startAgentProcess, setAgentStatus, toApiAgent, META_AGENT_ID, agentFetch } from "./routes/api/agent-utils";
 import { agentProcesses } from "./server";
@@ -353,6 +355,77 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
         skill_id: { type: "string", description: "The skill ID to delete" },
       },
       required: ["skill_id"],
+    },
+  },
+  // Test tools
+  {
+    name: "list_tests",
+    description: "List all test cases. Tests validate agent workflows by sending a message and using an LLM judge to evaluate the result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "Optional project ID to filter tests" },
+      },
+    },
+  },
+  {
+    name: "create_test",
+    description: "Create a new test case for an agent. The test sends a message to the agent, then an LLM judge evaluates the conversation against the success criteria.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Test name" },
+        agent_id: { type: "string", description: "Agent ID to test" },
+        input_message: { type: "string", description: "Message to send to the agent" },
+        eval_criteria: { type: "string", description: "Natural language success criteria for the LLM judge. E.g. 'The agent should use the post_tweet tool and confirm the post was made.'" },
+        description: { type: "string", description: "Optional description" },
+        timeout_ms: { type: "number", description: "Timeout in ms (default 60000)" },
+      },
+      required: ["name", "agent_id", "input_message", "eval_criteria"],
+    },
+  },
+  {
+    name: "run_test",
+    description: "Run a test case. The agent must be running. Returns pass/fail with LLM judge reasoning.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        test_id: { type: "string", description: "Test case ID to run. Use list_tests to find IDs." },
+      },
+      required: ["test_id"],
+    },
+  },
+  {
+    name: "run_all_tests",
+    description: "Run all test cases (or specific ones). Returns summary of pass/fail results.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        test_case_ids: { type: "array", items: { type: "string" }, description: "Optional array of test case IDs. If empty, runs all tests." },
+      },
+    },
+  },
+  {
+    name: "get_test_results",
+    description: "Get run history for a test case. Shows pass/fail status, judge reasoning, and duration.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        test_id: { type: "string", description: "Test case ID" },
+        limit: { type: "number", description: "Max results to return (default 10)" },
+      },
+      required: ["test_id"],
+    },
+  },
+  {
+    name: "delete_test",
+    description: "Delete a test case and all its run history.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        test_id: { type: "string", description: "Test case ID to delete" },
+      },
+      required: ["test_id"],
     },
   },
 ];
@@ -766,6 +839,91 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `Skill "${skill.name}" deleted${agentsWithSkill.length > 0 ? ` (unassigned from ${agentsWithSkill.length} agent(s))` : ""}` }] };
       }
 
+      // Test tools
+      case "list_tests": {
+        const tests = TestCaseDB.findAll(args.project_id);
+        const result = tests.map(tc => {
+          const agent = AgentDB.findById(tc.agent_id);
+          const lastRun = TestRunDB.getLatestByTestCase(tc.id);
+          return {
+            id: tc.id,
+            name: tc.name,
+            agent_id: tc.agent_id,
+            agent_name: agent?.name || "Unknown",
+            input_message: tc.input_message,
+            eval_criteria: tc.eval_criteria,
+            timeout_ms: tc.timeout_ms,
+            last_status: lastRun?.status || null,
+            last_reasoning: lastRun?.judge_reasoning || null,
+          };
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "create_test": {
+        const agent = AgentDB.findById(args.agent_id);
+        if (!agent) {
+          return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+        }
+        const tc = TestCaseDB.create({
+          name: args.name,
+          agent_id: args.agent_id,
+          input_message: args.input_message,
+          eval_criteria: args.eval_criteria,
+          description: args.description,
+          timeout_ms: args.timeout_ms,
+        });
+        return { content: [{ type: "text", text: `Test "${tc.name}" created (id: ${tc.id}) for agent "${agent.name}". Use run_test to execute it.` }] };
+      }
+
+      case "run_test": {
+        const tc = TestCaseDB.findById(args.test_id);
+        if (!tc) {
+          return { content: [{ type: "text", text: `Test not found: ${args.test_id}` }], isError: true };
+        }
+        const result = await runTest(tc);
+        const agent = AgentDB.findById(tc.agent_id);
+        return { content: [{ type: "text", text: `Test "${tc.name}" (agent: ${agent?.name || tc.agent_id}): ${result.status.toUpperCase()}${result.duration_ms ? ` in ${(result.duration_ms / 1000).toFixed(1)}s` : ""}\n\nJudge: ${result.judge_reasoning || result.error || "No reasoning"}` }] };
+      }
+
+      case "run_all_tests": {
+        const results = await runAll(args.test_case_ids);
+        const passed = results.filter(r => r.status === "passed").length;
+        const failed = results.filter(r => r.status === "failed").length;
+        const errors = results.filter(r => r.status === "error").length;
+        const lines = results.map(r => {
+          const tc = TestCaseDB.findById(r.test_case_id);
+          return `- ${tc?.name || r.test_case_id}: ${r.status.toUpperCase()}${r.judge_reasoning ? ` — ${r.judge_reasoning}` : ""}${r.error ? ` — Error: ${r.error}` : ""}`;
+        });
+        return { content: [{ type: "text", text: `Test Results: ${passed} passed, ${failed} failed, ${errors} errors (${results.length} total)\n\n${lines.join("\n")}` }] };
+      }
+
+      case "get_test_results": {
+        const tc = TestCaseDB.findById(args.test_id);
+        if (!tc) {
+          return { content: [{ type: "text", text: `Test not found: ${args.test_id}` }], isError: true };
+        }
+        const runs = TestRunDB.findByTestCase(args.test_id, args.limit || 10);
+        const result = runs.map(r => ({
+          id: r.id,
+          status: r.status,
+          duration_ms: r.duration_ms,
+          judge_reasoning: r.judge_reasoning,
+          error: r.error,
+          created_at: r.created_at,
+        }));
+        return { content: [{ type: "text", text: `Run history for "${tc.name}":\n${JSON.stringify(result, null, 2)}` }] };
+      }
+
+      case "delete_test": {
+        const tc = TestCaseDB.findById(args.test_id);
+        if (!tc) {
+          return { content: [{ type: "text", text: `Test not found: ${args.test_id}` }], isError: true };
+        }
+        TestCaseDB.delete(args.test_id);
+        return { content: [{ type: "text", text: `Test "${tc.name}" deleted.` }] };
+      }
+
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -821,8 +979,10 @@ You can manage:
 - MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Assign servers to agents.
 - SKILLS: Reusable instruction sets that specialize agent behavior. Assign skills to agents.
 - PROVIDERS: View which LLM providers have API keys configured.
+- TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Use list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
 
 Typical workflow: list_providers → create_agent → assign MCP servers/skills → start_agent.
+Test workflow: create_test (set agent, message, eval criteria) → run_test → check results.
 Always use list_providers first to check which providers have API keys before creating agents.`,
       };
       break;

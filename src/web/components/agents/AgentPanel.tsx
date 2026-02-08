@@ -3,6 +3,7 @@ import { Chat } from "@apteva/apteva-kit";
 import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon } from "../common/Icons";
 import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
+import { useTelemetry } from "../../context";
 import { useAuth } from "../../context";
 import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, AgentMode, MultiAgentConfig } from "../../types";
 import { getMultiAgentConfig } from "../../types";
@@ -386,6 +387,7 @@ function TasksTab({ agent }: { agent: Agent }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "pending" | "running" | "completed">("all");
+  const { events } = useTelemetry({ agent_id: agent.id, category: "task" });
 
   // Reset state when agent changes
   useEffect(() => {
@@ -413,17 +415,11 @@ function TasksTab({ agent }: { agent: Agent }) {
     }
   };
 
+  // Refetch when agent changes, filter changes, or task telemetry arrives
   useEffect(() => {
     setLoading(true);
     fetchTasks();
-  }, [agent.id, agent.status, filter]);
-
-  // Auto-refresh every 5 seconds when agent is running
-  useEffect(() => {
-    if (agent.status !== "running") return;
-    const interval = setInterval(fetchTasks, 5000);
-    return () => clearInterval(interval);
-  }, [agent.id, agent.status, filter]);
+  }, [agent.id, agent.status, filter, events.length]);
 
   const getStatusColor = (status: Task["status"]) => {
     switch (status) {

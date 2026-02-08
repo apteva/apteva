@@ -22,7 +22,7 @@ export function Dashboard({
 }: DashboardProps) {
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
-  const { events: realtimeEvents } = useTelemetryContext();
+  const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [historicalActivities, setHistoricalActivities] = useState<TelemetryEvent[]>([]);
@@ -72,9 +72,7 @@ export function Dashboard({
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 10000);
-    return () => clearInterval(interval);
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, statusChangeCounter]);
 
   // Filter tasks by project agents
   const filteredTasks = useMemo(() => {

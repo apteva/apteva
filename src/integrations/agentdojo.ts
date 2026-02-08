@@ -12,44 +12,104 @@ import type {
 // AgentDojo MCP API base URL
 const AGENTDOJO_API_BASE = process.env.AGENTDOJO_API_BASE || "https://api.agentdojo.dev";
 
+// Map MCP API provider_type to IntegrationApp authSchemes
+function mapAuthSchemes(providerType: string): string[] {
+  switch (providerType) {
+    case "oauth": return ["OAUTH2"];
+    case "api_key": return ["API_KEY"];
+    case "basic_auth": return ["BASIC"];
+    case "none": return ["NONE"];
+    default: return ["API_KEY"];
+  }
+}
+
 export const AgentDojoProvider: IntegrationProvider = {
   id: "agentdojo",
   name: "AgentDojo",
 
-  // List available toolkits as "apps"
+  // List toolkits + providers from MCP API, merge so we get both
+  // no-auth toolkits AND OAuth/API key providers
   async listApps(apiKey: string): Promise<IntegrationApp[]> {
-    const res = await fetch(`${AGENTDOJO_API_BASE}/toolkits?include_tools=true`, {
-      headers: {
-        "X-API-Key": apiKey,
-        "Content-Type": "application/json",
-      },
-    });
+    const headers = { "X-API-Key": apiKey, "Content-Type": "application/json" };
 
-    if (!res.ok) {
-      console.error("AgentDojo listApps error:", res.status, await res.text());
-      return [];
+    // Fetch both in parallel
+    const [toolkitsRes, providersRes] = await Promise.all([
+      fetch(`${AGENTDOJO_API_BASE}/toolkits?include_tools=true`, { headers }).catch(() => null),
+      fetch(`${AGENTDOJO_API_BASE}/providers?is_active=true`, { headers }).catch(() => null),
+    ]);
+
+    // Parse toolkits
+    let toolkits: any[] = [];
+    if (toolkitsRes?.ok) {
+      const data = await toolkitsRes.json();
+      toolkits = data.toolkits || data.data || [];
+    } else if (toolkitsRes) {
+      console.error("AgentDojo listApps toolkits error:", toolkitsRes.status);
     }
 
-    const data = await res.json();
-    const toolkits = data.toolkits || [];
+    // Parse providers (for auth type info)
+    let providers: any[] = [];
+    if (providersRes?.ok) {
+      const data = await providersRes.json();
+      providers = data.providers || data.data || [];
+    } else if (providersRes) {
+      console.error("AgentDojo listApps providers error:", providersRes.status);
+    }
 
-    return toolkits.map((toolkit: any) => ({
-      id: toolkit.id,
-      name: toolkit.display_name || toolkit.name,
-      slug: toolkit.name,
-      description: toolkit.description || null,
-      logo: toolkit.icon_url || null,
-      categories: [],
-      // If toolkit requires auth, it needs API_KEY connection
-      authSchemes: toolkit.requires_auth ? ["API_KEY"] : ["NONE"],
-      toolsCount: toolkit.tools_count || toolkit.tools?.length || 0,
-      tools: toolkit.tools || [],
-    }));
+    // Index providers by name for quick lookup
+    const providerByName = new Map<string, any>();
+    for (const p of providers) {
+      providerByName.set(p.name, p);
+      if (p.display_name) providerByName.set(p.display_name.toLowerCase(), p);
+    }
+
+    // Map toolkits to apps, enriching auth info from providers
+    const apps: IntegrationApp[] = toolkits.map((toolkit: any) => {
+      const name = toolkit.name || toolkit.slug;
+      // Try to find matching provider for this toolkit
+      const provider = providerByName.get(name) || providerByName.get(name?.toLowerCase());
+
+      let authSchemes: string[];
+      if (provider) {
+        authSchemes = mapAuthSchemes(provider.provider_type);
+      } else if (toolkit.requires_auth) {
+        authSchemes = ["API_KEY"]; // Default if no provider found but auth required
+      } else {
+        authSchemes = ["NONE"];
+      }
+
+      return {
+        id: String(toolkit.id),
+        name: toolkit.display_name || toolkit.name,
+        slug: name,
+        description: toolkit.description || null,
+        logo: provider?.favicon || toolkit.icon_url || null,
+        categories: [],
+        authSchemes,
+      };
+    });
+
+    // Also add any providers that don't match a toolkit (standalone OAuth providers)
+    const toolkitNames = new Set(toolkits.map((t: any) => t.name));
+    for (const p of providers) {
+      if (!toolkitNames.has(p.name)) {
+        apps.push({
+          id: String(p.id),
+          name: p.display_name || p.name,
+          slug: p.name,
+          description: p.description || null,
+          logo: p.favicon || p.icon_url || null,
+          categories: [],
+          authSchemes: mapAuthSchemes(p.provider_type),
+        });
+      }
+    }
+
+    return apps;
   },
 
-  // List user's credentials (stored locally, validated against toolkits)
+  // List user's credentials
   async listConnectedAccounts(apiKey: string, userId: string): Promise<ConnectedAccount[]> {
-    // Get list of credentials from our credentials API
     const res = await fetch(`${AGENTDOJO_API_BASE}/credentials`, {
       headers: {
         "X-API-Key": apiKey,
@@ -66,18 +126,19 @@ export const AgentDojoProvider: IntegrationProvider = {
     const credentials = data.data || data.credentials || [];
 
     return credentials.map((cred: any) => ({
-      id: cred.id,
-      appId: cred.provider_id || cred.toolkit_id || cred.provider_name,
-      appName: cred.provider_name || cred.toolkit_name || cred.provider_id,
-      status: cred.is_valid !== false ? "active" : "failed",
+      id: String(cred.id),
+      appId: String(cred.provider_id || cred.toolkit_id || cred.provider_name),
+      appName: cred.provider_name || cred.name || cred.toolkit_name || String(cred.provider_id),
+      status: (cred.status === "active" || cred.is_valid !== false) ? "active" as const : "failed" as const,
       createdAt: cred.created_at || new Date().toISOString(),
       metadata: {
         keyHint: cred.key_hint,
+        credentialType: cred.credential_type,
       },
     }));
   },
 
-  // Store credentials for a toolkit
+  // Initiate connection — OAuth (popup redirect) or API key (direct store)
   async initiateConnection(
     apiKey: string,
     userId: string,
@@ -85,11 +146,41 @@ export const AgentDojoProvider: IntegrationProvider = {
     redirectUrl: string,
     credentials?: ConnectionCredentials
   ): Promise<ConnectionRequest> {
+    // OAuth flow: no credentials provided, or explicit OAUTH2 scheme
     if (!credentials?.apiKey) {
-      throw new Error("API key is required for AgentDojo connections");
+      // Init OAuth via MCP API
+      const res = await fetch(`${AGENTDOJO_API_BASE}/oauth/init`, {
+        method: "POST",
+        headers: {
+          "X-API-Key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider_name: appSlug,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("AgentDojo OAuth init error:", res.status, text);
+        throw new Error(`Failed to initiate OAuth: ${text}`);
+      }
+
+      const data = await res.json();
+      const flowData = data.data || data;
+
+      if (!flowData.auth_url) {
+        throw new Error("No auth URL returned from OAuth init");
+      }
+
+      return {
+        redirectUrl: flowData.auth_url,
+        connectionId: flowData.state_token || flowData.state || flowData.flow_id,
+        status: "pending",
+      };
     }
 
-    // Store the credential
+    // API key flow: store credential directly
     const res = await fetch(`${AGENTDOJO_API_BASE}/credentials`, {
       method: "POST",
       headers: {
@@ -99,26 +190,61 @@ export const AgentDojoProvider: IntegrationProvider = {
       body: JSON.stringify({
         provider_id: appSlug,
         provider_name: appSlug,
-        api_key: credentials.apiKey,
+        credential_data: { api_key: credentials.apiKey },
       }),
     });
 
     if (!res.ok) {
       const text = await res.text();
-      console.error("AgentDojo initiateConnection error:", res.status, text);
+      console.error("AgentDojo credential create error:", res.status, text);
       throw new Error(`Failed to store credentials: ${text}`);
     }
 
     const data = await res.json();
 
     return {
-      redirectUrl: null, // No OAuth redirect
-      connectionId: data.data?.id || data.id,
-      status: "active", // Credentials are immediately active
+      redirectUrl: null,
+      connectionId: String(data.data?.id || data.id),
+      status: "active",
     };
   },
 
+  // Check connection/OAuth flow status
   async getConnectionStatus(apiKey: string, connectionId: string): Promise<ConnectedAccount | null> {
+    // First try OAuth status poll (connectionId = state_token)
+    const oauthRes = await fetch(`${AGENTDOJO_API_BASE}/oauth/status?state=${encodeURIComponent(connectionId)}`, {
+      headers: {
+        "X-API-Key": apiKey,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (oauthRes.ok) {
+      const oauthData = await oauthRes.json();
+      const status = oauthData.data?.status || oauthData.status;
+
+      if (status === "completed") {
+        return {
+          id: connectionId,
+          appId: oauthData.data?.provider_name || oauthData.data?.provider_id || "",
+          appName: oauthData.data?.provider_name || "",
+          status: "active",
+          createdAt: new Date().toISOString(),
+        };
+      } else if (status === "failed") {
+        return {
+          id: connectionId,
+          appId: oauthData.data?.provider_name || "",
+          appName: oauthData.data?.provider_name || "",
+          status: "failed",
+          createdAt: new Date().toISOString(),
+        };
+      } else if (status === "pending") {
+        return null; // Still waiting
+      }
+    }
+
+    // Fallback: check credentials list directly (for API key connections)
     const res = await fetch(`${AGENTDOJO_API_BASE}/credentials`, {
       headers: {
         "X-API-Key": apiKey,
@@ -130,14 +256,14 @@ export const AgentDojoProvider: IntegrationProvider = {
 
     const data = await res.json();
     const credentials = data.data || data.credentials || [];
-    const cred = credentials.find((c: any) => c.id === connectionId);
+    const cred = credentials.find((c: any) => String(c.id) === connectionId);
 
     if (!cred) return null;
 
     return {
-      id: cred.id,
-      appId: cred.provider_id || cred.toolkit_id,
-      appName: cred.provider_name || cred.toolkit_name,
+      id: String(cred.id),
+      appId: String(cred.provider_id || cred.toolkit_id),
+      appName: cred.provider_name || cred.name || String(cred.provider_id),
       status: "active",
       createdAt: cred.created_at || new Date().toISOString(),
     };

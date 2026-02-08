@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import "@apteva/apteva-kit/styles.css";
 
@@ -7,7 +7,7 @@ import type { Agent, Provider, Route, NewAgentForm } from "./types";
 import { DEFAULT_FEATURES } from "./types";
 
 // Context
-import { TelemetryProvider, AuthProvider, ProjectProvider, useAuth, useProjects } from "./context";
+import { TelemetryProvider, AuthProvider, ProjectProvider, useAuth, useProjects, useAgentStatusChange } from "./context";
 
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
@@ -26,6 +26,7 @@ import {
   TasksPage,
   McpPage,
   SkillsPage,
+  TestsPage,
   TelemetryPage,
   LoginPage,
 } from "./components";
@@ -35,7 +36,8 @@ import { MetaAgentProvider, MetaAgentPanel } from "./components/meta-agent/MetaA
 function AppContent() {
   // Auth state
   const { isAuthenticated, isLoading: authLoading, hasUsers, accessToken, checkAuth } = useAuth();
-  const { refreshProjects } = useProjects();
+  const { currentProjectId, refreshProjects } = useProjects();
+  const statusChangeCounter = useAgentStatusChange();
 
   // Onboarding state
   const { isComplete: onboardingComplete, setIsComplete: setOnboardingComplete } = useOnboarding();
@@ -68,6 +70,13 @@ function AppContent() {
   // Filter to only LLM providers for agent creation
   const llmProviders = configuredProviders.filter(p => p.type === "llm");
 
+  // Project-scoped agent count (same logic as AgentsView)
+  const filteredAgentCount = useMemo(() => {
+    if (currentProjectId === null) return agents.length;
+    if (currentProjectId === "unassigned") return agents.filter(a => !a.projectId).length;
+    return agents.filter(a => a.projectId === currentProjectId).length;
+  }, [agents, currentProjectId]);
+
   // UI state
   const [showCreate, setShowCreate] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
@@ -76,16 +85,20 @@ function AppContent() {
   const [taskCount, setTaskCount] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Fetch task count periodically
+  // Fetch task count on telemetry status changes (project-scoped)
   useEffect(() => {
     if (!shouldFetchData) return;
 
     const fetchTaskCount = async () => {
       try {
-        const res = await fetch("/api/tasks?status=pending", { headers: getAuthHeaders() });
+        let url = "/api/tasks?status=pending";
+        if (currentProjectId !== null) {
+          url += `&project_id=${encodeURIComponent(currentProjectId)}`;
+        }
+        const res = await fetch(url, { headers: getAuthHeaders() });
         if (res.ok) {
           const data = await res.json();
-          setTaskCount(data.count || 0);
+          setTaskCount(data.count ?? (data.tasks || []).length);
         }
       } catch {
         // Ignore errors
@@ -93,9 +106,7 @@ function AppContent() {
     };
 
     fetchTaskCount();
-    const interval = setInterval(fetchTaskCount, 15000);
-    return () => clearInterval(interval);
-  }, [shouldFetchData, accessToken]);
+  }, [shouldFetchData, accessToken, currentProjectId, agents, statusChangeCounter]);
 
   // Form state
   const [newAgent, setNewAgent] = useState<NewAgentForm>({
@@ -233,7 +244,7 @@ function AppContent() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
           route={route}
-          agentCount={agents.length}
+          agentCount={filteredAgentCount}
           taskCount={taskCount}
           onNavigate={handleNavigate}
           isOpen={mobileMenuOpen}
@@ -275,6 +286,8 @@ function AppContent() {
           {route === "mcp" && <McpPage />}
 
           {route === "skills" && <SkillsPage />}
+
+          {route === "tests" && <TestsPage />}
 
           {route === "telemetry" && <TelemetryPage />}
 

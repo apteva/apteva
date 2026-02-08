@@ -162,6 +162,110 @@ The new access token will be returned and a new refresh token cookie will be set
         },
       },
     },
+    "/version/update": {
+      post: {
+        tags: ["System"],
+        summary: "Update agent binary",
+        description: "Downloads the latest agent binary. Stops all running agents, updates, then restarts them.",
+        responses: {
+          "200": {
+            description: "Update result",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean" },
+                    version: { type: "string" },
+                    restarted: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          name: { type: "string" },
+                          success: { type: "boolean" },
+                          error: { type: "string", nullable: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "500": { description: "Update failed" },
+        },
+      },
+    },
+    "/features": {
+      get: {
+        tags: ["System"],
+        summary: "Get feature flags",
+        security: [],
+        responses: {
+          "200": {
+            description: "Feature flags",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    projects: { type: "boolean" },
+                    metaAgent: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/stats": {
+      get: {
+        tags: ["System"],
+        summary: "Get agent statistics",
+        responses: {
+          "200": {
+            description: "Agent statistics",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    totalAgents: { type: "integer" },
+                    runningAgents: { type: "integer" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/binary": {
+      get: {
+        tags: ["System"],
+        summary: "Get binary status",
+        responses: {
+          "200": {
+            description: "Binary availability info",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    exists: { type: "boolean" },
+                    platform: { type: "string" },
+                    arch: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/dashboard": {
       get: {
         tags: ["System"],
@@ -546,12 +650,39 @@ while (true) {
         },
       },
     },
+    "/agents/{agentId}/threads/{threadId}/messages": {
+      get: {
+        tags: ["Threads"],
+        summary: "List thread messages",
+        description: "Get all messages in a thread. Agent must be running.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" } },
+          { name: "threadId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "List of messages",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "array",
+                  items: { $ref: "#/components/schemas/Message" },
+                },
+              },
+            },
+          },
+          "400": { description: "Agent is not running" },
+          "404": { description: "Agent not found" },
+        },
+      },
+    },
     "/agents/{agentId}/memories": {
       get: {
         tags: ["Memory"],
         summary: "List agent memories",
         parameters: [
           { name: "agentId", in: "path", required: true, schema: { type: "string" } },
+          { name: "thread_id", in: "query", schema: { type: "string" }, description: "Filter memories by thread ID" },
         ],
         responses: {
           "200": {
@@ -592,6 +723,17 @@ while (true) {
           "201": { description: "Memory added" },
         },
       },
+      delete: {
+        tags: ["Memory"],
+        summary: "Clear all memories",
+        description: "Deletes all memories for the agent.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "All memories cleared" },
+        },
+      },
     },
     "/agents/{agentId}/memories/{memoryId}": {
       delete: {
@@ -612,6 +754,8 @@ while (true) {
         summary: "List agent files",
         parameters: [
           { name: "agentId", in: "path", required: true, schema: { type: "string" } },
+          { name: "thread_id", in: "query", schema: { type: "string" }, description: "Filter files by thread ID" },
+          { name: "limit", in: "query", schema: { type: "integer" }, description: "Max files to return" },
         ],
         responses: {
           "200": {
@@ -706,6 +850,7 @@ while (true) {
         summary: "List agent tasks",
         parameters: [
           { name: "agentId", in: "path", required: true, schema: { type: "string" } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["all", "pending", "running", "completed", "failed", "cancelled"], default: "all" }, description: "Filter tasks by status" },
         ],
         responses: {
           "200": {
@@ -719,6 +864,58 @@ while (true) {
               },
             },
           },
+        },
+      },
+    },
+    "/agents/{agentId}/api-key": {
+      get: {
+        tags: ["Agents"],
+        summary: "Get agent API key (masked)",
+        description: "Returns the agent's API key with most characters masked for security.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "Masked API key",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    apiKey: { type: "string", description: "Masked API key (first 8 chars + last 4)" },
+                    hasKey: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+          "404": { description: "Agent or key not found" },
+        },
+      },
+      post: {
+        tags: ["Agents"],
+        summary: "Regenerate agent API key",
+        description: "Generates a new API key for the agent. The full key is only shown once in the response.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "New API key (only time full key is visible)",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    apiKey: { type: "string", description: "Full new API key" },
+                    message: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          "404": { description: "Agent not found" },
         },
       },
     },
@@ -744,22 +941,96 @@ while (true) {
         },
       },
     },
+    "/discovery/agents": {
+      get: {
+        tags: ["Agents"],
+        summary: "Central agent discovery",
+        description: "Discovery endpoint for agents to find running peers in the same group.",
+        parameters: [
+          { name: "group", in: "query", schema: { type: "string" }, description: "Filter by agent group" },
+          { name: "exclude", in: "query", schema: { type: "string" }, description: "Agent ID to exclude from results" },
+        ],
+        responses: {
+          "200": {
+            description: "List of discoverable agents",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    agents: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          name: { type: "string" },
+                          url: { type: "string" },
+                          mode: { type: "string" },
+                          group: { type: "string", nullable: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/tasks": {
       get: {
         tags: ["Tasks"],
         summary: "List all tasks",
+        description: "Fetches tasks from all running agents. Supports filtering by status and project.",
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string", enum: ["all", "pending", "running", "completed", "failed", "cancelled"], default: "all" }, description: "Filter tasks by status" },
+          { name: "project_id", in: "query", schema: { type: "string" }, description: "Filter by project ID. Use 'unassigned' for agents without a project." },
+        ],
         responses: {
           "200": {
             description: "List of tasks",
             content: {
               "application/json": {
                 schema: {
-                  type: "array",
-                  items: { $ref: "#/components/schemas/Task" },
+                  type: "object",
+                  properties: {
+                    tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+                    count: { type: "integer" },
+                  },
                 },
               },
             },
           },
+        },
+      },
+    },
+    "/tasks/{agentId}/{taskId}": {
+      get: {
+        tags: ["Tasks"],
+        summary: "Get a single task",
+        description: "Get full details for a specific task from a specific agent, including execution trajectory.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" }, description: "Agent ID that owns the task" },
+          { name: "taskId", in: "path", required: true, schema: { type: "string" }, description: "Task ID" },
+        ],
+        responses: {
+          "200": {
+            description: "Task details with trajectory",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    task: { $ref: "#/components/schemas/TaskDetail" },
+                  },
+                },
+              },
+            },
+          },
+          "400": { description: "Agent is not running" },
+          "404": { description: "Agent not found" },
         },
       },
     },
@@ -1118,13 +1389,29 @@ Events are batched and sent periodically. Debug-level events are filtered out.`,
         description: `Server-Sent Events stream for real-time telemetry updates.
 
 Connect to this endpoint to receive live telemetry events as they are received from agents.
+Events are broadcast immediately when agents send them, enabling real-time activity feeds.
 
-**Example:**
+**Initial Connection:**
+On connect, you'll receive: \`{"connected":true}\`
+
+**Event Format:**
+Each event is a JSON object matching the TelemetryEvent schema.
+
+**Example - React hook for real-time activity:**
 \`\`\`javascript
 const eventSource = new EventSource('/api/telemetry/stream');
+
 eventSource.onmessage = (event) => {
   const data = JSON.parse(event.data);
-  console.log('Telemetry:', data);
+  if (data.type === 'thread_activity') {
+    // Update activity feed
+    console.log(\`[\${data.agent_id}] \${data.data?.activity}\`);
+  }
+};
+
+eventSource.onerror = () => {
+  // Reconnect logic
+  eventSource.close();
 };
 \`\`\``,
         responses: {
@@ -1146,12 +1433,27 @@ eventSource.onmessage = (event) => {
       get: {
         tags: ["Telemetry"],
         summary: "Query telemetry events",
-        description: "Query stored telemetry events with optional filters.",
+        description: `Query stored telemetry events with optional filters.
+
+**Common Event Types:**
+- \`thread_activity\` - Agent activity updates (used for dashboard activity feed)
+- \`llm_request\` / \`llm_response\` - LLM API calls
+- \`tool_call\` / \`tool_result\` - Tool executions
+- \`memory_store\` / \`memory_recall\` - Memory operations
+- \`task_start\` / \`task_complete\` - Task lifecycle
+- \`agent_start\` / \`agent_stop\` - Agent lifecycle
+- \`error\` - Error events
+
+**Example - Get recent activity for dashboard:**
+\`\`\`
+GET /api/telemetry/events?type=thread_activity&limit=20
+\`\`\``,
         parameters: [
           { name: "agent_id", in: "query", schema: { type: "string" }, description: "Filter by agent ID" },
           { name: "project_id", in: "query", schema: { type: "string" }, description: "Filter by project ID (use 'null' for unassigned)" },
-          { name: "category", in: "query", schema: { type: "string" }, description: "Filter by category (llm, tool, memory, etc.)" },
-          { name: "level", in: "query", schema: { type: "string" }, description: "Filter by level (info, warn, error)" },
+          { name: "category", in: "query", schema: { type: "string", enum: ["llm", "tool", "memory", "task", "agent", "mcp", "system"] }, description: "Filter by category" },
+          { name: "type", in: "query", schema: { type: "string" }, description: "Filter by event type (e.g., thread_activity, llm_request, tool_call)" },
+          { name: "level", in: "query", schema: { type: "string", enum: ["info", "warn", "error"] }, description: "Filter by level" },
           { name: "trace_id", in: "query", schema: { type: "string" }, description: "Filter by trace ID" },
           { name: "since", in: "query", schema: { type: "string", format: "date-time" }, description: "Events after this timestamp" },
           { name: "until", in: "query", schema: { type: "string", format: "date-time" }, description: "Events before this timestamp" },
@@ -1640,6 +1942,16 @@ eventSource.onmessage = (event) => {
           createdAt: { type: "string", format: "date-time" },
         },
       },
+      Message: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          role: { type: "string", enum: ["user", "assistant", "system"] },
+          content: { type: "string" },
+          threadId: { type: "string" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
       Task: {
         type: "object",
         properties: {
@@ -1650,11 +1962,75 @@ eventSource.onmessage = (event) => {
           status: { type: "string", enum: ["pending", "running", "completed", "failed", "cancelled"] },
           priority: { type: "integer" },
           source: { type: "string", enum: ["local", "delegated"] },
-          createdAt: { type: "string", format: "date-time" },
-          executeAt: { type: "string", format: "date-time" },
-          executedAt: { type: "string", format: "date-time" },
+          created_at: { type: "string", format: "date-time" },
+          execute_at: { type: "string", format: "date-time", nullable: true },
+          executed_at: { type: "string", format: "date-time", nullable: true },
+          completed_at: { type: "string", format: "date-time", nullable: true },
+          recurrence: { type: "string", nullable: true, description: "Cron expression for recurring tasks" },
+          next_run: { type: "string", format: "date-time", nullable: true, description: "Next scheduled run for recurring tasks" },
+          result: { type: "object", nullable: true, description: "Task result data (present when completed)" },
+          error: { type: "string", nullable: true, description: "Error message (present when failed)" },
+          agentId: { type: "string", description: "ID of the agent that owns this task" },
+          agentName: { type: "string", description: "Name of the agent that owns this task" },
+        },
+      },
+      TaskDetail: {
+        type: "object",
+        description: "Full task detail including trajectory (returned by single task endpoint)",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          description: { type: "string" },
+          type: { type: "string", enum: ["once", "recurring"] },
+          status: { type: "string", enum: ["pending", "running", "completed", "failed", "cancelled"] },
+          priority: { type: "integer" },
+          source: { type: "string", enum: ["local", "delegated"] },
+          created_at: { type: "string", format: "date-time" },
+          execute_at: { type: "string", format: "date-time", nullable: true },
+          executed_at: { type: "string", format: "date-time", nullable: true },
+          completed_at: { type: "string", format: "date-time", nullable: true },
+          recurrence: { type: "string", nullable: true },
+          next_run: { type: "string", format: "date-time", nullable: true },
+          result: { type: "object", nullable: true },
+          error: { type: "string", nullable: true },
           agentId: { type: "string" },
           agentName: { type: "string" },
+          trajectory: {
+            type: "array",
+            nullable: true,
+            description: "Step-by-step execution trajectory of the task",
+            items: { $ref: "#/components/schemas/TaskTrajectoryStep" },
+          },
+        },
+      },
+      TaskTrajectoryStep: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          role: { type: "string", enum: ["user", "assistant"] },
+          content: {
+            description: "Text content or array of tool use/result blocks",
+            oneOf: [
+              { type: "string" },
+              {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    type: { type: "string", enum: ["tool_use", "tool_result"] },
+                    id: { type: "string" },
+                    name: { type: "string", description: "Tool name (for tool_use)" },
+                    input: { type: "object", description: "Tool input (for tool_use)" },
+                    tool_use_id: { type: "string", description: "Referenced tool_use ID (for tool_result)" },
+                    content: { type: "string", description: "Result text (for tool_result)" },
+                    is_error: { type: "boolean", description: "Whether the tool errored (for tool_result)" },
+                  },
+                },
+              },
+            ],
+          },
+          created_at: { type: "string", format: "date-time" },
+          model: { type: "string", nullable: true },
         },
       },
       Skill: {
@@ -1700,6 +2076,12 @@ eventSource.onmessage = (event) => {
           port: { type: "integer", nullable: true },
           status: { type: "string", enum: ["stopped", "running"] },
           source: { type: "string", nullable: true },
+        },
+      },
+      McpServerResponse: {
+        type: "object",
+        properties: {
+          server: { $ref: "#/components/schemas/McpServer" },
         },
       },
       McpServerListResponse: {
@@ -1847,18 +2229,31 @@ eventSource.onmessage = (event) => {
       },
       TelemetryEvent: {
         type: "object",
+        description: `A telemetry event from an agent. Events capture LLM calls, tool usage, memory operations, and agent activity.
+
+**Common type values by category:**
+- **llm**: request, response, error
+- **tool**: call, result, error
+- **memory**: store, recall, consolidate
+- **task**: start, complete, fail
+- **agent**: start, stop, thread_activity
+- **system**: startup, shutdown, error`,
         properties: {
-          id: { type: "string" },
-          agent_id: { type: "string" },
-          timestamp: { type: "string", format: "date-time" },
-          category: { type: "string" },
-          type: { type: "string" },
-          level: { type: "string" },
-          trace_id: { type: "string", nullable: true },
-          thread_id: { type: "string", nullable: true },
-          data: { type: "object", nullable: true },
-          duration_ms: { type: "integer", nullable: true },
-          error: { type: "string", nullable: true },
+          id: { type: "string", description: "Unique event ID" },
+          agent_id: { type: "string", description: "ID of the agent that generated this event" },
+          timestamp: { type: "string", format: "date-time", description: "When the event occurred" },
+          category: { type: "string", enum: ["llm", "tool", "memory", "task", "agent", "mcp", "system"], description: "Event category" },
+          type: { type: "string", description: "Event type within category (e.g., 'thread_activity', 'request', 'call')" },
+          level: { type: "string", enum: ["info", "warn", "error"], description: "Severity level" },
+          trace_id: { type: "string", nullable: true, description: "Trace ID for correlating related events" },
+          thread_id: { type: "string", nullable: true, description: "Conversation thread ID" },
+          data: {
+            type: "object",
+            nullable: true,
+            description: "Event-specific data. For thread_activity: { activity: string }. For llm: { model, tokens, prompt_tokens, completion_tokens }. For tool: { tool_name, input, output }."
+          },
+          duration_ms: { type: "integer", nullable: true, description: "Duration in milliseconds (for timed operations)" },
+          error: { type: "string", nullable: true, description: "Error message if this is an error event" },
         },
       },
       TelemetryUsage: {

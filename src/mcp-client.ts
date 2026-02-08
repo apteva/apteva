@@ -139,16 +139,22 @@ export async function startMcpProcess(
       return { success: false, error: `Process exited: ${stderr || "unknown error"}` };
     }
 
-    // Start HTTP proxy server if port specified
+    // Start HTTP proxy server if port specified (retry once if port busy from previous process)
     if (httpPort) {
-      try {
-        const httpServer = startHttpProxy(serverId, httpPort);
-        entry.httpServer = httpServer;
-        entry.httpPort = httpPort;
-        console.log(`[MCP] HTTP proxy for ${serverId} started on port ${httpPort}`);
-      } catch (err) {
-        // HTTP proxy failed, but stdio process is running - still usable
-        console.error(`[MCP] Failed to start HTTP proxy for ${serverId}:`, err);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const httpServer = startHttpProxy(serverId, httpPort);
+          entry.httpServer = httpServer;
+          entry.httpPort = httpPort;
+          console.log(`[MCP] HTTP proxy for ${serverId} started on port ${httpPort}`);
+          break;
+        } catch (err: any) {
+          if (err?.code === "EADDRINUSE" && attempt < 2) {
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
+          console.error(`[MCP] Failed to start HTTP proxy for ${serverId}:`, err);
+        }
       }
     }
 

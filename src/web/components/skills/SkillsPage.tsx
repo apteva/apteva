@@ -325,7 +325,7 @@ export function SkillsPage() {
                   : "text-[#666] hover:text-[#888]"
               }`}
             >
-              Installed ({skills.length})
+              Installed ({filteredSkills.length})
             </button>
             <button
               onClick={() => setActiveTab("github")}

@@ -503,8 +503,8 @@ export async function startAgentProcess(
     const proc = spawn({
       cmd: [binaryPath],
       env,
-      stdout: "inherit",
-      stderr: "inherit",
+      stdout: "ignore",
+      stderr: "ignore",
     });
 
     // Store process with port for tracking

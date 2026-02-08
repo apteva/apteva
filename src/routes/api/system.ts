@@ -126,8 +126,17 @@ export async function handleSystemRoutes(
   if (path === "/api/tasks" && method === "GET") {
     const url = new URL(req.url);
     const status = url.searchParams.get("status") || "all";
+    const projectId = url.searchParams.get("project_id");
 
-    const runningAgents = AgentDB.findAll().filter(a => a.status === "running" && a.port);
+    let runningAgents = AgentDB.findAll().filter(a => a.status === "running" && a.port);
+
+    // Filter agents by project if requested
+    if (projectId === "unassigned") {
+      runningAgents = runningAgents.filter(a => !a.project_id);
+    } else if (projectId) {
+      runningAgents = runningAgents.filter(a => a.project_id === projectId);
+    }
+
     const allTasks: any[] = [];
 
     for (const agent of runningAgents) {

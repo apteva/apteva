@@ -5,7 +5,7 @@ import { Select } from "../common/Select";
 import { useProjects, useAuth, type Project } from "../../context";
 import type { Provider } from "../../types";
 
-type SettingsTab = "providers" | "projects" | "account" | "updates" | "data";
+type SettingsTab = "providers" | "projects" | "api-keys" | "account" | "updates" | "data";
 
 export function SettingsPage() {
   const { projectsEnabled } = useProjects();
@@ -14,6 +14,7 @@ export function SettingsPage() {
   const tabs: { key: SettingsTab; label: string }[] = [
     { key: "providers", label: "Providers" },
     ...(projectsEnabled ? [{ key: "projects" as SettingsTab, label: "Projects" }] : []),
+    { key: "api-keys", label: "API Keys" },
     { key: "account", label: "Account" },
     { key: "updates", label: "Updates" },
     { key: "data", label: "Data" },
@@ -59,6 +60,7 @@ export function SettingsPage() {
       <div className="flex-1 overflow-auto p-4 md:p-6">
         {activeTab === "providers" && <ProvidersSettings />}
         {activeTab === "projects" && projectsEnabled && <ProjectsSettings />}
+        {activeTab === "api-keys" && <ApiKeysSettings />}
         {activeTab === "account" && <AccountSettings />}
         {activeTab === "updates" && <UpdatesSettings />}
         {activeTab === "data" && <DataSettings />}
@@ -974,6 +976,8 @@ function IntegrationKeyCard({
   const [keys, setKeys] = useState<IntegrationKey[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [expanded, setExpanded] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [localSaving, setLocalSaving] = useState(false);
   const { confirm, ConfirmDialog } = useConfirm();
 
   // Fetch all keys for this provider
@@ -993,8 +997,18 @@ function IntegrationKeyCard({
     }
   }, [provider.id, projectsEnabled]);
 
+  // Clear local error when starting to edit
+  useEffect(() => {
+    if (isEditing) {
+      setLocalError(null);
+    }
+  }, [isEditing]);
+
   const handleSaveWithProject = async () => {
     if (!apiKey) return;
+
+    setLocalSaving(true);
+    setLocalError(null);
 
     try {
       const res = await authFetch(`/api/keys/${provider.id}`, {
@@ -1006,16 +1020,22 @@ function IntegrationKeyCard({
         }),
       });
 
+      const data = await res.json();
+
       if (res.ok) {
         onApiKeyChange("");
         setSelectedProjectId("");
         onCancelEdit();
         fetchKeys();
         onRefresh();
+      } else {
+        setLocalError(data.error || "Failed to save key");
       }
     } catch (e) {
       console.error("Failed to save key:", e);
+      setLocalError("Failed to save key");
     }
+    setLocalSaving(false);
   };
 
   const handleDeleteKey = async (keyId: string, keyName: string | null) => {
@@ -1237,14 +1257,14 @@ function IntegrationKeyCard({
               ]}
             />
 
-            {error && <p className="text-red-400 text-sm">{error}</p>}
-            {success && <p className="text-green-400 text-sm">{success}</p>}
+            {localError && <p className="text-red-400 text-sm">{localError}</p>}
 
             <div className="flex gap-2">
               <button
                 onClick={() => {
                   onCancelEdit();
                   setSelectedProjectId("");
+                  setLocalError(null);
                 }}
                 className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
               >
@@ -1252,10 +1272,10 @@ function IntegrationKeyCard({
               </button>
               <button
                 onClick={handleSaveWithProject}
-                disabled={!apiKey || saving}
+                disabled={!apiKey || localSaving}
                 className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
               >
-                {saving ? "Saving..." : "Save"}
+                {localSaving ? "Saving..." : "Save"}
               </button>
             </div>
           </div>
@@ -1278,6 +1298,269 @@ function IntegrationKeyCard({
           </div>
         )}
       </div>
+    </div>
+    </>
+  );
+}
+
+interface ApiKeyItem {
+  id: string;
+  name: string;
+  prefix: string;
+  is_active: boolean;
+  expires_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+function ApiKeysSettings() {
+  const { authFetch } = useAuth();
+  const [keys, setKeys] = useState<ApiKeyItem[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [name, setName] = useState("");
+  const [expiresInDays, setExpiresInDays] = useState<string>("90");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
+
+  const fetchKeys = async () => {
+    try {
+      const res = await authFetch("/api/keys/personal");
+      const data = await res.json();
+      setKeys(data.keys || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    fetchKeys();
+  }, []);
+
+  const handleCreate = async () => {
+    if (!name.trim()) {
+      setError("Name is required");
+      return;
+    }
+    setCreating(true);
+    setError(null);
+
+    try {
+      const res = await authFetch("/api/keys/personal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          expires_in_days: expiresInDays ? parseInt(expiresInDays) : null,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to create key");
+      } else {
+        setNewKey(data.key);
+        setName("");
+        setExpiresInDays("90");
+        fetchKeys();
+      }
+    } catch {
+      setError("Failed to create key");
+    }
+    setCreating(false);
+  };
+
+  const handleDelete = async (id: string, keyName: string) => {
+    const confirmed = await confirm(`Delete API key "${keyName}"? This cannot be undone.`, { confirmText: "Delete", title: "Delete API Key" });
+    if (!confirmed) return;
+
+    try {
+      await authFetch(`/api/keys/personal/${id}`, { method: "DELETE" });
+      fetchKeys();
+    } catch {
+      // ignore
+    }
+  };
+
+  const copyKey = () => {
+    if (newKey) {
+      navigator.clipboard.writeText(newKey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const formatDate = (dateStr: string | null) => {
+    if (!dateStr) return "Never";
+    const d = new Date(dateStr);
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  };
+
+  const isExpired = (expiresAt: string | null) => {
+    if (!expiresAt) return false;
+    return new Date(expiresAt) < new Date();
+  };
+
+  return (
+    <>
+    {ConfirmDialog}
+    <div className="max-w-4xl w-full">
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold mb-1">API Keys</h1>
+          <p className="text-[#666]">
+            Create personal API keys for programmatic access. Use them with the <code className="text-[#888] bg-[#1a1a1a] px-1 rounded text-xs">X-API-Key</code> header.
+          </p>
+        </div>
+        {!showCreate && !newKey && (
+          <button
+            onClick={() => { setShowCreate(true); setError(null); }}
+            className="flex items-center gap-2 bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition flex-shrink-0"
+          >
+            <PlusIcon className="w-4 h-4" />
+            New Key
+          </button>
+        )}
+      </div>
+
+      {/* Newly created key - show once */}
+      {newKey && (
+        <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 mb-6">
+          <div className="flex items-center gap-2 text-green-400 mb-2">
+            <CheckIcon className="w-5 h-5" />
+            <span className="font-medium">API key created</span>
+          </div>
+          <p className="text-sm text-[#888] mb-3">
+            Copy this key now. You won't be able to see it again.
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#e0e0e0] break-all select-all">
+              {newKey}
+            </code>
+            <button
+              onClick={copyKey}
+              className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded text-sm flex-shrink-0"
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <button
+            onClick={() => { setNewKey(null); setShowCreate(false); }}
+            className="mt-3 text-sm text-[#666] hover:text-[#888]"
+          >
+            Done
+          </button>
+        </div>
+      )}
+
+      {/* Create Form */}
+      {showCreate && !newKey && (
+        <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 mb-6">
+          <h3 className="font-medium mb-4">Create new API key</h3>
+          <div className="space-y-4 max-w-md">
+            <div>
+              <label className="block text-sm text-[#666] mb-1">Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="e.g. CI Pipeline, My Script"
+                autoFocus
+                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-[#666] mb-1">Expiration</label>
+              <select
+                value={expiresInDays}
+                onChange={e => setExpiresInDays(e.target.value)}
+                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              >
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="180">180 days</option>
+                <option value="365">1 year</option>
+                <option value="">No expiration</option>
+              </select>
+            </div>
+
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowCreate(false); setError(null); setName(""); }}
+                className="flex-1 px-3 py-2 border border-[#333] rounded text-sm hover:border-[#666]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={creating || !name.trim()}
+                className="flex-1 px-3 py-2 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+              >
+                {creating ? "Creating..." : "Create Key"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keys List */}
+      {keys.length === 0 ? (
+        <div className="text-center py-12 text-[#666]">
+          <p className="text-lg mb-2">No API keys yet</p>
+          <p className="text-sm">Create an API key to access apteva programmatically.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {keys.map(key => (
+            <div
+              key={key.id}
+              className={`bg-[#111] border rounded-lg p-4 flex items-center gap-4 ${
+                !key.is_active || isExpired(key.expires_at) ? "border-[#1a1a1a] opacity-60" : "border-[#1a1a1a]"
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="font-medium">{key.name}</h3>
+                  {!key.is_active && (
+                    <span className="text-xs text-red-400 bg-red-500/10 px-2 py-0.5 rounded">Revoked</span>
+                  )}
+                  {key.is_active && isExpired(key.expires_at) && (
+                    <span className="text-xs text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded">Expired</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 text-sm text-[#666]">
+                  <code className="font-mono text-xs bg-[#0a0a0a] px-2 py-0.5 rounded">{key.prefix}...</code>
+                  <span>Created {formatDate(key.created_at)}</span>
+                  {key.expires_at && <span>Expires {formatDate(key.expires_at)}</span>}
+                  {key.last_used_at && <span>Last used {formatDate(key.last_used_at)}</span>}
+                </div>
+              </div>
+              {key.is_active && (
+                <button
+                  onClick={() => handleDelete(key.id, key.name)}
+                  className="text-sm text-red-400 hover:text-red-300 px-2 py-1 flex-shrink-0"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Usage Info */}
+      {keys.length > 0 && (
+        <div className="mt-6 bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+          <h3 className="font-medium mb-2 text-sm">Usage</h3>
+          <code className="block bg-[#0a0a0a] px-3 py-2 rounded font-mono text-xs text-[#888]">
+            curl -H "X-API-Key: apt_..." http://localhost:4280/api/agents
+          </code>
+        </div>
+      )}
     </div>
     </>
   );

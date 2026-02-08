@@ -44,7 +44,7 @@ function extractEventStats(event: TelemetryEvent): {
 }
 
 export function TelemetryPage() {
-  const { events: realtimeEvents } = useTelemetryContext();
+  const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
   const { currentProjectId, currentProject } = useProjects();
   const { authFetch } = useAuth();
   const [fetchedStats, setFetchedStats] = useState<TelemetryStats | null>(null);
@@ -135,10 +135,7 @@ export function TelemetryPage() {
 
   useEffect(() => {
     fetchData();
-    // Refresh stats every 60 seconds (events come in real-time)
-    const interval = setInterval(fetchData, 60000);
-    return () => clearInterval(interval);
-  }, [filter, currentProjectId, authFetch]);
+  }, [filter, currentProjectId, authFetch, statusChangeCounter]);
 
   // Compute real-time stats from new events (not already counted in fetched stats)
   const stats = useMemo(() => {

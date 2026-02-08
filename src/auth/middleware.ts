@@ -1,5 +1,5 @@
 import { verifyAccessToken, getAuthStatus } from "./index";
-import { UserDB, type User } from "../db";
+import { UserDB, ApiKeyDB, type User } from "../db";
 
 // Extend Request type to include user
 declare global {
@@ -84,42 +84,58 @@ export async function authMiddleware(req: Request, path: string): Promise<{ resp
     // Users exist - require auth for these paths
   }
 
-  // Extract token from Authorization header
+  // Check for API key authentication (X-API-Key header or Bearer apt_... token)
+  const apiKeyHeader = req.headers.get("X-API-Key");
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
+  const apiKeyValue = apiKeyHeader || (bearerToken?.startsWith("apt_") ? bearerToken : null);
+
+  if (apiKeyValue) {
+    // API key auth
+    const result = ApiKeyDB.validate(apiKeyValue);
+    if (!result) {
+      return {
+        response: json({ error: "Invalid or expired API key", code: "INVALID_API_KEY" }, 401),
+        context,
+      };
+    }
+
+    context.user = result.user;
+    context.isAuthenticated = true;
+    context.isAdmin = result.user.role === "admin";
+  } else if (bearerToken) {
+    // JWT auth
+    const payload = verifyAccessToken(bearerToken);
+
+    if (!payload) {
+      return {
+        response: json({ error: "Invalid or expired token", code: "INVALID_TOKEN" }, 401),
+        context,
+      };
+    }
+
+    const user = UserDB.findById(payload.userId);
+    if (!user) {
+      return {
+        response: json({ error: "User not found", code: "USER_NOT_FOUND" }, 401),
+        context,
+      };
+    }
+
+    context.user = user;
+    context.isAuthenticated = true;
+    context.isAdmin = user.role === "admin";
+  } else {
     return {
       response: json({ error: "Unauthorized", code: "NO_TOKEN" }, 401),
       context,
     };
   }
 
-  const token = authHeader.slice(7);
-  const payload = verifyAccessToken(token);
-
-  if (!payload) {
-    return {
-      response: json({ error: "Invalid or expired token", code: "INVALID_TOKEN" }, 401),
-      context,
-    };
-  }
-
-  // Get user from database
-  const user = UserDB.findById(payload.userId);
-  if (!user) {
-    return {
-      response: json({ error: "User not found", code: "USER_NOT_FOUND" }, 401),
-      context,
-    };
-  }
-
-  // Update context
-  context.user = user;
-  context.isAuthenticated = true;
-  context.isAdmin = user.role === "admin";
-
   // Check admin-only paths
   if (ADMIN_PATHS.some(p => path === p || path.startsWith(p + "/"))) {
-    if (user.role !== "admin") {
+    if (!context.isAdmin) {
       return {
         response: json({ error: "Admin access required", code: "FORBIDDEN" }, 403),
         context,

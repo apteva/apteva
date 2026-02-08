@@ -15,4 +15,5 @@ export { Dashboard } from "./dashboard";
 export { TasksPage } from "./tasks";
 export { McpPage } from "./mcp";
 export { SkillsPage } from "./skills/SkillsPage";
+export { TestsPage } from "./tests/TestsPage";
 export { TelemetryPage } from "./telemetry/TelemetryPage";
