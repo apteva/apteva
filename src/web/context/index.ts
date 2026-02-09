@@ -1,4 +1,4 @@
-export { TelemetryProvider, useTelemetryContext, useTelemetry, useAgentActivity, useAgentStatusChange } from "./TelemetryContext";
+export { TelemetryProvider, useTelemetryContext, useTelemetry, useAgentActivity, useAgentStatusChange, useTaskChange } from "./TelemetryContext";
 export type { TelemetryEvent } from "./TelemetryContext";
 
 export { AuthProvider, useAuth, useAuthHeaders } from "./AuthContext";

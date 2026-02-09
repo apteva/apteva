@@ -948,9 +948,12 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
 
   const fetchStatus = async () => {
     try {
+      const serversUrl = projectId && projectId !== "unassigned"
+        ? `/api/mcp/servers?project=${encodeURIComponent(projectId)}`
+        : "/api/mcp/servers";
       const [providersRes, serversRes] = await Promise.all([
         authFetch("/api/providers"),
-        authFetch("/api/mcp/servers"),
+        authFetch(serversUrl),
       ]);
       const providersData = await providersRes.json();
       const serversData = await serversRes.json();
@@ -1037,7 +1040,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
 
   useEffect(() => {
     fetchStatus();
-  }, [authFetch]);
+  }, [authFetch, projectId]);
 
   if (loading) {
     return <div className="text-center py-8 text-[#666]">Loading...</div>;
@@ -1360,9 +1363,12 @@ function AgentDojoContent({
     setLoadingConfigs(true);
     try {
       const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const serversUrl = projectId && projectId !== "unassigned"
+        ? `/api/mcp/servers?project=${encodeURIComponent(projectId)}`
+        : "/api/mcp/servers";
       const [configsRes, serversRes] = await Promise.all([
         authFetch(`/api/integrations/agentdojo/configs${projectParam}`),
-        authFetch("/api/mcp/servers"),
+        authFetch(serversUrl),
       ]);
       const configsData = await configsRes.json();
       const serversData = await serversRes.json();

@@ -7,7 +7,7 @@ import type { Agent, Provider, Route, NewAgentForm } from "./types";
 import { DEFAULT_FEATURES } from "./types";
 
 // Context
-import { TelemetryProvider, AuthProvider, ProjectProvider, useAuth, useProjects, useAgentStatusChange } from "./context";
+import { TelemetryProvider, AuthProvider, ProjectProvider, useAuth, useProjects, useAgentStatusChange, useTaskChange } from "./context";
 
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
@@ -23,6 +23,7 @@ import {
   CreateAgentModal,
   AgentsView,
   Dashboard,
+  ActivityPage,
   TasksPage,
   McpPage,
   SkillsPage,
@@ -38,6 +39,7 @@ function AppContent() {
   const { isAuthenticated, isLoading: authLoading, hasUsers, accessToken, checkAuth } = useAuth();
   const { currentProjectId, refreshProjects } = useProjects();
   const statusChangeCounter = useAgentStatusChange();
+  const taskChangeCounter = useTaskChange();
 
   // Onboarding state
   const { isComplete: onboardingComplete, setIsComplete: setOnboardingComplete } = useOnboarding();
@@ -106,7 +108,7 @@ function AppContent() {
     };
 
     fetchTaskCount();
-  }, [shouldFetchData, accessToken, currentProjectId, agents, statusChangeCounter]);
+  }, [shouldFetchData, accessToken, currentProjectId, agents, statusChangeCounter, taskChangeCounter]);
 
   // Form state
   const [newAgent, setNewAgent] = useState<NewAgentForm>({
@@ -253,6 +255,13 @@ function AppContent() {
 
         <main className="flex-1 overflow-hidden flex">
           {route === "settings" && <SettingsPage />}
+
+          {route === "activity" && (
+            <ActivityPage
+              agents={agents}
+              loading={loading}
+            />
+          )}
 
           {route === "agents" && (
             <AgentsView

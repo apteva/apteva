@@ -158,8 +158,8 @@ async function cleanupOrphanedProcesses(): Promise<void> {
   }
 }
 
-// Run cleanup (don't block startup)
-cleanupOrphanedProcesses().catch(() => {});
+// Run cleanup (must complete before auto-restart to avoid killing freshly started agents)
+await cleanupOrphanedProcesses().catch(() => {});
 
 // In-memory store for running agent processes (agent_id -> { process, port })
 export const agentProcesses: Map<string, { proc: Subprocess; port: number }> = new Map();
@@ -357,7 +357,7 @@ const server = Bun.serve({
     const corsHeaders = {
       "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Key",
       "Access-Control-Allow-Credentials": "true",
     };
 

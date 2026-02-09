@@ -20,6 +20,7 @@ interface TelemetryContextValue {
   lastActivityByAgent: Record<string, { timestamp: string; category: string; type: string }>;
   activeAgents: Record<string, { type: string; expiresAt: number }>;
   statusChangeCounter: number;
+  taskChangeCounter: number;
   clearEvents: () => void;
 }
 
@@ -33,6 +34,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   const [lastActivityByAgent, setLastActivityByAgent] = useState<Record<string, { timestamp: string; category: string; type: string }>>({});
   const [activeAgents, setActiveAgents] = useState<Record<string, { type: string; expiresAt: number }>>({});
   const [statusChangeCounter, setStatusChangeCounter] = useState(0);
+  const [taskChangeCounter, setTaskChangeCounter] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -117,6 +119,11 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
             if (data.some((e: TelemetryEvent) => e.category === "system" && (e.type === "agent_started" || e.type === "agent_stopped"))) {
               setStatusChangeCounter(c => c + 1);
             }
+
+            // Detect task change events
+            if (data.some((e: TelemetryEvent) => e.category === "TASK" && (e.type === "task_created" || e.type === "task_updated" || e.type === "task_deleted"))) {
+              setTaskChangeCounter(c => c + 1);
+            }
           }
         } catch {
           // Ignore parse errors (likely keepalive or empty message)
@@ -162,7 +169,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <TelemetryContext.Provider value={{ connected, events, lastActivityByAgent, activeAgents, statusChangeCounter, clearEvents }}>
+    <TelemetryContext.Provider value={{ connected, events, lastActivityByAgent, activeAgents, statusChangeCounter, taskChangeCounter, clearEvents }}>
       {children}
     </TelemetryContext.Provider>
   );
@@ -234,4 +241,10 @@ export function useAgentActivity(agentId: string) {
 export function useAgentStatusChange(): number {
   const { statusChangeCounter } = useTelemetryContext();
   return statusChangeCounter;
+}
+
+// Hook to trigger task count refetch on task mutations
+export function useTaskChange(): number {
+  const { taskChangeCounter } = useTelemetryContext();
+  return taskChangeCounter;
 }
