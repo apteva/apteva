@@ -198,7 +198,18 @@ export function Dashboard({
                 >
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">{task.title}</p>
-                    <p className="text-sm text-[#666]">{task.agentName}</p>
+                    <p className="text-sm text-[#666]">
+                      {task.agentName}
+                      {task.recurrence && (
+                        <span className="ml-1 text-[#555]">· {formatCronShort(task.recurrence)}</span>
+                      )}
+                      {task.next_run && (
+                        <span className="ml-1 text-[#f97316]">· {formatRelativeShort(task.next_run)}</span>
+                      )}
+                      {!task.next_run && task.execute_at && (
+                        <span className="ml-1 text-[#f97316]">· {formatRelativeShort(task.execute_at)}</span>
+                      )}
+                    </p>
                   </div>
                   <TaskStatusBadge status={task.status} />
                 </div>
@@ -329,4 +340,73 @@ function TaskStatusBadge({ status }: { status: Task["status"] }) {
       {status}
     </span>
   );
+}
+
+// --- Schedule formatting helpers (compact versions for dashboard) ---
+
+const DASH_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function formatCronShort(cron: string): string {
+  try {
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return cron;
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+
+    if (minute.startsWith("*/") && hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+      const n = parseInt(minute.slice(2));
+      return n === 1 ? "Every min" : `Every ${n}min`;
+    }
+    if (minute !== "*" && !minute.includes("/") && hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+      return "Hourly";
+    }
+    if (hour.startsWith("*/") && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+      const n = parseInt(hour.slice(2));
+      return n === 1 ? "Hourly" : `Every ${n}h`;
+    }
+
+    const formatTime = (h: string, m: string): string => {
+      const hr = parseInt(h);
+      const mn = parseInt(m);
+      if (isNaN(hr)) return "";
+      const ampm = hr >= 12 ? "PM" : "AM";
+      const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+      return `${h12}:${mn.toString().padStart(2, "0")} ${ampm}`;
+    };
+
+    if (hour !== "*" && !hour.includes("/") && dayOfMonth === "*" && month === "*") {
+      const timeStr = formatTime(hour, minute);
+      if (dayOfWeek === "*") return `Daily ${timeStr}`;
+      const days = dayOfWeek.split(",").map(d => DASH_DAY_NAMES[parseInt(d.trim())] || d);
+      if (days.length === 1) return `${days[0]} ${timeStr}`;
+      return `${days.join(" & ")} ${timeStr}`;
+    }
+    return cron;
+  } catch {
+    return cron;
+  }
+}
+
+function formatRelativeShort(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = date.getTime() - now.getTime();
+  const isFuture = diffMs > 0;
+  const absDiffMs = Math.abs(diffMs);
+  const minutes = Math.floor(absDiffMs / 60000);
+  const hours = Math.floor(absDiffMs / 3600000);
+
+  const timeStr = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  const isToday = date.toDateString() === now.toDateString();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = date.toDateString() === tomorrow.toDateString();
+
+  if (isToday) {
+    if (minutes < 1) return "now";
+    if (minutes < 60) return isFuture ? `in ${minutes}m` : `${minutes}m ago`;
+    return isFuture ? `in ${hours}h` : `${hours}h ago`;
+  }
+  if (isTomorrow) return `Tomorrow ${timeStr}`;
+  return `${DASH_DAY_NAMES[date.getDay()]} ${timeStr}`;
 }

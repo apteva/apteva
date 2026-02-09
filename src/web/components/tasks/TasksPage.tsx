@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { TasksIcon, CloseIcon } from "../common/Icons";
+import { TasksIcon, CloseIcon, RecurringIcon, ScheduledIcon, TaskOnceIcon } from "../common/Icons";
 import { useAuth, useProjects } from "../../context";
 import { useTelemetry } from "../../context/TelemetryContext";
 import type { Task, TaskTrajectoryStep, ToolUseBlock, ToolResultBlock } from "../../types";
@@ -157,14 +157,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1">
                       <h3 className="font-medium">{task.title}</h3>
-                      <p className="text-sm text-[#666]">
-                        {task.agentName}
-                        {task.execute_at && (
-                          <span className="ml-2">
-                            · Scheduled: {new Date(task.execute_at).toLocaleString()}
-                          </span>
-                        )}
-                      </p>
+                      <p className="text-sm text-[#666]">{task.agentName}</p>
                     </div>
                     <span className={`px-2 py-1 rounded text-xs font-medium ${statusColors[task.status] || statusColors.pending}`}>
                       {task.status}
@@ -178,10 +171,23 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
                   )}
 
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#555]">
-                    <span>Type: {task.type}</span>
+                    <span className="flex items-center gap-1">
+                      {task.type === "recurring"
+                        ? <RecurringIcon className="w-3.5 h-3.5" />
+                        : task.execute_at
+                          ? <ScheduledIcon className="w-3.5 h-3.5" />
+                          : <TaskOnceIcon className="w-3.5 h-3.5" />
+                      }
+                      {task.type === "recurring" && task.recurrence ? formatCron(task.recurrence) : task.type}
+                    </span>
                     <span>Priority: {task.priority}</span>
-                    {task.recurrence && <span>Recurrence: {task.recurrence}</span>}
-                    <span>Created: {new Date(task.created_at).toLocaleString()}</span>
+                    {task.next_run && (
+                      <span className="text-[#f97316]">{formatRelativeTime(task.next_run)}</span>
+                    )}
+                    {!task.next_run && task.execute_at && (
+                      <span className="text-[#f97316]">{formatRelativeTime(task.execute_at)}</span>
+                    )}
+                    <span>Created: {new Date(task.created_at).toLocaleDateString()}</span>
                   </div>
                 </div>
               ))}
@@ -266,7 +272,8 @@ function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading }
           {task.recurrence && (
             <div>
               <span className="text-[#666]">Recurrence</span>
-              <p>{task.recurrence}</p>
+              <p>{formatCron(task.recurrence)}</p>
+              <p className="text-xs text-[#444] mt-0.5 font-mono">{task.recurrence}</p>
             </div>
           )}
         </div>
@@ -280,7 +287,7 @@ function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading }
           {task.execute_at && (
             <div className="flex justify-between">
               <span className="text-[#666]">Scheduled</span>
-              <span>{new Date(task.execute_at).toLocaleString()}</span>
+              <span className="text-[#f97316]">{formatRelativeTime(task.execute_at)}</span>
             </div>
           )}
           {task.executed_at && (
@@ -298,7 +305,7 @@ function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading }
           {task.next_run && (
             <div className="flex justify-between">
               <span className="text-[#666]">Next Run</span>
-              <span>{new Date(task.next_run).toLocaleString()}</span>
+              <span className="text-[#f97316]">{formatRelativeTime(task.next_run)}</span>
             </div>
           )}
         </div>
@@ -487,4 +494,104 @@ function TrajectoryView({ trajectory }: { trajectory: TaskTrajectoryStep[] }) {
       })}
     </div>
   );
+}
+
+// --- Schedule formatting helpers ---
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function formatCron(cron: string): string {
+  try {
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return cron;
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+
+    // Every N minutes: */N * * * *
+    if (minute.startsWith("*/") && hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+      const n = parseInt(minute.slice(2));
+      if (n === 1) return "Every minute";
+      return `Every ${n} minutes`;
+    }
+
+    // Every hour: 0 * * * *
+    if (minute !== "*" && !minute.includes("/") && hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+      return "Every hour";
+    }
+
+    // Every N hours: 0 */N * * *
+    if (hour.startsWith("*/") && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+      const n = parseInt(hour.slice(2));
+      if (n === 1) return "Every hour";
+      return `Every ${n} hours`;
+    }
+
+    const formatTime = (h: string, m: string): string => {
+      const hr = parseInt(h);
+      const mn = parseInt(m);
+      if (isNaN(hr)) return "";
+      const ampm = hr >= 12 ? "PM" : "AM";
+      const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+      return `${h12}:${mn.toString().padStart(2, "0")} ${ampm}`;
+    };
+
+    if (hour !== "*" && !hour.includes("/") && dayOfMonth === "*" && month === "*") {
+      const timeStr = formatTime(hour, minute);
+
+      if (dayOfWeek === "*") return `Daily at ${timeStr}`;
+
+      const days = dayOfWeek.split(",").map(d => {
+        const num = parseInt(d.trim());
+        return DAY_NAMES[num] || d;
+      });
+
+      if (days.length === 7) return `Daily at ${timeStr}`;
+      if (days.length === 5 && !days.includes("Sat") && !days.includes("Sun")) {
+        return `Weekdays at ${timeStr}`;
+      }
+      if (days.length === 1) return `Weekly on ${days[0]} at ${timeStr}`;
+      return `${days.join(" & ")} at ${timeStr}`;
+    }
+
+    return cron;
+  } catch {
+    return cron;
+  }
+}
+
+function formatRelativeTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = date.getTime() - now.getTime();
+  const absDiffMs = Math.abs(diffMs);
+  const isFuture = diffMs > 0;
+
+  const minutes = Math.floor(absDiffMs / 60000);
+  const hours = Math.floor(absDiffMs / 3600000);
+  const days = Math.floor(absDiffMs / 86400000);
+
+  const timeStr = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  const isToday = date.toDateString() === now.toDateString();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = date.toDateString() === tomorrow.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  if (isToday) {
+    if (minutes < 1) return isFuture ? "now" : "just now";
+    if (minutes < 60) return isFuture ? `in ${minutes} min (${timeStr})` : `${minutes} min ago`;
+    return isFuture ? `in ${hours}h (${timeStr})` : `${hours}h ago`;
+  }
+
+  if (isTomorrow) return `Tomorrow at ${timeStr}`;
+  if (isYesterday) return `Yesterday at ${timeStr}`;
+
+  if (days < 7) {
+    const dayName = DAY_NAMES[date.getDay()];
+    return `${dayName} at ${timeStr}`;
+  }
+
+  return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` at ${timeStr}`;
 }
