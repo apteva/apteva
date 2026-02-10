@@ -347,6 +347,25 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
     },
   },
   {
+    name: "create_skill",
+    description: "Create a new skill. Skills are reusable instruction sets (markdown content) that give agents specialized capabilities. Provide a name, description, and the full instructions content (markdown). Optionally specify allowed MCP tools. If the user is working within a project, set project_id to scope the skill to that project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The skill name" },
+        description: { type: "string", description: "Short description of what the skill does" },
+        content: { type: "string", description: "Full skill instructions in markdown format" },
+        allowed_tools: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional list of MCP tool names this skill is allowed to use",
+        },
+        project_id: { type: "string", description: "Project ID to scope the skill to. Use the current project ID from context when the user is working within a project. Omit for a global skill." },
+      },
+      required: ["name", "description", "content"],
+    },
+  },
+  {
     name: "delete_skill",
     description: "Delete a skill. It will be unassigned from all agents.",
     inputSchema: {
@@ -824,6 +843,27 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `Removed skill from agent "${agent.name}". Restart the agent for changes to take effect.` }] };
       }
 
+      case "create_skill": {
+        if (!args.name || !args.description || !args.content) {
+          return { content: [{ type: "text", text: "name, description, and content are required" }], isError: true };
+        }
+        const newSkill = SkillDB.create({
+          name: args.name,
+          description: args.description,
+          content: args.content,
+          version: "1.0.0",
+          license: null,
+          compatibility: null,
+          metadata: {},
+          allowed_tools: args.allowed_tools || [],
+          source: "local",
+          source_url: null,
+          enabled: true,
+          project_id: args.project_id || null,
+        });
+        return { content: [{ type: "text", text: `Skill "${newSkill.name}" created (ID: ${newSkill.id}). You can now assign it to an agent with assign_skill_to_agent.` }] };
+      }
+
       case "delete_skill": {
         const skill = SkillDB.findById(args.skill_id);
         if (!skill) {
@@ -977,7 +1017,7 @@ You can manage:
 - AGENTS: Create, configure, start, stop, and delete AI agents. Each agent has a provider (LLM), model, system prompt, and optional features (memory, tasks, vision, MCP tools, files).
 - PROJECTS: Organize agents into projects for grouping.
 - MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Assign servers to agents.
-- SKILLS: Reusable instruction sets that specialize agent behavior. Assign skills to agents.
+- SKILLS: Reusable instruction sets that specialize agent behavior. Use create_skill to create new skills (pass project_id from context to scope to the current project), then assign them to agents. Use list_skills, get_skill, create_skill, toggle_skill, assign_skill_to_agent, unassign_skill_from_agent, delete_skill.
 - PROVIDERS: View which LLM providers have API keys configured.
 - TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Use list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
 

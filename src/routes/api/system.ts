@@ -139,17 +139,21 @@ export async function handleSystemRoutes(
 
     const allTasks: any[] = [];
 
-    for (const agent of runningAgents) {
-      const data = await fetchFromAgent(agent.id, agent.port!, `/tasks?status=${status}`);
-      if (data?.tasks) {
-        // Add agent info to each task
-        for (const task of data.tasks) {
-          allTasks.push({
-            ...task,
-            agentId: agent.id,
-            agentName: agent.name,
-          });
+    // Fetch tasks from all agents in parallel
+    const results = await Promise.all(
+      runningAgents.map(async (agent) => {
+        try {
+          const data = await fetchFromAgent(agent.id, agent.port!, `/tasks?status=${status}`);
+          return { agent, tasks: data?.tasks || [] };
+        } catch {
+          return { agent, tasks: [] };
         }
+      })
+    );
+
+    for (const { agent, tasks } of results) {
+      for (const task of tasks) {
+        allTasks.push({ ...task, agentId: agent.id, agentName: agent.name });
       }
     }
 
@@ -191,8 +195,18 @@ export async function handleSystemRoutes(
     let completedTasks = 0;
     let runningTasks = 0;
 
-    for (const agent of runningAgents) {
-      const data = await fetchFromAgent(agent.id, agent.port!, "/tasks?status=all");
+    // Fetch task stats from all agents in parallel
+    const taskResults = await Promise.all(
+      runningAgents.map(async (agent) => {
+        try {
+          return await fetchFromAgent(agent.id, agent.port!, "/tasks?status=all");
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    for (const data of taskResults) {
       if (data?.tasks) {
         totalTasks += data.tasks.length;
         for (const task of data.tasks) {

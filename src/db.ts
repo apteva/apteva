@@ -142,7 +142,7 @@ export interface ProviderKeyRow {
 export interface McpServer {
   id: string;
   name: string;
-  type: "npm" | "pip" | "github" | "http" | "custom";
+  type: "npm" | "pip" | "github" | "http" | "custom" | "local";
   package: string | null;       // npm or pip package name
   pip_module: string | null;    // For pip type: the module to run (e.g., "late.mcp")
   command: string | null;
@@ -194,6 +194,29 @@ export interface SkillRow {
   updated_at: string;
 }
 
+// Subscription: maps trigger events to agents for routing
+export interface Subscription {
+  id: string;
+  trigger_slug: string;
+  trigger_instance_id: string | null;
+  agent_id: string;
+  enabled: boolean;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionRow {
+  id: string;
+  trigger_slug: string;
+  trigger_instance_id: string | null;
+  agent_id: string;
+  enabled: number;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface McpServerRow {
   id: string;
   name: string;
@@ -212,6 +235,35 @@ export interface McpServerRow {
   created_at: string;
 }
 
+// MCP Server Tool types (for local servers)
+export interface McpServerTool {
+  id: string;
+  server_id: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, any>;
+  handler_type: "mock" | "http" | "javascript";
+  mock_response: Record<string, any> | null;
+  http_config: { method?: string; url: string; headers?: Record<string, string>; body?: any } | null;
+  code: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+
+interface McpServerToolRow {
+  id: string;
+  server_id: string;
+  name: string;
+  description: string;
+  input_schema: string;
+  handler_type: string;
+  mock_response: string | null;
+  http_config: string | null;
+  code: string | null;
+  enabled: number;
+  created_at: string;
+}
+
 // Database instance
 let db: Database;
 
@@ -227,10 +279,20 @@ export function initDatabase(dataDir: string): Database {
 
   // Enable WAL mode for better concurrent access
   db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA busy_timeout = 5000");
   db.run("PRAGMA foreign_keys = ON");
 
   // Run migrations
   runMigrations();
+
+  // Auto-set instance_url from env if not already configured
+  const envInstanceUrl = process.env.INSTANCE_URL || process.env.PUBLIC_URL;
+  if (envInstanceUrl) {
+    const current = SettingsDB.get("instance_url");
+    if (!current) {
+      SettingsDB.set("instance_url", envInstanceUrl.replace(/\/+$/, ""));
+    }
+  }
 
   // Database initialized silently
   return db;
@@ -636,6 +698,46 @@ function runMigrations() {
       `,
     },
     {
+      name: "030_create_mcp_server_tools",
+      sql: `
+        CREATE TABLE IF NOT EXISTS mcp_server_tools (
+          id TEXT PRIMARY KEY,
+          server_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL,
+          input_schema TEXT NOT NULL DEFAULT '{}',
+          handler_type TEXT NOT NULL DEFAULT 'mock',
+          mock_response TEXT DEFAULT '{}',
+          http_config TEXT DEFAULT NULL,
+          code TEXT DEFAULT NULL,
+          enabled INTEGER DEFAULT 1,
+          created_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_server_tools_name ON mcp_server_tools(server_id, name);
+        CREATE INDEX IF NOT EXISTS idx_mcp_server_tools_server ON mcp_server_tools(server_id);
+      `,
+    },
+    {
+      name: "031_create_subscriptions",
+      sql: `
+        CREATE TABLE IF NOT EXISTS subscriptions (
+          id TEXT PRIMARY KEY,
+          trigger_slug TEXT NOT NULL,
+          trigger_instance_id TEXT,
+          agent_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          project_id TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_agent ON subscriptions(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_trigger_slug ON subscriptions(trigger_slug);
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_trigger_instance ON subscriptions(trigger_instance_id);
+      `,
+    },
+    {
       name: "029_fix_provider_keys_unique_constraint",
       sql: `
         -- Recreate provider_keys table without UNIQUE constraint on provider_id alone
@@ -673,8 +775,8 @@ function runMigrations() {
   for (const migration of migrations) {
     if (!applied.has(migration.name)) {
       try {
-        // Migration runs silently
-        db.run(migration.sql);
+        // Migration runs silently (exec supports multi-statement SQL)
+        db.exec(migration.sql);
         db.run("INSERT INTO migrations (name) VALUES (?)", [migration.name]);
       } catch (err) {
         // Log error but continue - some migrations may fail if partially applied
@@ -742,7 +844,7 @@ function runSchemaUpgrades() {
 
   // Assign permanent ports to MCP servers that don't have one yet
   // (HTTP-type servers don't need a local proxy port)
-  const mcpWithoutPort = db.query("SELECT id FROM mcp_servers WHERE port IS NULL AND type != 'http'").all() as { id: string }[];
+  const mcpWithoutPort = db.query("SELECT id FROM mcp_servers WHERE port IS NULL AND type NOT IN ('http', 'local')").all() as { id: string }[];
   if (mcpWithoutPort.length > 0) {
     const MCP_BASE_PORT = 4500;
     const maxRow = db.query("SELECT MAX(port) as max_port FROM mcp_servers").get() as { max_port: number | null };
@@ -803,11 +905,12 @@ export const AgentDB = {
     return rows.map(rowToAgent);
   },
 
-  // Get running agents (for auto-restart)
+  // Get running agents
   findRunning(): Agent[] {
     const rows = db.query("SELECT * FROM agents WHERE status = 'running'").all() as AgentRow[];
     return rows.map(rowToAgent);
   },
+
 
   // Update agent
   update(id: string, updates: Partial<Omit<Agent, "id" | "created_at">>): Agent | null {
@@ -857,7 +960,6 @@ export const AgentDB = {
       fields.push("project_id = ?");
       values.push(updates.project_id);
     }
-
     if (fields.length > 0) {
       fields.push("updated_at = ?");
       values.push(new Date().toISOString());
@@ -1026,8 +1128,12 @@ export const ProjectDB = {
     return this.findById(id);
   },
 
-  // Delete project (agents will have project_id set to NULL)
+  // Delete project with full cleanup
+  // FK constraints handle: agents, mcp_servers, skills (SET NULL), provider_keys (CASCADE)
+  // Manual cleanup: subscriptions, test_cases (no FK on project_id)
   delete(id: string): boolean {
+    db.run("UPDATE subscriptions SET project_id = NULL WHERE project_id = ?", [id]);
+    db.run("UPDATE test_cases SET project_id = NULL WHERE project_id = ?", [id]);
     const result = db.run("DELETE FROM projects WHERE id = ?", [id]);
     return result.changes > 0;
   },
@@ -1318,8 +1424,8 @@ export const McpServerDB = {
     const envEncrypted = encryptObject(server.env || {});
     const headersEncrypted = encryptObject(server.headers || {});
     // Assign port permanently at creation time (like agents)
-    // HTTP-type servers don't need a local proxy port
-    const port = server.type === "http" ? null : this.getNextAvailablePort();
+    // HTTP and local servers don't need a local proxy port
+    const port = (server.type === "http" || server.type === "local") ? null : this.getNextAvailablePort();
     const stmt = db.prepare(`
       INSERT INTO mcp_servers (id, name, type, package, pip_module, command, args, env, url, headers, source, project_id, status, port, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?)
@@ -1334,6 +1440,15 @@ export const McpServerDB = {
   findById(id: string): McpServer | null {
     const row = db.query("SELECT * FROM mcp_servers WHERE id = ?").get(id) as McpServerRow | null;
     return row ? rowToMcpServer(row) : null;
+  },
+
+  findByIds(ids: string[]): Map<string, McpServer> {
+    if (ids.length === 0) return new Map();
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db.query(`SELECT * FROM mcp_servers WHERE id IN (${placeholders})`).all(...ids) as McpServerRow[];
+    const map = new Map<string, McpServer>();
+    for (const row of rows) map.set(row.id, rowToMcpServer(row));
+    return map;
   },
 
   findAll(): McpServer[] {
@@ -1468,6 +1583,111 @@ export const McpServerDB = {
     return rows.map(rowToMcpServer);
   },
 };
+
+// MCP Server Tool CRUD operations (for local servers)
+export const McpServerToolDB = {
+  create(tool: Omit<McpServerTool, "created_at">): McpServerTool {
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO mcp_server_tools (id, server_id, name, description, input_schema, handler_type, mock_response, http_config, code, enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        tool.id,
+        tool.server_id,
+        tool.name,
+        tool.description,
+        JSON.stringify(tool.input_schema || {}),
+        tool.handler_type || "mock",
+        tool.mock_response ? JSON.stringify(tool.mock_response) : null,
+        tool.http_config ? JSON.stringify(tool.http_config) : null,
+        tool.code || null,
+        tool.enabled ? 1 : 0,
+        now,
+      ],
+    );
+    return this.findById(tool.id)!;
+  },
+
+  findById(id: string): McpServerTool | null {
+    const row = db.query("SELECT * FROM mcp_server_tools WHERE id = ?").get(id) as McpServerToolRow | null;
+    return row ? rowToMcpServerTool(row) : null;
+  },
+
+  findByServer(serverId: string): McpServerTool[] {
+    const rows = db.query(
+      "SELECT * FROM mcp_server_tools WHERE server_id = ? ORDER BY created_at ASC",
+    ).all(serverId) as McpServerToolRow[];
+    return rows.map(rowToMcpServerTool);
+  },
+
+  findByServerAndName(serverId: string, name: string): McpServerTool | null {
+    const row = db.query(
+      "SELECT * FROM mcp_server_tools WHERE server_id = ? AND name = ?",
+    ).get(serverId, name) as McpServerToolRow | null;
+    return row ? rowToMcpServerTool(row) : null;
+  },
+
+  update(id: string, updates: Partial<Omit<McpServerTool, "id" | "server_id" | "created_at">>): McpServerTool | null {
+    const tool = this.findById(id);
+    if (!tool) return null;
+
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.name !== undefined) { fields.push("name = ?"); values.push(updates.name); }
+    if (updates.description !== undefined) { fields.push("description = ?"); values.push(updates.description); }
+    if (updates.input_schema !== undefined) { fields.push("input_schema = ?"); values.push(JSON.stringify(updates.input_schema)); }
+    if (updates.handler_type !== undefined) { fields.push("handler_type = ?"); values.push(updates.handler_type); }
+    if (updates.mock_response !== undefined) { fields.push("mock_response = ?"); values.push(updates.mock_response ? JSON.stringify(updates.mock_response) : null); }
+    if (updates.http_config !== undefined) { fields.push("http_config = ?"); values.push(updates.http_config ? JSON.stringify(updates.http_config) : null); }
+    if (updates.code !== undefined) { fields.push("code = ?"); values.push(updates.code); }
+    if (updates.enabled !== undefined) { fields.push("enabled = ?"); values.push(updates.enabled ? 1 : 0); }
+
+    if (fields.length > 0) {
+      values.push(id);
+      db.run(`UPDATE mcp_server_tools SET ${fields.join(", ")} WHERE id = ?`, values);
+    }
+    return this.findById(id);
+  },
+
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM mcp_server_tools WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+
+  deleteByServer(serverId: string): number {
+    const result = db.run("DELETE FROM mcp_server_tools WHERE server_id = ?", [serverId]);
+    return result.changes;
+  },
+
+  count(serverId: string): number {
+    const row = db.query("SELECT COUNT(*) as count FROM mcp_server_tools WHERE server_id = ?").get(serverId) as { count: number };
+    return row.count;
+  },
+};
+
+function rowToMcpServerTool(row: McpServerToolRow): McpServerTool {
+  let input_schema: Record<string, any> = {};
+  try { input_schema = JSON.parse(row.input_schema); } catch { /* */ }
+  let mock_response: Record<string, any> | null = null;
+  if (row.mock_response) { try { mock_response = JSON.parse(row.mock_response); } catch { /* */ } }
+  let http_config: McpServerTool["http_config"] = null;
+  if (row.http_config) { try { http_config = JSON.parse(row.http_config); } catch { /* */ } }
+
+  return {
+    id: row.id,
+    server_id: row.server_id,
+    name: row.name,
+    description: row.description,
+    input_schema,
+    handler_type: row.handler_type as McpServerTool["handler_type"],
+    mock_response,
+    http_config,
+    code: row.code,
+    enabled: row.enabled === 1,
+    created_at: row.created_at,
+  };
+}
 
 // Helper to convert DB row to McpServer type
 function rowToMcpServer(row: McpServerRow): McpServer {
@@ -2233,6 +2453,15 @@ export const SkillDB = {
     return row ? rowToSkill(row) : null;
   },
 
+  findByIds(ids: string[]): Map<string, Skill> {
+    if (ids.length === 0) return new Map();
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db.query(`SELECT * FROM skills WHERE id IN (${placeholders})`).all(...ids) as SkillRow[];
+    const map = new Map<string, Skill>();
+    for (const row of rows) map.set(row.id, rowToSkill(row));
+    return map;
+  },
+
   // Find skill by name
   findByName(name: string): Skill | null {
     const row = db.query("SELECT * FROM skills WHERE name = ?").get(name) as SkillRow | null;
@@ -2348,12 +2577,6 @@ export const SkillDB = {
     return row.count;
   },
 
-  // Check if skill with name exists
-  exists(name: string): boolean {
-    const row = db.query("SELECT COUNT(*) as count FROM skills WHERE name = ?").get(name) as { count: number };
-    return row.count > 0;
-  },
-
   // Find skills by project (null = global only)
   findByProject(projectId: string | null): Skill[] {
     if (projectId === null) {
@@ -2419,6 +2642,89 @@ function rowToSkill(row: SkillRow): Skill {
     updated_at: row.updated_at,
   };
 }
+
+// Subscription row → Subscription
+function rowToSubscription(row: SubscriptionRow): Subscription {
+  return {
+    id: row.id,
+    trigger_slug: row.trigger_slug,
+    trigger_instance_id: row.trigger_instance_id,
+    agent_id: row.agent_id,
+    enabled: row.enabled === 1,
+    project_id: row.project_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export const SubscriptionDB = {
+  create(sub: Omit<Subscription, "id" | "created_at" | "updated_at">): Subscription {
+    const id = generateId();
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO subscriptions (id, trigger_slug, trigger_instance_id, agent_id, enabled, project_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, sub.trigger_slug, sub.trigger_instance_id || null, sub.agent_id, sub.enabled ? 1 : 0, sub.project_id || null, now, now]
+    );
+    return this.findById(id)!;
+  },
+
+  findById(id: string): Subscription | null {
+    const row = db.query("SELECT * FROM subscriptions WHERE id = ?").get(id) as SubscriptionRow | null;
+    return row ? rowToSubscription(row) : null;
+  },
+
+  findByTriggerInstanceId(instanceId: string): Subscription[] {
+    const rows = db.query("SELECT * FROM subscriptions WHERE trigger_instance_id = ?").all(instanceId) as SubscriptionRow[];
+    return rows.map(rowToSubscription);
+  },
+
+  findByTriggerSlug(slug: string): Subscription[] {
+    const rows = db.query("SELECT * FROM subscriptions WHERE trigger_slug = ?").all(slug) as SubscriptionRow[];
+    return rows.map(rowToSubscription);
+  },
+
+  findByAgentId(agentId: string): Subscription[] {
+    const rows = db.query("SELECT * FROM subscriptions WHERE agent_id = ?").all(agentId) as SubscriptionRow[];
+    return rows.map(rowToSubscription);
+  },
+
+  findAll(projectId?: string | null): Subscription[] {
+    if (projectId) {
+      const rows = db.query("SELECT * FROM subscriptions WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as SubscriptionRow[];
+      return rows.map(rowToSubscription);
+    }
+    const rows = db.query("SELECT * FROM subscriptions ORDER BY created_at DESC").all() as SubscriptionRow[];
+    return rows.map(rowToSubscription);
+  },
+
+  update(id: string, updates: Partial<Pick<Subscription, "trigger_slug" | "trigger_instance_id" | "agent_id" | "enabled">>): Subscription | null {
+    const sub = this.findById(id);
+    if (!sub) return null;
+
+    const fields: string[] = [];
+    const values: (string | number | null)[] = [];
+
+    if (updates.trigger_slug !== undefined) { fields.push("trigger_slug = ?"); values.push(updates.trigger_slug); }
+    if (updates.trigger_instance_id !== undefined) { fields.push("trigger_instance_id = ?"); values.push(updates.trigger_instance_id || null); }
+    if (updates.agent_id !== undefined) { fields.push("agent_id = ?"); values.push(updates.agent_id); }
+    if (updates.enabled !== undefined) { fields.push("enabled = ?"); values.push(updates.enabled ? 1 : 0); }
+
+    if (fields.length === 0) return sub;
+
+    fields.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(id);
+
+    db.run(`UPDATE subscriptions SET ${fields.join(", ")} WHERE id = ?`, values);
+    return this.findById(id);
+  },
+
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM subscriptions WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+};
 
 // Generate unique ID
 export function generateId(): string {

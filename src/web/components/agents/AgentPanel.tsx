@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Chat } from "@apteva/apteva-kit";
-import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon } from "../common/Icons";
+import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, RecurringIcon, ScheduledIcon, TaskOnceIcon } from "../common/Icons";
+import { formatCron, formatRelativeTime } from "../tasks/TasksPage";
 import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
 import { useTelemetry } from "../../context";
@@ -152,7 +153,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedThread, setSelectedThread] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Array<{ role: string; content: string; created_at: string }>>([]);
+  const [initialMessages, setInitialMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const { confirm, ConfirmDialog } = useConfirm();
 
@@ -160,7 +161,6 @@ function ThreadsTab({ agent }: { agent: Agent }) {
   useEffect(() => {
     setThreads([]);
     setSelectedThread(null);
-    setMessages([]);
     setError(null);
     setLoading(true);
   }, [agent.id]);
@@ -188,19 +188,29 @@ function ThreadsTab({ agent }: { agent: Agent }) {
     fetchThreads();
   }, [agent.id, agent.status]);
 
-  const loadMessages = async (threadId: string) => {
-    setSelectedThread(threadId);
+  const openThread = async (threadId: string) => {
     setLoadingMessages(true);
+    setSelectedThread(threadId);
     try {
       const res = await fetch(`/api/agents/${agent.id}/threads/${threadId}/messages`);
-      if (!res.ok) throw new Error("Failed to fetch messages");
-      const data = await res.json();
-      setMessages(data.messages || []);
+      if (res.ok) {
+        const data = await res.json();
+        const msgs = (data.messages || [])
+          .filter((m: any) => typeof m.content === "string")
+          .map((m: any) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            timestamp: new Date(m.created_at),
+          }));
+        setInitialMessages(msgs);
+      } else {
+        setInitialMessages([]);
+      }
     } catch {
-      setMessages([]);
-    } finally {
-      setLoadingMessages(false);
+      setInitialMessages([]);
     }
+    setLoadingMessages(false);
   };
 
   const deleteThread = async (threadId: string, e: React.MouseEvent) => {
@@ -213,7 +223,6 @@ function ThreadsTab({ agent }: { agent: Agent }) {
       setThreads(prev => prev.filter(t => t.id !== threadId));
       if (selectedThread === threadId) {
         setSelectedThread(null);
-        setMessages([]);
       }
     } catch {
       // Ignore errors
@@ -244,7 +253,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
     );
   }
 
-  // Show messages view when a thread is selected
+  // Show live chat for selected thread
   if (selectedThread) {
     const selectedThreadData = threads.find(t => t.id === selectedThread);
     return (
@@ -252,15 +261,15 @@ function ThreadsTab({ agent }: { agent: Agent }) {
       {ConfirmDialog}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header with back button */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-[#1a1a1a]">
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-[#1a1a1a] flex-shrink-0">
           <button
-            onClick={() => { setSelectedThread(null); setMessages([]); }}
+            onClick={() => { setSelectedThread(null); setInitialMessages([]); }}
             className="text-[#666] hover:text-[#e0e0e0] transition text-lg"
           >
             ←
           </button>
-          <div className="flex-1">
-            <p className="text-sm font-medium">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">
               {selectedThreadData?.title || `Thread ${selectedThread.slice(0, 8)}`}
             </p>
             <p className="text-xs text-[#666]">
@@ -275,54 +284,22 @@ function ThreadsTab({ agent }: { agent: Agent }) {
           </button>
         </div>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-auto p-4">
-          {loadingMessages ? (
-            <p className="text-[#666]">Loading messages...</p>
-          ) : messages.length === 0 ? (
-            <p className="text-[#666]">No messages in this thread</p>
-          ) : (
-            <div className="space-y-4">
-              {messages.map((msg, i) => (
-                <div key={i} className={`${msg.role === "user" ? "text-right" : ""}`}>
-                  <div
-                    className={`inline-block max-w-[80%] p-3 rounded ${
-                      msg.role === "user"
-                        ? "bg-[#f97316]/20 text-[#f97316]"
-                        : "bg-[#1a1a1a] text-[#e0e0e0]"
-                    }`}
-                  >
-                    <div className="text-sm whitespace-pre-wrap">
-                      {typeof msg.content === "string"
-                        ? msg.content
-                        : Array.isArray(msg.content)
-                          ? msg.content.map((block: any, j: number) => (
-                              <div key={j}>
-                                {block.type === "text" && block.text}
-                                {block.type === "tool_use" && (
-                                  <div className="bg-[#222] p-2 rounded mt-1 text-xs text-[#888]">
-                                    🔧 Tool: {block.name}
-                                  </div>
-                                )}
-                                {block.type === "tool_result" && (
-                                  <div className="bg-[#222] p-2 rounded mt-1 text-xs text-[#888]">
-                                    📋 Result: {typeof block.content === "string" ? block.content.slice(0, 200) : "..."}
-                                  </div>
-                                )}
-                              </div>
-                            ))
-                          : JSON.stringify(msg.content)
-                      }
-                    </div>
-                    <p className="text-xs text-[#666] mt-1">
-                      {new Date(msg.created_at).toLocaleTimeString()}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Live chat in this thread */}
+        {loadingMessages ? (
+          <div className="flex-1 flex items-center justify-center text-[#666]">Loading messages...</div>
+        ) : (
+          <Chat
+            key={selectedThread}
+            agentId="default"
+            apiUrl={`/api/agents/${agent.id}`}
+            threadId={selectedThread}
+            initialMessages={initialMessages}
+            placeholder="Continue this conversation..."
+            context={agent.systemPrompt}
+            variant="terminal"
+            showHeader={false}
+          />
+        )}
       </div>
       </>
     );
@@ -342,7 +319,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
           {threads.map(thread => (
             <div
               key={thread.id}
-              onClick={() => loadMessages(thread.id)}
+              onClick={() => openThread(thread.id)}
               className="p-4 cursor-pointer hover:bg-[#111] transition flex items-center justify-between"
             >
               <div className="flex-1 min-w-0">
@@ -369,24 +346,11 @@ function ThreadsTab({ agent }: { agent: Agent }) {
   );
 }
 
-interface Task {
-  id: string;
-  name: string;
-  description?: string;
-  status: "pending" | "running" | "completed" | "failed";
-  created_at: string;
-  updated_at?: string;
-  scheduled_at?: string;
-  completed_at?: string;
-  result?: string;
-  error?: string;
-}
-
 function TasksTab({ agent }: { agent: Agent }) {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "pending" | "running" | "completed">("all");
+  const [filter, setFilter] = useState<string>("all");
   const { events } = useTelemetry({ agent_id: agent.id, category: "task" });
 
   // Reset state when agent changes
@@ -421,14 +385,12 @@ function TasksTab({ agent }: { agent: Agent }) {
     fetchTasks();
   }, [agent.id, agent.status, filter, events.length]);
 
-  const getStatusColor = (status: Task["status"]) => {
-    switch (status) {
-      case "pending": return "bg-yellow-500/20 text-yellow-400";
-      case "running": return "bg-blue-500/20 text-blue-400";
-      case "completed": return "bg-green-500/20 text-green-400";
-      case "failed": return "bg-red-500/20 text-red-400";
-      default: return "bg-[#222] text-[#666]";
-    }
+  const statusColors: Record<string, string> = {
+    pending: "bg-yellow-500/20 text-yellow-400",
+    running: "bg-blue-500/20 text-blue-400",
+    completed: "bg-green-500/20 text-green-400",
+    failed: "bg-red-500/20 text-red-400",
+    cancelled: "bg-gray-500/20 text-gray-400",
   };
 
   if (agent.status !== "running") {
@@ -466,63 +428,91 @@ function TasksTab({ agent }: { agent: Agent }) {
     );
   }
 
+  const filterOptions = [
+    { value: "all", label: "All" },
+    { value: "pending", label: "Pending" },
+    { value: "running", label: "Running" },
+    { value: "completed", label: "Completed" },
+    { value: "failed", label: "Failed" },
+  ];
+
   return (
     <div className="flex-1 overflow-auto p-4">
       {/* Filter tabs */}
       <div className="flex gap-2 mb-4">
-        {(["all", "pending", "running", "completed"] as const).map(status => (
+        {filterOptions.map(opt => (
           <button
-            key={status}
-            onClick={() => setFilter(status)}
-            className={`px-3 py-1 text-xs rounded transition ${
-              filter === status
+            key={opt.value}
+            onClick={() => setFilter(opt.value)}
+            className={`px-3 py-1.5 rounded text-sm transition ${
+              filter === opt.value
                 ? "bg-[#f97316] text-black"
-                : "bg-[#1a1a1a] text-[#666] hover:text-[#888]"
+                : "bg-[#1a1a1a] hover:bg-[#222]"
             }`}
           >
-            {status.charAt(0).toUpperCase() + status.slice(1)}
+            {opt.label}
           </button>
         ))}
       </div>
 
       {tasks.length === 0 ? (
-        <div className="text-center py-10 text-[#666]">
-          <p>No {filter === "all" ? "" : filter + " "}tasks</p>
+        <div className="text-center py-10">
+          <TasksIcon className="w-10 h-10 mx-auto mb-3 text-[#333]" />
+          <p className="text-[#666]">No {filter === "all" ? "" : filter + " "}tasks</p>
+          <p className="text-sm text-[#444] mt-1">Tasks will appear here when created</p>
         </div>
       ) : (
         <div className="space-y-3">
           {tasks.map(task => (
-            <div key={task.id} className="bg-[#111] border border-[#1a1a1a] rounded p-3">
-              <div className="flex items-start justify-between">
+            <div key={task.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+              <div className="flex items-start justify-between mb-2">
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-[#e0e0e0]">{task.name}</p>
-                  {task.description && (
-                    <p className="text-xs text-[#666] mt-1 line-clamp-2">{task.description}</p>
-                  )}
+                  <h3 className="font-medium">{task.title || task.name}</h3>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded ml-2 ${getStatusColor(task.status)}`}>
+                <span className={`px-2 py-1 rounded text-xs font-medium ml-2 ${statusColors[task.status] || statusColors.pending}`}>
                   {task.status}
                 </span>
               </div>
 
-              <div className="flex items-center gap-4 mt-2 text-xs text-[#666]">
-                <span>Created: {new Date(task.created_at).toLocaleString()}</span>
-                {task.scheduled_at && (
-                  <span>Scheduled: {new Date(task.scheduled_at).toLocaleString()}</span>
+              {task.description && (
+                <p className="text-sm text-[#888] mb-2 line-clamp-2">{task.description}</p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#555]">
+                <span className="flex items-center gap-1">
+                  {task.type === "recurring"
+                    ? <RecurringIcon className="w-3.5 h-3.5" />
+                    : task.execute_at
+                      ? <ScheduledIcon className="w-3.5 h-3.5" />
+                      : <TaskOnceIcon className="w-3.5 h-3.5" />
+                  }
+                  {task.type === "recurring" && task.recurrence ? formatCron(task.recurrence) : task.type || "once"}
+                </span>
+                {task.priority !== undefined && (
+                  <span>Priority: {task.priority}</span>
                 )}
+                {task.next_run && (
+                  <span className="text-[#f97316]">{formatRelativeTime(task.next_run)}</span>
+                )}
+                {!task.next_run && task.execute_at && (
+                  <span className="text-[#f97316]">{formatRelativeTime(task.execute_at)}</span>
+                )}
+                <span>Created: {new Date(task.created_at).toLocaleDateString()}</span>
               </div>
 
               {task.status === "completed" && task.result && (
-                <div className="mt-2 p-2 bg-[#0a0a0a] rounded text-xs text-[#888]">
-                  <p className="text-[#666] mb-1">Result:</p>
-                  <p className="whitespace-pre-wrap">{task.result}</p>
+                <div className="mt-3 bg-green-500/10 border border-green-500/20 rounded p-3">
+                  <h4 className="text-xs text-green-400 uppercase tracking-wider mb-1">Result</h4>
+                  <pre className="text-sm text-green-400 whitespace-pre-wrap break-words">
+                    {typeof task.result === "string" ? task.result : JSON.stringify(task.result, null, 2)}
+                  </pre>
                 </div>
               )}
 
               {task.status === "failed" && task.error && (
-                <div className="mt-2 p-2 bg-red-500/10 rounded text-xs text-red-400">
-                  <p className="text-red-400/70 mb-1">Error:</p>
-                  <p className="whitespace-pre-wrap">{task.error}</p>
+                <div className="mt-3 bg-red-500/10 border border-red-500/20 rounded p-3">
+                  <h4 className="text-xs text-red-400 uppercase tracking-wider mb-1">Error</h4>
+                  <pre className="text-sm text-red-400 whitespace-pre-wrap break-words">{task.error}</pre>
                 </div>
               )}
             </div>

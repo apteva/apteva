@@ -167,7 +167,9 @@ export const agentProcesses: Map<string, { proc: Subprocess; port: number }> = n
 // Track agents currently being started (to prevent race conditions)
 export const agentsStarting: Set<string> = new Set();
 
-// Graceful shutdown handler - stop all agents when server exits
+// Graceful shutdown handler - stop all agent processes when server exits
+// NOTE: We intentionally do NOT update DB status here — agents marked "running"
+// in the DB will be auto-restarted on next boot via findRunning() + resetAllStatus().
 async function shutdownAllAgents() {
   if (agentProcesses.size === 0) return;
 
@@ -182,7 +184,6 @@ async function shutdownAllAgents() {
       }).catch(() => {});
 
       proc.kill();
-      AgentDB.setStatus(agentId, "stopped");
     } catch {
       // Ignore errors during shutdown
     }
@@ -192,6 +193,7 @@ async function shutdownAllAgents() {
 
 // Handle process termination signals
 let shuttingDown = false;
+export function isShuttingDown(): boolean { return shuttingDown; }
 process.on("SIGINT", async () => {
   if (shuttingDown) return;
   shuttingDown = true;

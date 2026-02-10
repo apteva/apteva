@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import "@apteva/apteva-kit/styles.css";
 
@@ -12,27 +12,30 @@ import { TelemetryProvider, AuthProvider, ProjectProvider, useAuth, useProjects,
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
 
-// Components
+// Core components (always needed)
 import {
   LoadingSpinner,
   Header,
   Sidebar,
   ErrorBanner,
   OnboardingWizard,
-  SettingsPage,
   CreateAgentModal,
   AgentsView,
   Dashboard,
-  ActivityPage,
-  TasksPage,
-  McpPage,
-  SkillsPage,
-  TestsPage,
-  TelemetryPage,
   LoginPage,
 } from "./components";
-import { ApiDocsPage } from "./components/api/ApiDocsPage";
 import { MetaAgentProvider, MetaAgentPanel } from "./components/meta-agent/MetaAgent";
+
+// Lazy-loaded page components (only loaded when navigated to)
+const SettingsPage = lazy(() => import("./components/settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
+const ActivityPage = lazy(() => import("./components/activity/ActivityPage").then(m => ({ default: m.ActivityPage })));
+const TasksPage = lazy(() => import("./components/tasks/TasksPage").then(m => ({ default: m.TasksPage })));
+const McpPage = lazy(() => import("./components/mcp/McpPage").then(m => ({ default: m.McpPage })));
+const SkillsPage = lazy(() => import("./components/skills/SkillsPage").then(m => ({ default: m.SkillsPage })));
+const TestsPage = lazy(() => import("./components/tests/TestsPage").then(m => ({ default: m.TestsPage })));
+const TelemetryPage = lazy(() => import("./components/telemetry/TelemetryPage").then(m => ({ default: m.TelemetryPage })));
+const ConnectionsPage = lazy(() => import("./components/connections/ConnectionsPage").then(m => ({ default: m.ConnectionsPage })));
+const ApiDocsPage = lazy(() => import("./components/api/ApiDocsPage").then(m => ({ default: m.ApiDocsPage })));
 
 function AppContent() {
   // Auth state
@@ -254,6 +257,7 @@ function AppContent() {
         />
 
         <main className="flex-1 overflow-hidden flex">
+          <Suspense fallback={<LoadingSpinner />}>
           {route === "settings" && <SettingsPage />}
 
           {route === "activity" && (
@@ -292,6 +296,8 @@ function AppContent() {
 
           {route === "tasks" && <TasksPage />}
 
+          {route === "connections" && <ConnectionsPage />}
+
           {route === "mcp" && <McpPage />}
 
           {route === "skills" && <SkillsPage />}
@@ -301,6 +307,7 @@ function AppContent() {
           {route === "telemetry" && <TelemetryPage />}
 
           {route === "api" && <ApiDocsPage />}
+          </Suspense>
         </main>
       </div>
 

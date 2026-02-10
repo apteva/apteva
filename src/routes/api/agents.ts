@@ -3,7 +3,7 @@ import { join } from "path";
 import { json, isDev } from "./helpers";
 import {
   agentFetch,
-  toApiAgent,
+  toApiAgent, toApiAgentsBatch,
   checkPortFree,
   startAgentProcess,
   buildAgentConfig,
@@ -30,7 +30,7 @@ export async function handleAgentRoutes(
   // GET /api/agents - List all agents (excludes meta agent)
   if (path === "/api/agents" && method === "GET") {
     const agents = AgentDB.findAll().filter(a => a.id !== META_AGENT_ID);
-    return json({ agents: agents.map(toApiAgent) });
+    return json({ agents: toApiAgentsBatch(agents) });
   }
 
   // POST /api/agents - Create a new agent
@@ -342,6 +342,69 @@ export async function handleAgentRoutes(
     } catch (err) {
       console.error(`Chat proxy error: ${err}`);
       return json({ error: `Failed to proxy chat: ${err}` }, 500);
+    }
+  }
+
+  // ==================== WEBHOOK ENDPOINT ====================
+
+  // POST /api/agents/:id/webhook - Receive external trigger events and forward to agent chat
+  const webhookMatch = path.match(/^\/api\/agents\/([^/]+)\/webhook$/);
+  if (webhookMatch && method === "POST") {
+    const agent = AgentDB.findById(webhookMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    if (agent.status !== "running" || !agent.port) {
+      return json({ error: "Agent is not running" }, 400);
+    }
+
+    try {
+      const body = await req.json();
+
+      // Format the webhook payload as a chat message
+      const triggerSlug = body.trigger_name || body.type || "unknown_trigger";
+      const eventPayload = body.payload || body.data || body;
+
+      const triggerName = String(triggerSlug).replace(/_/g, " ");
+      const message = [
+        `[Trigger: ${triggerName}]`,
+        "",
+        "```json",
+        JSON.stringify(eventPayload, null, 2),
+        "```",
+        "",
+        "Process this event and take appropriate action.",
+      ].join("\n");
+
+      // Forward to agent's /chat endpoint
+      const response = await agentFetch(agent.id, agent.port, "/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+
+      // Consume the streaming response (we don't need the agent's reply)
+      if (response.body) {
+        try {
+          const reader = response.body.getReader();
+          while (true) {
+            const { done } = await reader.read();
+            if (done) break;
+          }
+        } catch {
+          // Ignore read errors
+        }
+      }
+
+      if (!response.ok) {
+        return json({ error: "Agent failed to process webhook" }, 502);
+      }
+
+      return json({ received: true, agent_id: agent.id, trigger: triggerSlug });
+    } catch (err) {
+      console.error(`Webhook proxy error for agent ${webhookMatch[1]}:`, err);
+      return json({ error: `Failed to process webhook: ${err}` }, 500);
     }
   }
 

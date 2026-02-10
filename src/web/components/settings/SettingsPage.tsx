@@ -5,13 +5,14 @@ import { Select } from "../common/Select";
 import { useProjects, useAuth, type Project } from "../../context";
 import type { Provider } from "../../types";
 
-type SettingsTab = "providers" | "projects" | "api-keys" | "account" | "updates" | "data";
+type SettingsTab = "general" | "providers" | "projects" | "api-keys" | "account" | "updates" | "data";
 
 export function SettingsPage() {
   const { projectsEnabled } = useProjects();
-  const [activeTab, setActiveTab] = useState<SettingsTab>("providers");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
 
   const tabs: { key: SettingsTab; label: string }[] = [
+    { key: "general", label: "General" },
     { key: "providers", label: "Providers" },
     ...(projectsEnabled ? [{ key: "projects" as SettingsTab, label: "Projects" }] : []),
     { key: "api-keys", label: "API Keys" },
@@ -58,6 +59,7 @@ export function SettingsPage() {
 
       {/* Settings Content */}
       <div className="flex-1 overflow-auto p-4 md:p-6">
+        {activeTab === "general" && <GeneralSettings />}
         {activeTab === "providers" && <ProvidersSettings />}
         {activeTab === "projects" && projectsEnabled && <ProjectsSettings />}
         {activeTab === "api-keys" && <ApiKeysSettings />}
@@ -89,6 +91,98 @@ function SettingsNavItem({
     >
       {label}
     </button>
+  );
+}
+
+function GeneralSettings() {
+  const { authFetch } = useAuth();
+  const [instanceUrl, setInstanceUrl] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        const res = await authFetch("/api/settings/instance-url");
+        const data = await res.json();
+        setInstanceUrl(data.instance_url || "");
+      } catch {
+        // ignore
+      }
+      setLoading(false);
+    };
+    fetch();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await authFetch("/api/settings/instance-url", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instance_url: instanceUrl }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setInstanceUrl(data.instance_url || "");
+        setMessage({ type: "success", text: "Instance URL saved" });
+      } else {
+        setMessage({ type: "error", text: data.error || "Failed to save" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to save" });
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="max-w-4xl w-full">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold mb-1">General</h1>
+        <p className="text-[#666]">Instance configuration.</p>
+      </div>
+
+      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+        <h3 className="font-medium mb-2">Instance URL</h3>
+        <p className="text-sm text-[#666] mb-4">
+          The public HTTPS URL for this instance. Used for webhook callbacks from external services like Composio.
+        </p>
+
+        {loading ? (
+          <div className="text-[#666] text-sm">Loading...</div>
+        ) : (
+          <div className="space-y-3 max-w-lg">
+            <input
+              type="text"
+              value={instanceUrl}
+              onChange={e => setInstanceUrl(e.target.value)}
+              placeholder="https://your-domain.com"
+              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] font-mono text-sm"
+            />
+
+            {message && (
+              <div className={`p-3 rounded text-sm ${
+                message.type === "success"
+                  ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                  : "bg-red-500/10 text-red-400 border border-red-500/30"
+              }`}>
+                {message.text}
+              </div>
+            )}
+
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black rounded text-sm font-medium transition"
+            >
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

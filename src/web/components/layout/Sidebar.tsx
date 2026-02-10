@@ -1,5 +1,5 @@
 import React from "react";
-import { DashboardIcon, AgentsIcon, TasksIcon, McpIcon, SkillsIcon, TestsIcon, TelemetryIcon, ApiIcon, SettingsIcon, CloseIcon } from "../common/Icons";
+import { DashboardIcon, ActivityIcon, AgentsIcon, TasksIcon, ConnectionsIcon, McpIcon, SkillsIcon, TestsIcon, TelemetryIcon, ApiIcon, SettingsIcon, CloseIcon } from "../common/Icons";
 import type { Route } from "../../types";
 
 interface SidebarProps {
@@ -64,6 +64,12 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
             badge={agentCount > 0 ? String(agentCount) : undefined}
           />
           <NavButton
+            icon={<ActivityIcon />}
+            label="Activity"
+            active={route === "activity"}
+            onClick={() => handleNavigate("activity")}
+          />
+          <NavButton
             icon={<TasksIcon />}
             label="Tasks"
             active={route === "tasks"}
@@ -81,6 +87,12 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
             label="Skills"
             active={route === "skills"}
             onClick={() => handleNavigate("skills")}
+          />
+          <NavButton
+            icon={<ConnectionsIcon />}
+            label="Connections"
+            active={route === "connections"}
+            onClick={() => handleNavigate("connections")}
           />
           <NavButton
             icon={<TestsIcon />}

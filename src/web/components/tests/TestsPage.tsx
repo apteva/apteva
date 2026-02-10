@@ -157,8 +157,7 @@ export function TestsPage() {
   };
 
   useEffect(() => {
-    fetchTests();
-    fetchAgents();
+    Promise.all([fetchTests(), fetchAgents()]);
   }, [currentProjectId]);
 
   const openCreate = () => {

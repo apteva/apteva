@@ -69,9 +69,18 @@ export async function serveStatic(req: Request, path: string): Promise<Response>
         if (stat.isFile()) {
           const file = Bun.file(fullPath);
           const mimeType = getMimeType(filePath);
-          return new Response(file, {
-            headers: { "Content-Type": mimeType },
-          });
+          const headers: Record<string, string> = { "Content-Type": mimeType };
+
+          // Hashed assets (e.g. App.fq4xbpcz.js) are immutable — cache aggressively
+          // index.html must never be cached (it references the hashed assets)
+          const hasHash = /\.[a-z0-9]{6,}\.(js|css|map)$/.test(filePath);
+          if (hasHash) {
+            headers["Cache-Control"] = "public, max-age=31536000, immutable";
+          } else if (filePath !== "/index.html") {
+            headers["Cache-Control"] = "public, max-age=3600";
+          }
+
+          return new Response(file, { headers });
         }
       } catch {
         // Fall through to SPA handling

@@ -2,7 +2,7 @@ import { spawn } from "bun";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync } from "fs";
-import { agentProcesses, agentsStarting, getBinaryPathForAgent, getBinaryStatus, BIN_DIR, telemetryBroadcaster, type TelemetryEvent } from "../../server";
+import { agentProcesses, agentsStarting, getBinaryPathForAgent, getBinaryStatus, BIN_DIR, telemetryBroadcaster, isShuttingDown, type TelemetryEvent } from "../../server";
 import { AgentDB, McpServerDB, SkillDB, TelemetryDB, generateId, getMultiAgentConfig, type Agent, type Project } from "../../db";
 import { ProviderKeys, PROVIDERS, type ProviderId } from "../../providers";
 import { binaryExists } from "../../binary";
@@ -126,7 +126,17 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
     const server = McpServerDB.findById(id);
     if (!server) continue;
 
-    if (server.type === "http" && server.url) {
+    if (server.type === "local" && server.status === "running") {
+      // Local MCP server (in-process, no subprocess)
+      const baseUrl = `http://localhost:${process.env.PORT || 4280}`;
+      mcpServers.push({
+        name: server.name,
+        type: "http",
+        url: `${baseUrl}/api/mcp/servers/${server.id}/mcp`,
+        headers: {},
+        enabled: true,
+      });
+    } else if (server.type === "http" && server.url) {
       // Remote HTTP server (Composio, Smithery, or custom)
       mcpServers.push({
         name: server.name,
@@ -136,7 +146,7 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
         enabled: true,
       });
     } else if (server.status === "running" && server.port) {
-      // Local MCP server (npm, github, custom)
+      // Subprocess MCP server (npm, github, custom)
       mcpServers.push({
         name: server.name,
         type: "http",
@@ -510,8 +520,9 @@ export async function startAgentProcess(
     // Store process with port for tracking
     agentProcesses.set(agent.id, { proc, port });
 
-    // Detect unexpected process exits (crashes)
+    // Detect unexpected process exits (crashes) — but not during server shutdown
     proc.exited.then((code) => {
+      if (isShuttingDown()) return; // Don't update DB during shutdown — keeps status "running" for auto-restart
       if (agentProcesses.has(agent.id)) {
         agentProcesses.delete(agent.id);
         setAgentStatus(agent.id, "stopped", code === 0 ? "exited" : "crashed");
@@ -620,6 +631,41 @@ export function toApiAgent(agent: Agent) {
     createdAt: agent.created_at,
     updatedAt: agent.updated_at,
   };
+}
+
+// Batch transform: fetch all MCP servers + skills in 2 queries instead of N per agent
+export function toApiAgentsBatch(agents: Agent[]) {
+  // Collect all unique IDs
+  const allMcpIds = new Set<string>();
+  const allSkillIds = new Set<string>();
+  for (const agent of agents) {
+    for (const id of agent.mcp_servers || []) allMcpIds.add(id);
+    for (const id of agent.skills || []) allSkillIds.add(id);
+  }
+
+  // Batch load in 2 queries
+  const mcpMap = McpServerDB.findByIds([...allMcpIds]);
+  const skillMap = SkillDB.findByIds([...allSkillIds]);
+
+  return agents.map(agent => {
+    const mcpServerDetails = (agent.mcp_servers || [])
+      .map(id => mcpMap.get(id))
+      .filter((s): s is NonNullable<typeof s> => !!s)
+      .map(s => ({ id: s.id, name: s.name, type: s.type, status: s.status, port: s.port, url: s.url }));
+
+    const skillDetails = (agent.skills || [])
+      .map(id => skillMap.get(id))
+      .filter((s): s is NonNullable<typeof s> => !!s)
+      .map(s => ({ id: s.id, name: s.name, description: s.description, version: s.version, enabled: s.enabled }));
+
+    return {
+      id: agent.id, name: agent.name, model: agent.model, provider: agent.provider,
+      systemPrompt: agent.system_prompt, status: agent.status, port: agent.port,
+      features: agent.features, mcpServers: agent.mcp_servers, mcpServerDetails,
+      skills: agent.skills, skillDetails, projectId: agent.project_id,
+      createdAt: agent.created_at, updatedAt: agent.updated_at,
+    };
+  });
 }
 
 // Transform DB project to API response format

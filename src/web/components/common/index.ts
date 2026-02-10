@@ -15,4 +15,6 @@ export {
   SkillsIcon,
   RealtimeIcon,
   TelemetryIcon,
+  ActivityIcon,
+  ConnectionsIcon,
 } from "./Icons";

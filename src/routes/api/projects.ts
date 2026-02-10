@@ -1,6 +1,7 @@
 import { json } from "./helpers";
 import { AgentDB, ProjectDB, type Project } from "../../db";
-import { toApiAgent, toApiProject } from "./agent-utils";
+import { toApiAgent, toApiAgentsBatch, toApiProject, setAgentStatus } from "./agent-utils";
+import { agentProcesses } from "../../server";
 
 export async function handleProjectRoutes(
   req: Request,
@@ -54,7 +55,7 @@ export async function handleProjectRoutes(
     const agents = AgentDB.findByProject(project.id);
     return json({
       project: toApiProject(project),
-      agents: agents.map(toApiAgent),
+      agents: toApiAgentsBatch(agents),
     });
   }
 
@@ -85,6 +86,22 @@ export async function handleProjectRoutes(
     const project = ProjectDB.findById(projectMatch[1]);
     if (!project) {
       return json({ error: "Project not found" }, 404);
+    }
+
+    // Stop any running agents in this project first
+    const projectAgents = AgentDB.findByProject(projectMatch[1]);
+    for (const agent of projectAgents) {
+      if (agent.status === "running") {
+        const entry = agentProcesses.get(agent.id);
+        if (entry) {
+          try {
+            await fetch(`http://localhost:${entry.port}/shutdown`, { method: "POST", signal: AbortSignal.timeout(1000) }).catch(() => {});
+            entry.proc.kill();
+          } catch {}
+          agentProcesses.delete(agent.id);
+        }
+        setAgentStatus(agent.id, "stopped", "project_deleted");
+      }
     }
 
     ProjectDB.delete(projectMatch[1]);

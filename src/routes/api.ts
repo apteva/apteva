@@ -8,6 +8,8 @@ import { handleAgentRoutes } from "./api/agents";
 import { handleMcpRoutes } from "./api/mcp";
 import { handleSkillRoutes } from "./api/skills";
 import { handleIntegrationRoutes } from "./api/integrations";
+import { handleTriggerRoutes } from "./api/triggers";
+import { handleWebhookRoutes } from "./api/webhooks";
 import { handleMetaAgentRoutes } from "./api/meta-agent";
 import { handleTelemetryRoutes } from "./api/telemetry";
 import { handleTestRoutes } from "./api/tests";
@@ -30,6 +32,7 @@ export async function handleApiRequest(
   }
 
   return (
+    (await handleWebhookRoutes(req, path, method)) ?? // Public, HMAC-verified — before auth
     (await handleSystemRoutes(req, path, method, authContext)) ??
     (await handleApiKeyRoutes(req, path, method, authContext)) ?? // Must be before provider routes to handle /api/keys/personal
     (await handleProviderRoutes(req, path, method, authContext)) ??
@@ -39,6 +42,7 @@ export async function handleApiRequest(
     (await handleMcpRoutes(req, path, method)) ??
     (await handleSkillRoutes(req, path, method)) ??
     (await handleIntegrationRoutes(req, path, method)) ??
+    (await handleTriggerRoutes(req, path, method, authContext)) ??
     (await handleMetaAgentRoutes(req, path, method)) ??
     (await handleTelemetryRoutes(req, path, method)) ??
     (await handleTestRoutes(req, path, method)) ??

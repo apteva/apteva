@@ -1,6 +1,6 @@
 import { spawn } from "bun";
 import { json } from "./helpers";
-import { McpServerDB, generateId, type McpServer } from "../../db";
+import { McpServerDB, McpServerToolDB, generateId, type McpServer } from "../../db";
 import { getNextPort } from "../../server";
 import {
   startMcpProcess,
@@ -11,6 +11,7 @@ import {
   getMcpProcess,
   getHttpMcpClient,
 } from "../../mcp-client";
+import { handleLocalMcpRequest } from "../../mcp-handler";
 
 export async function handleMcpRoutes(
   req: Request,
@@ -121,6 +122,12 @@ export async function handleMcpRoutes(
     }
   }
 
+  // POST /api/mcp/servers/:id/mcp - JSON-RPC endpoint for local MCP servers
+  const mcpJsonRpcMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/mcp$/);
+  if (mcpJsonRpcMatch && method === "POST") {
+    return handleLocalMcpRequest(req, mcpJsonRpcMatch[1]);
+  }
+
   // GET /api/mcp/servers/:id - Get a specific MCP server
   const mcpServerMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)$/);
   if (mcpServerMatch && method === "GET") {
@@ -168,8 +175,13 @@ export async function handleMcpRoutes(
     }
 
     // Stop if running
-    if (server.status === "running") {
-      // TODO: Stop the server process
+    if (server.status === "running" && server.type !== "local") {
+      stopMcpProcess(server.id);
+    }
+
+    // Delete tools if local server
+    if (server.type === "local") {
+      McpServerToolDB.deleteByServer(mcpServerMatch[1]);
     }
 
     McpServerDB.delete(mcpServerMatch[1]);
@@ -186,6 +198,19 @@ export async function handleMcpRoutes(
 
     if (server.status === "running") {
       return json({ error: "MCP server already running" }, 400);
+    }
+
+    // Local servers: just flip status and set the MCP endpoint URL
+    if (server.type === "local") {
+      const updated = McpServerDB.update(server.id, {
+        status: "running",
+        url: `/api/mcp/servers/${server.id}/mcp`,
+      });
+      return json({
+        server: updated,
+        message: "Local MCP server started",
+        mcpUrl: `/api/mcp/servers/${server.id}/mcp`,
+      });
     }
 
     // Determine command to run
@@ -276,6 +301,12 @@ export async function handleMcpRoutes(
       return json({ error: "MCP server not found" }, 404);
     }
 
+    // Local servers: just flip status
+    if (server.type === "local") {
+      const updated = McpServerDB.update(server.id, { status: "stopped" });
+      return json({ server: updated, message: "Local MCP server stopped" });
+    }
+
     // Stop the MCP process
     stopMcpProcess(server.id);
 
@@ -289,6 +320,22 @@ export async function handleMcpRoutes(
     const server = McpServerDB.findById(mcpToolsMatch[1]);
     if (!server) {
       return json({ error: "MCP server not found" }, 404);
+    }
+
+    // Local servers: read tools from database
+    if (server.type === "local") {
+      const tools = McpServerToolDB.findByServer(server.id);
+      return json({
+        serverInfo: { name: server.name, version: "1.0.0" },
+        tools: tools.map((t) => ({
+          id: t.id,
+          name: t.name,
+          description: t.description,
+          inputSchema: t.input_schema,
+          handler_type: t.handler_type,
+          enabled: t.enabled,
+        })),
+      });
     }
 
     // HTTP servers use remote HTTP transport
@@ -328,6 +375,101 @@ export async function handleMcpRoutes(
     }
   }
 
+  // POST /api/mcp/servers/:id/tools - Add a tool to a local MCP server
+  if (mcpToolsMatch && method === "POST") {
+    const server = McpServerDB.findById(mcpToolsMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+    if (server.type !== "local") {
+      return json({ error: "Tools can only be added to local servers" }, 400);
+    }
+
+    try {
+      const body = await req.json();
+      if (!body.name || !body.description) {
+        return json({ error: "name and description are required" }, 400);
+      }
+
+      // Check for duplicate tool name
+      const existing = McpServerToolDB.findByServerAndName(server.id, body.name);
+      if (existing) {
+        return json({ error: `Tool '${body.name}' already exists on this server` }, 409);
+      }
+
+      const tool = McpServerToolDB.create({
+        id: generateId(),
+        server_id: server.id,
+        name: body.name,
+        description: body.description,
+        input_schema: body.input_schema || { type: "object", properties: {} },
+        handler_type: body.handler_type || "mock",
+        mock_response: body.mock_response || null,
+        http_config: body.http_config || null,
+        code: body.code || null,
+        enabled: body.enabled !== false,
+      });
+
+      return json({ tool }, 201);
+    } catch (e) {
+      console.error("Create tool error:", e);
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // PUT /api/mcp/servers/:id/tools/:toolId - Update a tool on a local MCP server
+  const mcpToolUpdateMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/tools\/([^/]+)$/);
+  if (mcpToolUpdateMatch && method === "PUT") {
+    const server = McpServerDB.findById(mcpToolUpdateMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+    if (server.type !== "local") {
+      return json({ error: "Tools can only be updated on local servers" }, 400);
+    }
+
+    const tool = McpServerToolDB.findById(mcpToolUpdateMatch[2]);
+    if (!tool || tool.server_id !== server.id) {
+      return json({ error: "Tool not found" }, 404);
+    }
+
+    try {
+      const body = await req.json();
+      const updated = McpServerToolDB.update(tool.id, {
+        ...(body.name !== undefined && { name: body.name }),
+        ...(body.description !== undefined && { description: body.description }),
+        ...(body.input_schema !== undefined && { input_schema: body.input_schema }),
+        ...(body.handler_type !== undefined && { handler_type: body.handler_type }),
+        ...(body.mock_response !== undefined && { mock_response: body.mock_response }),
+        ...(body.http_config !== undefined && { http_config: body.http_config }),
+        ...(body.code !== undefined && { code: body.code }),
+        ...(body.enabled !== undefined && { enabled: body.enabled }),
+      });
+      return json({ tool: updated });
+    } catch (e) {
+      return json({ error: "Invalid request body" }, 400);
+    }
+  }
+
+  // DELETE /api/mcp/servers/:id/tools/:toolId - Delete a tool from a local MCP server
+  if (mcpToolUpdateMatch && method === "DELETE") {
+    const server = McpServerDB.findById(mcpToolUpdateMatch[1]);
+    if (!server) {
+      return json({ error: "MCP server not found" }, 404);
+    }
+    if (server.type !== "local") {
+      return json({ error: "Tools can only be deleted from local servers" }, 400);
+    }
+
+    const tool = McpServerToolDB.findById(mcpToolUpdateMatch[2]);
+    if (!tool || tool.server_id !== server.id) {
+      return json({ error: "Tool not found" }, 404);
+    }
+
+    McpServerToolDB.delete(tool.id);
+    return json({ success: true });
+  }
+
   // POST /api/mcp/servers/:id/tools/:toolName/call - Call a tool on an MCP server
   const mcpToolCallMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/tools\/([^/]+)\/call$/);
   if (mcpToolCallMatch && method === "POST") {
@@ -337,6 +479,35 @@ export async function handleMcpRoutes(
     }
 
     const toolName = decodeURIComponent(mcpToolCallMatch[2]);
+
+    // Local servers: execute tool handler directly
+    if (server.type === "local") {
+      const tool = McpServerToolDB.findByServerAndName(server.id, toolName);
+      if (!tool) {
+        return json({ error: `Tool '${toolName}' not found` }, 404);
+      }
+      if (!tool.enabled) {
+        return json({ error: `Tool '${toolName}' is disabled` }, 400);
+      }
+
+      // Forward to JSON-RPC handler via a synthetic request
+      const syntheticReq = new Request(req.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: toolName,
+            arguments: (await req.json()).arguments || {},
+          },
+        }),
+      });
+      const mcpResponse = await handleLocalMcpRequest(syntheticReq, server.id);
+      const mcpResult = await mcpResponse.json() as any;
+      return json({ result: mcpResult.result });
+    }
 
     // HTTP servers use remote HTTP transport
     if (server.type === "http" && server.url) {

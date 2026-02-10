@@ -23,19 +23,13 @@ export function useAgents(enabled: boolean) {
     setLoading(false);
   }, [getHeaders]);
 
-  // Auto-refetch when agents start/stop/crash (via SSE telemetry)
+  // Fetch on mount + auto-refetch when agents start/stop/crash (via SSE telemetry)
   const statusChangeCounter = useAgentStatusChange();
-  useEffect(() => {
-    if (enabled && statusChangeCounter > 0) {
-      fetchAgents();
-    }
-  }, [enabled, statusChangeCounter, fetchAgents]);
-
   useEffect(() => {
     if (enabled) {
       fetchAgents();
     }
-  }, [enabled, fetchAgents]);
+  }, [enabled, statusChangeCounter, fetchAgents]);
 
   const createAgent = async (agent: {
     name: string;
@@ -83,10 +77,20 @@ export function useAgents(enabled: boolean) {
 
   const toggleAgent = async (agent: Agent): Promise<{ error?: string }> => {
     const action = agent.status === "running" ? "stop" : "start";
+
+    // Optimistic UI update — show transitioning state immediately
+    setAgents(prev => prev.map(a =>
+      a.id === agent.id ? { ...a, status: action === "start" ? "starting" as any : "stopping" as any } : a
+    ));
+
+    // Fire API call — telemetry SSE will trigger a refetch with the real status
     const res = await fetch(`/api/agents/${agent.id}/${action}`, { method: "POST", headers: getHeaders() });
-    const data = await res.json();
-    await fetchAgents();
-    if (!res.ok && data.error) {
+    if (!res.ok) {
+      const data = await res.json();
+      // Revert on error
+      setAgents(prev => prev.map(a =>
+        a.id === agent.id ? { ...a, status: agent.status } : a
+      ));
       return { error: data.error };
     }
     return {};

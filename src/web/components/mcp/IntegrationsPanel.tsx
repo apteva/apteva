@@ -46,10 +46,14 @@ export function IntegrationsPanel({
   providerId = "composio",
   projectId,
   onConnectionComplete,
+  onBrowseTriggers,
+  hideMcpConfig,
 }: {
   providerId?: string;
   projectId?: string | null;
   onConnectionComplete?: () => void;
+  onBrowseTriggers?: (toolkitSlug: string) => void;
+  hideMcpConfig?: boolean;
 }) {
   const { authFetch } = useAuth();
   const [apps, setApps] = useState<IntegrationApp[]>([]);
@@ -314,9 +318,10 @@ export function IntegrationsPanel({
     );
   };
 
-  // Get connection for app
+  // Get connection for app (prefer active account)
   const getConnection = (appSlug: string) => {
-    return connectedAccounts.find((a) => a.appId === appSlug);
+    return connectedAccounts.find((a) => a.appId === appSlug && a.status === "active")
+      || connectedAccounts.find((a) => a.appId === appSlug);
   };
 
   // Filter apps
@@ -590,7 +595,8 @@ export function IntegrationsPanel({
                   const conn = getConnection(app.slug);
                   if (conn) handleDisconnect(conn);
                 }}
-                onCreateMcpConfig={() => openMcpConfigModal(app)}
+                onCreateMcpConfig={hideMcpConfig ? undefined : () => openMcpConfigModal(app)}
+                onBrowseTriggers={onBrowseTriggers ? () => onBrowseTriggers(app.slug) : undefined}
                 connecting={connecting === app.slug}
               />
             ))}
@@ -636,6 +642,7 @@ function AppCard({
   onConnect,
   onDisconnect,
   onCreateMcpConfig,
+  onBrowseTriggers,
   connecting,
 }: {
   app: IntegrationApp;
@@ -643,6 +650,7 @@ function AppCard({
   onConnect: () => void;
   onDisconnect?: () => void;
   onCreateMcpConfig?: () => void;
+  onBrowseTriggers?: () => void;
   connecting: boolean;
 }) {
   const isConnected = connection?.status === "active";
@@ -721,6 +729,14 @@ function AppCard({
                 className="flex-1 text-xs bg-[#1a2a1a] hover:bg-[#1a3a1a] border border-green-500/30 hover:border-green-500/50 text-green-400 px-3 py-1.5 rounded transition"
               >
                 Create MCP Config
+              </button>
+            )}
+            {onBrowseTriggers && (
+              <button
+                onClick={onBrowseTriggers}
+                className="flex-1 text-xs bg-[#1a1a2a] hover:bg-[#1a1a3a] border border-blue-500/30 hover:border-blue-500/50 text-blue-400 px-3 py-1.5 rounded transition"
+              >
+                Browse Triggers
               </button>
             )}
             {onDisconnect && (

@@ -121,13 +121,16 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
 
       <button
         onClick={onToggle}
+        disabled={agent.status === "starting" || agent.status === "stopping"}
         className={`w-full px-3 py-1.5 rounded text-sm font-medium transition mt-auto ${
-          agent.status === "running"
-            ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
-            : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
+          agent.status === "starting" || agent.status === "stopping"
+            ? "bg-[#333] text-[#666] cursor-wait"
+            : agent.status === "running"
+              ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
+              : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
         }`}
       >
-        {agent.status === "running" ? "Stop" : "Start"}
+        {agent.status === "starting" ? "Starting..." : agent.status === "stopping" ? "Stopping..." : agent.status === "running" ? "Stop" : "Start"}
       </button>
     </div>
   );
@@ -142,12 +145,16 @@ function StatusBadge({ status, isActive, activityType }: { status: Agent["status
     );
   }
 
+  const isTransitioning = status === "starting" || status === "stopping";
+
   return (
     <span
       className={`px-2 py-1 rounded text-xs font-medium ${
-        status === "running"
-          ? "bg-[#3b82f6]/20 text-[#3b82f6]"
-          : "bg-[#333] text-[#666]"
+        isTransitioning
+          ? "bg-yellow-500/20 text-yellow-400 animate-pulse"
+          : status === "running"
+            ? "bg-[#3b82f6]/20 text-[#3b82f6]"
+            : "bg-[#333] text-[#666]"
       }`}
     >
       {status}

@@ -500,7 +500,7 @@ function TrajectoryView({ trajectory }: { trajectory: TaskTrajectoryStep[] }) {
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function formatCron(cron: string): string {
+export function formatCron(cron: string): string {
   try {
     const parts = cron.trim().split(/\s+/);
     if (parts.length !== 5) return cron;
@@ -558,7 +558,7 @@ function formatCron(cron: string): string {
   }
 }
 
-function formatRelativeTime(dateStr: string): string {
+export function formatRelativeTime(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
   const diffMs = date.getTime() - now.getTime();

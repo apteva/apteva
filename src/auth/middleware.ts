@@ -26,6 +26,13 @@ const PUBLIC_PATHS = [
   "/api/telemetry", // Agents POST telemetry here
   "/api/telemetry/stream", // SSE doesn't support auth headers
   "/api/mcp/platform", // Built-in MCP server for agent communication
+  "/api/webhooks/composio", // Composio trigger webhooks (HMAC-verified)
+  "/api/webhooks/agentdojo", // AgentDojo trigger webhooks (HMAC-verified)
+];
+
+// Regex patterns for public paths (for dynamic segments)
+const PUBLIC_PATTERNS = [
+  /^\/api\/mcp\/servers\/[^/]+\/mcp$/, // Local MCP server JSON-RPC endpoints
 ];
 
 // Path prefixes that don't require authentication (for agent communication)
@@ -67,6 +74,11 @@ export async function authMiddleware(req: Request, path: string): Promise<{ resp
 
   // Public paths - no auth needed
   if (PUBLIC_PATHS.some(p => path === p || path.startsWith(p + "/"))) {
+    return { context };
+  }
+
+  // Public patterns - no auth needed (dynamic path segments)
+  if (PUBLIC_PATTERNS.some(p => p.test(path))) {
     return { context };
   }
 
