@@ -12,15 +12,6 @@ interface Subscription {
   updated_at: string;
 }
 
-interface TriggerInstance {
-  id: string;
-  trigger_slug: string;
-  connected_account_id: string | null;
-  status: "active" | "disabled";
-  config: Record<string, unknown>;
-  created_at: string;
-}
-
 interface Agent {
   id: string;
   name: string;
@@ -32,7 +23,6 @@ export function OverviewTab() {
   const { currentProjectId } = useProjects();
 
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
-  const [triggers, setTriggers] = useState<TriggerInstance[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -42,19 +32,14 @@ export function OverviewTab() {
       const projectParam = currentProjectId && currentProjectId !== "unassigned" ? `?project_id=${currentProjectId}` : "";
 
       try {
-        const [subsRes, triggersRes, agentsRes] = await Promise.all([
+        const [subsRes, agentsRes] = await Promise.all([
           authFetch(`/api/subscriptions${projectParam}`).catch(() => null),
-          authFetch(`/api/triggers${projectParam}`).catch(() => null),
           authFetch(`/api/agents`).catch(() => null),
         ]);
 
         if (subsRes?.ok) {
           const data = await subsRes.json();
           setSubscriptions(data.subscriptions || []);
-        }
-        if (triggersRes?.ok) {
-          const data = await triggersRes.json();
-          setTriggers(data.triggers || []);
         }
         if (agentsRes?.ok) {
           const data = await agentsRes.json();
@@ -73,40 +58,40 @@ export function OverviewTab() {
     return <div className="text-center py-12 text-[#666]">Loading...</div>;
   }
 
-  const activeTriggers = triggers.filter(t => t.status === "active");
-  const enabledSubscriptions = subscriptions.filter(s => s.enabled);
+  const enabledSubs = subscriptions.filter(s => s.enabled);
+  const disabledSubs = subscriptions.filter(s => !s.enabled);
   const agentMap = new Map(agents.map(a => [a.id, a]));
 
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <StatCard label="Subscriptions" value={enabledSubscriptions.length} />
-        <StatCard label="Active Triggers" value={activeTriggers.length} />
-        <StatCard label="Total Triggers" value={triggers.length} />
+      <div className="grid grid-cols-3 gap-4">
+        <StatCard label="Active" value={enabledSubs.length} />
+        <StatCard label="Disabled" value={disabledSubs.length} />
+        <StatCard label="Total" value={subscriptions.length} />
       </div>
 
-      {/* Active Subscriptions */}
+      {/* Subscriptions */}
       <section>
-        <h3 className="text-sm font-medium text-[#888] mb-3">Active Subscriptions ({enabledSubscriptions.length})</h3>
-        {enabledSubscriptions.length === 0 ? (
+        <h3 className="text-sm font-medium text-[#888] mb-3">Subscriptions ({subscriptions.length})</h3>
+        {subscriptions.length === 0 ? (
           <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
-            No subscriptions. Go to the Triggers tab to route trigger events to agents.
+            No subscriptions yet. Go to the Triggers tab to create one.
           </div>
         ) : (
           <div className="space-y-2">
-            {enabledSubscriptions.map(sub => {
+            {subscriptions.map(sub => {
               const agent = agentMap.get(sub.agent_id);
               return (
                 <div key={sub.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sub.enabled ? "bg-green-400" : "bg-[#555]"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
-                      {sub.trigger_slug.replace(/_/g, " ")}
+                      {sub.trigger_slug.replace(/_/g, " ").replace(/-/g, " ")}
                     </div>
                     <div className="text-xs text-[#666]">
                       {sub.trigger_instance_id
-                        ? `Instance: ${sub.trigger_instance_id.slice(0, 12)}...`
+                        ? `ID: ${sub.trigger_instance_id.slice(0, 12)}...`
                         : "All instances"
                       }
                     </div>
@@ -115,47 +100,16 @@ export function OverviewTab() {
                     <span className="text-[#555]">&rarr;</span>{" "}
                     <span className="text-[#f97316]">{agent?.name || "Unknown Agent"}</span>
                   </div>
-                  {agent && (
-                    <span className={`text-xs px-2 py-0.5 rounded flex-shrink-0 ${
-                      agent.status === "running"
-                        ? "bg-green-500/10 text-green-400"
-                        : "bg-yellow-500/10 text-yellow-400"
-                    }`}>
-                      {agent.status}
-                    </span>
-                  )}
+                  <span className={`text-xs px-2 py-0.5 rounded flex-shrink-0 ${
+                    sub.enabled
+                      ? "bg-green-500/10 text-green-400"
+                      : "bg-[#1a1a1a] text-[#555]"
+                  }`}>
+                    {sub.enabled ? "active" : "disabled"}
+                  </span>
                 </div>
               );
             })}
-          </div>
-        )}
-      </section>
-
-      {/* Active Triggers */}
-      <section>
-        <h3 className="text-sm font-medium text-[#888] mb-3">Active Triggers ({activeTriggers.length})</h3>
-        {activeTriggers.length === 0 ? (
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
-            No active triggers on Composio.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {activeTriggers.map(trigger => (
-              <div key={trigger.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
-                <div className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate">
-                    {trigger.trigger_slug.replace(/_/g, " ")}
-                  </div>
-                  <div className="text-xs text-[#666]">
-                    ID: {trigger.id.slice(0, 8)}...
-                  </div>
-                </div>
-                <span className="text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded">
-                  active
-                </span>
-              </div>
-            ))}
           </div>
         )}
       </section>

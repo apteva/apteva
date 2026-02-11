@@ -5,7 +5,7 @@ import { serveStatic } from "./routes/static";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
-import { initDatabase, AgentDB, ProviderKeysDB, McpServerDB, type McpServer, type Agent } from "./db";
+import { initDatabase, AgentDB, ProviderKeysDB, McpServerDB, ChannelDB, type McpServer, type Agent } from "./db";
 import { authMiddleware, type AuthContext } from "./auth/middleware";
 import { startMcpProcess } from "./mcp-client";
 import {
@@ -106,13 +106,18 @@ initDatabase(DATA_DIR);
 // Initialize version tracking
 initVersionTracking(DATA_DIR);
 
-// Get agents and MCP servers that were running before restart (for auto-restart)
+// Get agents, MCP servers, and channels that were running before restart (for auto-restart)
 const agentsToRestart = AgentDB.findRunning();
 const mcpServersToRestart = McpServerDB.findRunning();
+const channelsToRestart = ChannelDB.findRunning();
 
 // Reset all agents and MCP servers to stopped on startup (processes don't survive restart)
 AgentDB.resetAllStatus();
 McpServerDB.resetAllStatus();
+// Reset channels too (bot polling doesn't survive restart)
+for (const ch of channelsToRestart) {
+  ChannelDB.setStatus(ch.id, "stopped");
+}
 
 // Clean up orphaned processes on agent ports (targeted cleanup based on DB)
 async function cleanupOrphanedProcesses(): Promise<void> {
@@ -194,15 +199,26 @@ async function shutdownAllAgents() {
 // Handle process termination signals
 let shuttingDown = false;
 export function isShuttingDown(): boolean { return shuttingDown; }
+async function shutdownAllChannels() {
+  try {
+    const { stopAllChannels } = await import("./channels");
+    await stopAllChannels();
+  } catch {
+    // Ignore import/stop errors during shutdown
+  }
+}
+
 process.on("SIGINT", async () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  await shutdownAllChannels();
   await shutdownAllAgents();
   process.exit(0);
 });
 process.on("SIGTERM", async () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  await shutdownAllChannels();
   await shutdownAllAgents();
   process.exit(0);
 });
@@ -416,8 +432,8 @@ console.log(`
             ${c.darkGray}Click link or Cmd/Ctrl+C to copy${c.reset}
 `);
 
-// Auto-restart agents and MCP servers that were running before restart
-const hasRestarts = agentsToRestart.length > 0 || mcpServersToRestart.length > 0;
+// Auto-restart agents, MCP servers, and channels that were running before restart
+const hasRestarts = agentsToRestart.length > 0 || mcpServersToRestart.length > 0 || channelsToRestart.length > 0;
 
 if (hasRestarts) {
   // Restart in background to not block startup
@@ -489,6 +505,25 @@ if (hasRestarts) {
           }
         } catch (err) {
           console.log(`  ${c.gray}  ✗ ${agent.name}: ${err}${c.reset}`);
+        }
+      }
+    }
+
+    // Restart channels (after agents, since channels depend on running agents)
+    if (channelsToRestart.length > 0) {
+      const { startChannel } = await import("./channels");
+      console.log(`  ${c.darkGray}Channels${c.reset}  ${c.gray}Restarting ${channelsToRestart.length} channel(s)...${c.reset}`);
+
+      for (const channel of channelsToRestart) {
+        try {
+          const result = await startChannel(channel.id);
+          if (result.success) {
+            console.log(`  ${c.gray}  ✓ ${channel.name} (${channel.type})${c.reset}`);
+          } else {
+            console.log(`  ${c.gray}  ✗ ${channel.name}: ${result.error}${c.reset}`);
+          }
+        } catch (err) {
+          console.log(`  ${c.gray}  ✗ ${channel.name}: ${err}${c.reset}`);
         }
       }
     }

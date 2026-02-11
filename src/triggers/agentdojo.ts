@@ -1,6 +1,6 @@
 // AgentDojo Trigger Provider
 // Uses our MCP API's subscription and trigger system
-// Docs: POST /mcp/subscribe, GET /mcp/subscriptions, GET /mcp/triggers
+// Docs: POST /subscribe, GET /subscriptions, GET /triggers
 
 import { createHmac, timingSafeEqual } from "crypto";
 import type { TriggerProvider, TriggerType, TriggerInstance } from "./index";
@@ -22,7 +22,7 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
       const allItems: any[] = [];
       for (const slug of toolkitSlugs) {
         const res = await fetch(
-          `${AGENTDOJO_API_BASE}/mcp/triggers?${new URLSearchParams({ toolkit_name: slug, is_active: "true", limit: "200" })}`,
+          `${AGENTDOJO_API_BASE}/triggers?${new URLSearchParams({ toolkit_name: slug, is_active: "true", limit: "200" })}`,
           { headers: headers(apiKey) },
         );
         if (res.ok) {
@@ -34,7 +34,7 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
       return mapTriggerTypes(allItems);
     }
 
-    const res = await fetch(`${AGENTDOJO_API_BASE}/mcp/triggers?${params}`, {
+    const res = await fetch(`${AGENTDOJO_API_BASE}/triggers?${params}`, {
       headers: headers(apiKey),
     });
 
@@ -50,7 +50,7 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
 
   async getTriggerType(apiKey: string, slug: string): Promise<TriggerType | null> {
     const res = await fetch(
-      `${AGENTDOJO_API_BASE}/mcp/triggers/${encodeURIComponent(slug)}`,
+      `${AGENTDOJO_API_BASE}/triggers/${encodeURIComponent(slug)}`,
       { headers: headers(apiKey) },
     );
 
@@ -88,24 +88,29 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
       throw new Error("callback_url is required in config for AgentDojo triggers");
     }
 
+    // Separate known top-level fields from extra config (e.g. owner, repo for GitHub)
+    const { callback_url, title, events, server, prompt, agent_id, ...extraConfig } = config || {} as Record<string, unknown>;
+
     const body: Record<string, unknown> = {
       trigger_type_slug: slug,
       credential_id: connectedAccountId,
       callback_url: callbackUrl,
-      title: (config?.title as string) || `Trigger: ${slug}`,
+      title: (title as string) || `Trigger: ${slug}`,
     };
 
-    if (config?.events) {
-      body.events = config.events;
-    }
-    if (config?.server) {
-      body.server = config.server;
-    }
-    if (config?.prompt) {
-      body.prompt = config.prompt;
+    if (events) body.events = events;
+    if (server) body.server = server;
+    if (prompt) body.prompt = prompt;
+    if (agent_id) body.agent_id = agent_id;
+
+    // Pass extra config fields (owner, repo, etc.) as the config object
+    // mcp-subscribe spreads this into the webhook register payload
+    if (Object.keys(extraConfig).length > 0) {
+      body.config = extraConfig;
+      console.log("AgentDojo createTrigger: extra config:", JSON.stringify(extraConfig));
     }
 
-    const res = await fetch(`${AGENTDOJO_API_BASE}/mcp/subscribe`, {
+    const res = await fetch(`${AGENTDOJO_API_BASE}/subscribe`, {
       method: "POST",
       headers: headers(apiKey),
       body: JSON.stringify(body),
@@ -122,7 +127,7 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
   },
 
   async listTriggers(apiKey: string): Promise<TriggerInstance[]> {
-    const res = await fetch(`${AGENTDOJO_API_BASE}/mcp/subscriptions?status=active`, {
+    const res = await fetch(`${AGENTDOJO_API_BASE}/subscriptions?status=active`, {
       headers: headers(apiKey),
     });
 
@@ -151,7 +156,7 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
   },
 
   async enableTrigger(apiKey: string, triggerId: string): Promise<boolean> {
-    const res = await fetch(`${AGENTDOJO_API_BASE}/mcp/subscription/update`, {
+    const res = await fetch(`${AGENTDOJO_API_BASE}/subscription/update`, {
       method: "POST",
       headers: headers(apiKey),
       body: JSON.stringify({ subscription_id: parseInt(triggerId), status: "active" }),
@@ -160,7 +165,7 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
   },
 
   async disableTrigger(apiKey: string, triggerId: string): Promise<boolean> {
-    const res = await fetch(`${AGENTDOJO_API_BASE}/mcp/subscription/update`, {
+    const res = await fetch(`${AGENTDOJO_API_BASE}/subscription/update`, {
       method: "POST",
       headers: headers(apiKey),
       body: JSON.stringify({ subscription_id: parseInt(triggerId), status: "disabled" }),
@@ -169,7 +174,7 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
   },
 
   async deleteTrigger(apiKey: string, triggerId: string): Promise<boolean> {
-    const res = await fetch(`${AGENTDOJO_API_BASE}/mcp/unsubscribe`, {
+    const res = await fetch(`${AGENTDOJO_API_BASE}/unsubscribe`, {
       method: "POST",
       headers: headers(apiKey),
       body: JSON.stringify({ subscription_id: parseInt(triggerId) }),

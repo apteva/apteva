@@ -77,19 +77,25 @@ export async function handleIntegrationRoutes(
 
     const url = new URL(req.url);
     const projectId = url.searchParams.get("project_id") || null;
+    console.log(`[integrations/connected] provider=${providerId}, projectId=${projectId}`);
     const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+    console.log(`[integrations/connected] apiKey found: ${!!apiKey}, length: ${apiKey?.length || 0}`);
     if (!apiKey) {
+      console.log(`[integrations/connected] NO API KEY for ${providerId}`);
       return json({ error: `${provider.name} API key not configured`, accounts: [] }, 200);
     }
 
     // Use Apteva user ID as the entity ID for the provider
-    const userId = user?.id || "default";
+    if (!user?.id) {
+      return json({ error: "Authentication required" }, 401);
+    }
 
     try {
-      const accounts = await provider.listConnectedAccounts(apiKey, userId);
+      const accounts = await provider.listConnectedAccounts(apiKey, user.id);
+      console.log(`[integrations/connected] Got ${accounts.length} accounts from ${providerId}`);
       return json({ accounts });
     } catch (e) {
-      console.error(`Failed to list connected accounts from ${providerId}:`, e);
+      console.error(`[integrations/connected] Failed from ${providerId}:`, e);
       return json({ error: "Failed to fetch connected accounts" }, 500);
     }
   }
@@ -116,12 +122,14 @@ export async function handleIntegrationRoutes(
       }
 
       // Use Apteva user ID as the entity ID
-      const userId = user?.id || "default";
+      if (!user?.id) {
+        return json({ error: "Authentication required" }, 401);
+      }
 
       // Default redirect URL back to our integrations page
       const callbackUrl = redirectUrl || `http://localhost:${process.env.PORT || 4280}/mcp?tab=hosted&connected=${appSlug}`;
 
-      const result = await provider.initiateConnection(apiKey, userId, appSlug, callbackUrl, credentials);
+      const result = await provider.initiateConnection(apiKey, user.id, appSlug, callbackUrl, credentials);
       return json(result);
     } catch (e) {
       console.error(`Failed to initiate connection for ${providerId}:`, e);

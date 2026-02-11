@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Chat } from "@apteva/apteva-kit";
+import { Chat, convertApiMessages } from "@apteva/apteva-kit";
 import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, RecurringIcon, ScheduledIcon, TaskOnceIcon } from "../common/Icons";
 import { formatCron, formatRelativeTime } from "../tasks/TasksPage";
 import { Select } from "../common/Select";
@@ -195,15 +195,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
       const res = await fetch(`/api/agents/${agent.id}/threads/${threadId}/messages`);
       if (res.ok) {
         const data = await res.json();
-        const msgs = (data.messages || [])
-          .filter((m: any) => typeof m.content === "string")
-          .map((m: any) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            timestamp: new Date(m.created_at),
-          }));
-        setInitialMessages(msgs);
+        setInitialMessages(convertApiMessages(data.messages || []));
       } else {
         setInitialMessages([]);
       }
@@ -255,36 +247,10 @@ function ThreadsTab({ agent }: { agent: Agent }) {
 
   // Show live chat for selected thread
   if (selectedThread) {
-    const selectedThreadData = threads.find(t => t.id === selectedThread);
     return (
       <>
       {ConfirmDialog}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header with back button */}
-        <div className="flex items-center gap-3 px-4 py-2 border-b border-[#1a1a1a] flex-shrink-0">
-          <button
-            onClick={() => { setSelectedThread(null); setInitialMessages([]); }}
-            className="text-[#666] hover:text-[#e0e0e0] transition text-lg"
-          >
-            ←
-          </button>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">
-              {selectedThreadData?.title || `Thread ${selectedThread.slice(0, 8)}`}
-            </p>
-            <p className="text-xs text-[#666]">
-              {selectedThreadData && new Date(selectedThreadData.updated_at || selectedThreadData.created_at).toLocaleString()}
-            </p>
-          </div>
-          <button
-            onClick={(e) => deleteThread(selectedThread, e)}
-            className="text-[#666] hover:text-red-400 text-sm px-2 py-1"
-          >
-            Delete
-          </button>
-        </div>
-
-        {/* Live chat in this thread */}
         {loadingMessages ? (
           <div className="flex-1 flex items-center justify-center text-[#666]">Loading messages...</div>
         ) : (
@@ -297,7 +263,8 @@ function ThreadsTab({ agent }: { agent: Agent }) {
             placeholder="Continue this conversation..."
             context={agent.systemPrompt}
             variant="terminal"
-            showHeader={false}
+            showHeader={true}
+            onHeaderBack={() => { setSelectedThread(null); setInitialMessages([]); }}
           />
         )}
       </div>

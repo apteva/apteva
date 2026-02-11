@@ -221,6 +221,21 @@ export async function handleMcpRoutes(
       });
     };
 
+    // Validate package/command names to prevent injection
+    const SAFE_PACKAGE_RE = /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+(@[a-z0-9^~>=<.*-]+)?(\[[\w,]+\])?$/i;
+
+    // Parse args safely — split on whitespace but respect quoted strings
+    const parseArgs = (raw: string, env: Record<string, string>): string[] => {
+      const substituted = substituteEnvVars(raw, env);
+      const args: string[] = [];
+      const re = /"([^"]*?)"|'([^']*?)'|(\S+)/g;
+      let m;
+      while ((m = re.exec(substituted)) !== null) {
+        args.push(m[1] ?? m[2] ?? m[3]);
+      }
+      return args;
+    };
+
     let cmd: string[];
     const serverEnv = server.env || {};
 
@@ -228,17 +243,19 @@ export async function handleMcpRoutes(
       // Custom command - substitute env vars in args
       cmd = server.command.split(" ");
       if (server.args) {
-        const substitutedArgs = substituteEnvVars(server.args, serverEnv);
-        cmd.push(...substitutedArgs.split(" "));
+        cmd.push(...parseArgs(server.args, serverEnv));
       }
     } else if (server.type === "pip" && server.package) {
       // Python pip package - install first, then run module
       const pipPackage = server.package;
+      if (!SAFE_PACKAGE_RE.test(pipPackage)) {
+        return json({ error: "Invalid pip package name" }, 400);
+      }
       const pipModule = server.pip_module || server.package.split("[")[0]; // Default: package name without extras
 
       console.log(`Installing pip package: ${pipPackage}...`);
       const installResult = spawn({
-        cmd: ["pip", "install", "--quiet", "--break-system-packages", pipPackage],
+        cmd: ["pip", "install", "--quiet", "--no-scripts", pipPackage],
         env: { ...process.env as Record<string, string>, ...serverEnv },
         stdout: "pipe",
         stderr: "pipe",
@@ -254,15 +271,16 @@ export async function handleMcpRoutes(
       // Now run the module
       cmd = ["python", "-m", pipModule];
       if (server.args) {
-        const substitutedArgs = substituteEnvVars(server.args, serverEnv);
-        cmd.push(...substitutedArgs.split(" "));
+        cmd.push(...parseArgs(server.args, serverEnv));
       }
     } else if (server.package) {
-      // npm package - use npx
-      cmd = ["npx", "-y", server.package];
+      // npm package - use npx with --ignore-scripts to prevent supply chain attacks
+      if (!SAFE_PACKAGE_RE.test(server.package)) {
+        return json({ error: "Invalid npm package name" }, 400);
+      }
+      cmd = ["npx", "--ignore-scripts", "-y", server.package];
       if (server.args) {
-        const substitutedArgs = substituteEnvVars(server.args, serverEnv);
-        cmd.push(...substitutedArgs.split(" "));
+        cmd.push(...parseArgs(server.args, serverEnv));
       }
     } else {
       return json({ error: "No command or package specified" }, 400);

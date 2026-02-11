@@ -5,7 +5,7 @@ import { Select } from "../common/Select";
 import { useProjects, useAuth, type Project } from "../../context";
 import type { Provider } from "../../types";
 
-type SettingsTab = "general" | "providers" | "projects" | "api-keys" | "account" | "updates" | "data";
+type SettingsTab = "general" | "providers" | "projects" | "channels" | "api-keys" | "account" | "updates" | "data";
 
 export function SettingsPage() {
   const { projectsEnabled } = useProjects();
@@ -15,6 +15,7 @@ export function SettingsPage() {
     { key: "general", label: "General" },
     { key: "providers", label: "Providers" },
     ...(projectsEnabled ? [{ key: "projects" as SettingsTab, label: "Projects" }] : []),
+    { key: "channels", label: "Channels" },
     { key: "api-keys", label: "API Keys" },
     { key: "account", label: "Account" },
     { key: "updates", label: "Updates" },
@@ -62,6 +63,7 @@ export function SettingsPage() {
         {activeTab === "general" && <GeneralSettings />}
         {activeTab === "providers" && <ProvidersSettings />}
         {activeTab === "projects" && projectsEnabled && <ProjectsSettings />}
+        {activeTab === "channels" && <ChannelsSettings />}
         {activeTab === "api-keys" && <ApiKeysSettings />}
         {activeTab === "account" && <AccountSettings />}
         {activeTab === "updates" && <UpdatesSettings />}
@@ -1880,6 +1882,272 @@ function DataSettings() {
           {clearing ? "Clearing..." : "Clear All Telemetry"}
         </button>
       </div>
+    </div>
+    </>
+  );
+}
+
+// --- Channels Settings ---
+
+interface ChannelInfo {
+  id: string;
+  type: string;
+  name: string;
+  agent_id: string;
+  status: "stopped" | "running" | "error";
+  error: string | null;
+  created_at: string;
+}
+
+interface AgentOption {
+  id: string;
+  name: string;
+  status: string;
+}
+
+function ChannelsSettings() {
+  const { authFetch } = useAuth();
+  const [channels, setChannels] = useState<ChannelInfo[]>([]);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [formData, setFormData] = useState({ name: "", agent_id: "", botToken: "" });
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { confirm, ConfirmDialog } = useConfirm();
+
+  const fetchChannels = async () => {
+    try {
+      const res = await authFetch("/api/channels");
+      const data = await res.json();
+      setChannels(data.channels || []);
+    } catch {
+      // Ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchAgents = async () => {
+    try {
+      const res = await authFetch("/api/agents");
+      const data = await res.json();
+      setAgents((data.agents || []).map((a: any) => ({ id: a.id, name: a.name, status: a.status })));
+    } catch {
+      // Ignore
+    }
+  };
+
+  useEffect(() => {
+    fetchChannels();
+    fetchAgents();
+  }, []);
+
+  const createChannel = async () => {
+    if (!formData.name || !formData.agent_id || !formData.botToken) return;
+    setCreating(true);
+    setError(null);
+
+    try {
+      const res = await authFetch("/api/channels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "telegram",
+          name: formData.name,
+          agent_id: formData.agent_id,
+          config: { botToken: formData.botToken },
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || "Failed to create channel");
+      } else {
+        setFormData({ name: "", agent_id: "", botToken: "" });
+        setShowForm(false);
+        await fetchChannels();
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const toggleChannel = async (channel: ChannelInfo) => {
+    const action = channel.status === "running" ? "stop" : "start";
+    try {
+      const res = await authFetch(`/api/channels/${channel.id}/${action}`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || `Failed to ${action} channel`);
+      }
+      await fetchChannels();
+    } catch {
+      setError(`Failed to ${action} channel`);
+    }
+  };
+
+  const deleteChannel = async (channel: ChannelInfo) => {
+    const confirmed = await confirm(`Delete channel "${channel.name}"?`, {
+      confirmText: "Delete",
+      title: "Delete Channel",
+    });
+    if (!confirmed) return;
+
+    try {
+      await authFetch(`/api/channels/${channel.id}`, { method: "DELETE" });
+      await fetchChannels();
+    } catch {
+      // Ignore
+    }
+  };
+
+  const statusColors: Record<string, string> = {
+    running: "bg-green-500/20 text-green-400",
+    stopped: "bg-[#333] text-[#666]",
+    error: "bg-red-500/20 text-red-400",
+  };
+
+  const getAgentName = (agentId: string) => {
+    return agents.find(a => a.id === agentId)?.name || agentId;
+  };
+
+  return (
+    <>
+    {ConfirmDialog}
+    <div className="max-w-2xl">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-semibold mb-1">Channels</h2>
+          <p className="text-sm text-[#666]">Connect agents to external messaging platforms</p>
+        </div>
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="flex items-center gap-2 bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1.5 rounded text-sm font-medium transition"
+        >
+          <PlusIcon /> Add Channel
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 bg-red-500/10 text-red-400 border border-red-500/30 px-3 py-2 rounded text-sm flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300 ml-2">
+            <CloseIcon />
+          </button>
+        </div>
+      )}
+
+      {/* Create form */}
+      {showForm && (
+        <div className="mb-6 bg-[#111] border border-[#1a1a1a] rounded-lg p-4 space-y-3">
+          <h3 className="text-sm font-medium text-[#888] mb-2">New Telegram Channel</h3>
+
+          <div>
+            <label className="block text-xs text-[#666] mb-1">Channel Name</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
+              placeholder="e.g. My Telegram Bot"
+              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-[#666] mb-1">Agent</label>
+            <Select
+              value={formData.agent_id}
+              options={agents.map(a => ({ value: a.id, label: a.name }))}
+              onChange={value => setFormData(prev => ({ ...prev, agent_id: value }))}
+              placeholder="Select an agent..."
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-[#666] mb-1">Bot Token</label>
+            <input
+              type="password"
+              value={formData.botToken}
+              onChange={e => setFormData(prev => ({ ...prev, botToken: e.target.value }))}
+              placeholder="From @BotFather on Telegram"
+              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+            />
+            <p className="text-xs text-[#555] mt-1">
+              Create a bot via <a href="https://t.me/BotFather" target="_blank" className="text-[#f97316] hover:underline">@BotFather</a> on Telegram to get a token.
+            </p>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={createChannel}
+              disabled={creating || !formData.name || !formData.agent_id || !formData.botToken}
+              className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-1.5 rounded text-sm font-medium transition"
+            >
+              {creating ? "Creating..." : "Create"}
+            </button>
+            <button
+              onClick={() => { setShowForm(false); setFormData({ name: "", agent_id: "", botToken: "" }); }}
+              className="border border-[#333] hover:border-[#444] px-4 py-1.5 rounded text-sm transition"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Channel list */}
+      {loading ? (
+        <p className="text-[#666] text-sm">Loading channels...</p>
+      ) : channels.length === 0 ? (
+        <div className="text-center py-12 text-[#666]">
+          <p className="text-lg mb-2">No channels configured</p>
+          <p className="text-sm">Add a Telegram channel to let users message your agents directly.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {channels.map(channel => (
+            <div key={channel.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="font-medium">{channel.name}</h3>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColors[channel.status] || statusColors.stopped}`}>
+                      {channel.status}
+                    </span>
+                  </div>
+                  <p className="text-sm text-[#666]">
+                    {channel.type === "telegram" ? "Telegram" : channel.type} → {getAgentName(channel.agent_id)}
+                  </p>
+                  {channel.status === "error" && channel.error && (
+                    <p className="text-xs text-red-400 mt-1">{channel.error}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 ml-4">
+                  <button
+                    onClick={() => toggleChannel(channel)}
+                    className={`px-3 py-1 rounded text-xs font-medium transition ${
+                      channel.status === "running"
+                        ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
+                        : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
+                    }`}
+                  >
+                    {channel.status === "running" ? "Stop" : "Start"}
+                  </button>
+                  <button
+                    onClick={() => deleteChannel(channel)}
+                    className="text-[#666] hover:text-red-400 transition text-sm"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
     </>
   );

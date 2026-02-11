@@ -21,6 +21,7 @@ interface TelemetryContextValue {
   activeAgents: Record<string, { type: string; expiresAt: number }>;
   statusChangeCounter: number;
   taskChangeCounter: number;
+  notificationCounter: number;
   clearEvents: () => void;
 }
 
@@ -35,6 +36,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   const [activeAgents, setActiveAgents] = useState<Record<string, { type: string; expiresAt: number }>>({});
   const [statusChangeCounter, setStatusChangeCounter] = useState(0);
   const [taskChangeCounter, setTaskChangeCounter] = useState(0);
+  const [notificationCounter, setNotificationCounter] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -124,6 +126,11 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
             if (data.some((e: TelemetryEvent) => e.category === "TASK" && (e.type === "task_created" || e.type === "task_updated" || e.type === "task_deleted"))) {
               setTaskChangeCounter(c => c + 1);
             }
+
+            // Detect notification-worthy events (errors, agent crashes)
+            if (data.some((e: TelemetryEvent) => e.level === "error" || e.category === "ERROR" || (e.category === "system" && e.type === "agent_stopped"))) {
+              setNotificationCounter(c => c + 1);
+            }
           }
         } catch {
           // Ignore parse errors (likely keepalive or empty message)
@@ -169,7 +176,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <TelemetryContext.Provider value={{ connected, events, lastActivityByAgent, activeAgents, statusChangeCounter, taskChangeCounter, clearEvents }}>
+    <TelemetryContext.Provider value={{ connected, events, lastActivityByAgent, activeAgents, statusChangeCounter, taskChangeCounter, notificationCounter, clearEvents }}>
       {children}
     </TelemetryContext.Provider>
   );
@@ -247,4 +254,10 @@ export function useAgentStatusChange(): number {
 export function useTaskChange(): number {
   const { taskChangeCounter } = useTelemetryContext();
   return taskChangeCounter;
+}
+
+// Hook to trigger notification badge refresh
+export function useNotificationChange(): number {
+  const { notificationCounter } = useTelemetryContext();
+  return notificationCounter;
 }

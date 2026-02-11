@@ -73,34 +73,28 @@ function evaluateExpression(
   args: Record<string, any>,
   helpers: ReturnType<typeof templateHelpers>,
 ): any {
-  // Handle args.* references
+  // Handle args.* references (e.g. args.name, args.query)
   if (expr.startsWith("args.")) {
     const key = expr.slice(5);
     return args[key] ?? null;
   }
 
-  // Handle helper functions and values
-  try {
-    const fn = new Function(
-      "args",
-      "uuid",
-      "now",
-      "timestamp",
-      "random_int",
-      "random_float",
-      `return ${expr}`,
-    );
-    return fn(
-      args,
-      helpers.uuid,
-      helpers.now,
-      helpers.timestamp,
-      helpers.random_int,
-      helpers.random_float,
-    );
-  } catch {
-    return expr;
-  }
+  // Handle known helper values
+  if (expr === "now") return helpers.now;
+  if (expr === "timestamp") return helpers.timestamp;
+
+  // Handle known helper function calls
+  const uuidMatch = expr.match(/^uuid\(\)$/);
+  if (uuidMatch) return helpers.uuid();
+
+  const randIntMatch = expr.match(/^random_int\(\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+  if (randIntMatch) return helpers.random_int(Number(randIntMatch[1]), Number(randIntMatch[2]));
+
+  const randFloatMatch = expr.match(/^random_float\(\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/);
+  if (randFloatMatch) return helpers.random_float(Number(randFloatMatch[1]), Number(randFloatMatch[2]));
+
+  // Return expression as-is if not recognized — never execute arbitrary code
+  return expr;
 }
 
 // Execute a mock handler — returns the rendered mock_response
@@ -197,7 +191,11 @@ async function executeHttp(
   }
 }
 
-// Execute a JavaScript handler — runs code string with args + credentials
+// Execute a JavaScript handler — runs user-defined code in a restricted scope.
+// SECURITY NOTE: This intentionally allows authenticated admins to define custom tool logic.
+// The code runs in a restricted Function scope with only args, credentials, and helpers exposed.
+// process, require, import, Bun, fetch etc. are NOT passed in — but note that new Function()
+// still has access to globalThis. For full sandboxing, consider using a Worker or subprocess.
 function executeJavascript(
   tool: McpServerTool,
   args: Record<string, any>,
@@ -206,6 +204,15 @@ function executeJavascript(
   if (!tool.code) {
     return {
       content: [{ type: "text", text: "Error: No code defined for this tool" }],
+      isError: true,
+    };
+  }
+
+  // Basic static checks — block obvious dangerous patterns
+  const dangerous = /\b(process|require|import|Bun|Deno|eval|Function|child_process|exec|spawn)\b/;
+  if (dangerous.test(tool.code)) {
+    return {
+      content: [{ type: "text", text: "Error: Tool code contains disallowed keywords (process, require, import, eval, exec, spawn)" }],
       isError: true,
     };
   }

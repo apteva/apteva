@@ -81,6 +81,19 @@ export function TriggersTab() {
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [createAgentId, setCreateAgentId] = useState(""); // For AgentDojo direct subscription flow
+  const [browseConfig, setBrowseConfig] = useState<Record<string, string>>({});
+
+  // AgentDojo add subscription modal — uses composio as data source (same as Integrations tab)
+  const [showAddDojo, setShowAddDojo] = useState(false);
+  const [dojoTriggerTypes, setDojoTriggerTypes] = useState<TriggerType[]>([]);
+  const [dojoTypesLoading, setDojoTypesLoading] = useState(false);
+  const [dojoAccounts, setDojoAccounts] = useState<ConnectedAccount[]>([]);
+  const [dojoSelectedType, setDojoSelectedType] = useState<string>("");
+  const [dojoAgentId, setDojoAgentId] = useState("");
+  const [dojoCreating, setDojoCreating] = useState(false);
+  const [dojoTypeSearch, setDojoTypeSearch] = useState("");
+  const [dojoConfig, setDojoConfig] = useState<Record<string, string>>({});
 
   // Add subscription
   const [showAddSub, setShowAddSub] = useState(false);
@@ -98,7 +111,7 @@ export function TriggersTab() {
   // Fetch available providers
   const fetchProviders = useCallback(async () => {
     try {
-      const res = await authFetch(`/api/triggers/providers`);
+      const res = await authFetch(`/api/triggers/providers${projectParam}`);
       if (res.ok) {
         const data = await res.json();
         setProviders(data.providers || []);
@@ -199,19 +212,169 @@ export function TriggersTab() {
   const startCreate = (triggerType: TriggerType) => {
     setSelectedType(triggerType);
     setSelectedAccountId("");
+    setCreateAgentId("");
+    setBrowseConfig({});
     setShowCreate(true);
     fetchConnectedAccounts();
   };
 
-  // Create trigger
-  const handleCreate = async () => {
-    if (!selectedType || !selectedAccountId) return;
+  const isAgentDojo = selectedProvider === "agentdojo";
 
+  // Open AgentDojo add subscription modal — fetches from agentdojo provider (same as Integrations tab)
+  const openAddDojoSub = async () => {
+    setShowAddDojo(true);
+    setDojoSelectedType("");
+    setDojoAgentId("");
+    setDojoTypeSearch("");
+    setDojoConfig({});
+
+    console.log("[openAddDojoSub] Opening modal, selectedProvider:", selectedProvider);
+    console.log("[openAddDojoSub] currentProjectId:", currentProjectId, "projectParam:", projectParam);
+    console.log("[openAddDojoSub] existing dojoTriggerTypes:", dojoTriggerTypes.length, "dojoAccounts:", dojoAccounts.length);
+
+    // Fetch trigger types from agentdojo (same provider as Integrations tab uses)
+    const loadTypes = async () => {
+      if (dojoTriggerTypes.length > 0) {
+        console.log("[openAddDojoSub] Already have", dojoTriggerTypes.length, "trigger types, skipping fetch");
+        return;
+      }
+      setDojoTypesLoading(true);
+      try {
+        let url = `/api/triggers/types?provider=agentdojo`;
+        if (currentProjectId && currentProjectId !== "unassigned") url += `&project_id=${currentProjectId}`;
+        console.log("[openAddDojoSub] Fetching trigger types:", url);
+        const res = await authFetch(url);
+        const data = await res.json();
+        console.log("[openAddDojoSub] Trigger types response:", res.status, "ok:", res.ok, "types count:", (data.types || []).length, "error:", data.error);
+        if (data.types && data.types.length > 0) {
+          console.log("[openAddDojoSub] Sample trigger type:", JSON.stringify(data.types[0]));
+        }
+        setDojoTriggerTypes(data.types || []);
+      } catch (e) {
+        console.error("[openAddDojoSub] Failed to load trigger types:", e);
+      }
+      setDojoTypesLoading(false);
+    };
+
+    // Fetch connected accounts from agentdojo (same as Integrations tab)
+    const loadAccounts = async () => {
+      try {
+        const url = `/api/integrations/agentdojo/connected${projectParam}`;
+        console.log("[openAddDojoSub] Fetching connected accounts:", url);
+        const res = await authFetch(url);
+        const data = await res.json();
+        console.log("[openAddDojoSub] Connected accounts response:", res.status, "ok:", res.ok, "accounts count:", (data.accounts || []).length, "error:", data.error);
+        if (data.accounts && data.accounts.length > 0) {
+          console.log("[openAddDojoSub] Sample account:", JSON.stringify(data.accounts[0]));
+        }
+        const active = (data.accounts || []).filter((a: ConnectedAccount) => a.status === "active");
+        console.log("[openAddDojoSub] Active accounts:", active.length);
+        setDojoAccounts(active);
+      } catch (e) {
+        console.error("[openAddDojoSub] Failed to load connected accounts:", e);
+      }
+    };
+
+    await Promise.all([loadTypes(), loadAccounts()]);
+  };
+
+  // Create AgentDojo subscription from the add-subscription modal
+  const handleAddDojoSub = async () => {
+    const tt = dojoTriggerTypes.find(t => t.slug === dojoSelectedType);
+    const matched = tt ? matchAccount(dojoAccounts, tt.toolkit_slug) : null;
+    console.log("[handleAddDojoSub] tt:", tt?.slug, "matched:", matched?.id, matched?.appName, "agentId:", dojoAgentId);
+    if (!tt || !dojoAgentId || !matched) return;
+
+    setDojoCreating(true);
+    setError(null);
+    try {
+      const agent = agents.find(a => a.id === dojoAgentId);
+      const providerParam = `provider=agentdojo`;
+      const url = projectParam
+        ? `/api/triggers${projectParam}&${providerParam}`
+        : `/api/triggers?${providerParam}`;
+      const configPayload = {
+        callback_url: `${window.location.origin}/api/webhooks/agentdojo`,
+        title: `${tt.name} → ${agent?.name || "Agent"}`,
+        server: tt.toolkit_slug,
+        agent_id: dojoAgentId,
+        ...dojoConfig, // Merge dynamic config fields (e.g. owner, repo for GitHub)
+      };
+      console.log("[handleAddDojoSub] config:", JSON.stringify(configPayload));
+      const res = await authFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug: tt.slug,
+          connectedAccountId: matched.id,
+          config: configPayload,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to create subscription");
+      } else {
+        setShowAddDojo(false);
+        fetchTriggers();
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to create subscription");
+    }
+    setDojoCreating(false);
+  };
+
+  // Create trigger (Composio: trigger instance, AgentDojo: subscription + agent routing)
+  const handleCreate = async () => {
+    if (!selectedType) return;
+
+    // AgentDojo: create remote subscription directly (callback_url points to apteva webhook handler)
+    if (isAgentDojo) {
+      if (!createAgentId || !browseMatchedAccount) return;
+      setCreating(true);
+      setError(null);
+      try {
+        const agent = agents.find(a => a.id === createAgentId);
+        const instanceUrl = window.location.origin;
+        const providerParam = `provider=${selectedProvider}`;
+        const url = projectParam
+          ? `/api/triggers${projectParam}&${providerParam}`
+          : `/api/triggers?${providerParam}`;
+        const res = await authFetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slug: selectedType.slug,
+            connectedAccountId: browseMatchedAccount.id,
+            config: {
+              callback_url: `${instanceUrl}/api/webhooks/agentdojo`,
+              title: `${selectedType.name} → ${agent?.name || "Agent"}`,
+              server: selectedType.toolkit_slug,
+              agent_id: createAgentId,
+              ...browseConfig, // Dynamic config fields (e.g. owner, repo)
+            },
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || "Failed to create subscription");
+        } else {
+          setShowCreate(false);
+          setSelectedType(null);
+          fetchTriggers();
+        }
+      } catch (e: any) {
+        setError(e.message || "Failed to create subscription");
+      }
+      setCreating(false);
+      return;
+    }
+
+    // Composio: standard trigger instance creation
+    if (!selectedAccountId) return;
     setCreating(true);
     setError(null);
     try {
       const providerParam = `provider=${selectedProvider}`;
-      const sep = projectParam ? "&" : "?";
       const url = projectParam
         ? `/api/triggers${projectParam}&${providerParam}`
         : `/api/triggers?${providerParam}`;
@@ -344,6 +507,25 @@ export function TriggersTab() {
     return t.name.toLowerCase().includes(s) || t.slug.toLowerCase().includes(s) || t.description.toLowerCase().includes(s);
   });
 
+  // Auto-match connected account from toolkit slug
+  const matchAccount = (accounts: ConnectedAccount[], toolkitSlug: string): ConnectedAccount | null => {
+    if (!toolkitSlug || accounts.length === 0) return null;
+    const slug = toolkitSlug.toLowerCase();
+    return accounts.find(a =>
+      a.appId?.toLowerCase() === slug ||
+      a.appName?.toLowerCase() === slug ||
+      a.appId?.toLowerCase().includes(slug) ||
+      a.appName?.toLowerCase().includes(slug)
+    ) || null;
+  };
+
+  // Derived: auto-matched account for Add Subscription modal
+  const dojoSelectedTriggerType = dojoTriggerTypes.find(t => t.slug === dojoSelectedType);
+  const dojoMatchedAccount = dojoSelectedTriggerType ? matchAccount(dojoAccounts, dojoSelectedTriggerType.toolkit_slug) : null;
+
+  // Derived: auto-matched account for Browse Subscribe modal
+  const browseMatchedAccount = selectedType && isAgentDojo ? matchAccount(connectedAccounts, selectedType.toolkit_slug) : null;
+
   // Agent map for quick lookups
   const agentMap = new Map(agents.map(a => [a.id, a]));
 
@@ -387,7 +569,8 @@ export function TriggersTab() {
         </div>
       )}
 
-      {/* Subscriptions (trigger → agent routing) */}
+      {/* Subscriptions (trigger → agent routing) — hide entirely for AgentDojo (handled in Active Subscriptions) */}
+      {!isAgentDojo && (
       <section>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-medium text-[#888]">
@@ -449,54 +632,126 @@ export function TriggersTab() {
           </div>
         )}
       </section>
+      )}
 
-      {/* Trigger Instances */}
-      <section>
-        <h3 className="text-sm font-medium text-[#888] mb-3">
-          Trigger Instances ({triggers.length})
-        </h3>
-        {triggersLoading ? (
-          <div className="text-center py-6 text-[#666] text-sm">Loading triggers...</div>
-        ) : triggers.length === 0 ? (
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
-            No trigger instances. Browse trigger types below to create one.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {triggers.map(trigger => (
-              <div key={trigger.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[#666]"}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate">
-                    {trigger.trigger_slug.replace(/_/g, " ")}
+      {/* Trigger Instances — only show for providers that have them (not AgentDojo) */}
+      {!isAgentDojo && (
+        <section>
+          <h3 className="text-sm font-medium text-[#888] mb-3">
+            Trigger Instances ({triggers.length})
+          </h3>
+          {triggersLoading ? (
+            <div className="text-center py-6 text-[#666] text-sm">Loading triggers...</div>
+          ) : triggers.length === 0 ? (
+            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
+              No trigger instances. Browse trigger types below to create one.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {triggers.map(trigger => (
+                <div key={trigger.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[#666]"}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">
+                      {trigger.trigger_slug.replace(/_/g, " ")}
+                    </div>
+                    <div className="text-xs text-[#666]">
+                      ID: {trigger.id.slice(0, 12)}... | Created: {new Date(trigger.created_at).toLocaleDateString()}
+                    </div>
                   </div>
-                  <div className="text-xs text-[#666]">
-                    ID: {trigger.id.slice(0, 12)}... | Created: {new Date(trigger.created_at).toLocaleDateString()}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => toggleTrigger(trigger.id, trigger.status)}
+                      className={`text-xs px-3 py-1 rounded transition ${
+                        trigger.status === "active"
+                          ? "bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20"
+                          : "bg-green-500/10 text-green-400 hover:bg-green-500/20"
+                      }`}
+                    >
+                      {trigger.status === "active" ? "Disable" : "Enable"}
+                    </button>
+                    <button
+                      onClick={() => deleteTrigger(trigger.id)}
+                      className="text-xs text-[#666] hover:text-red-400 transition px-2"
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    onClick={() => toggleTrigger(trigger.id, trigger.status)}
-                    className={`text-xs px-3 py-1 rounded transition ${
-                      trigger.status === "active"
-                        ? "bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20"
-                        : "bg-green-500/10 text-green-400 hover:bg-green-500/20"
-                    }`}
-                  >
-                    {trigger.status === "active" ? "Disable" : "Enable"}
-                  </button>
-                  <button
-                    onClick={() => deleteTrigger(trigger.id)}
-                    className="text-xs text-[#666] hover:text-red-400 transition px-2"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* AgentDojo Active Subscriptions — shows remote subscriptions directly */}
+      {isAgentDojo && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium text-[#888]">
+              Active Subscriptions ({triggers.length})
+            </h3>
+            <button
+              onClick={openAddDojoSub}
+              className="text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition"
+            >
+              + Add Subscription
+            </button>
           </div>
-        )}
-      </section>
+          {triggersLoading ? (
+            <div className="text-center py-6 text-[#666] text-sm">Loading subscriptions...</div>
+          ) : triggers.length === 0 ? (
+            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
+              No active subscriptions. Browse trigger types below to create one.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {triggers.map(trigger => {
+                const localSub = subscriptions.find(s => s.trigger_instance_id === trigger.id);
+                const agent = localSub ? agentMap.get(localSub.agent_id) : null;
+                return (
+                  <div key={trigger.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[#666]"}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {(trigger.config?.title as string) || trigger.trigger_slug.replace(/_/g, " ")}
+                        {agent && (
+                          <>
+                            <span className="text-[#555] mx-1.5">&rarr;</span>
+                            <span className="text-[#f97316]">{agent.name}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="text-xs text-[#666]">
+                        {trigger.config?.server && <span>{String(trigger.config.server)} | </span>}
+                        ID: {String(trigger.id).slice(0, 8)} | Created: {new Date(trigger.created_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => toggleTrigger(trigger.id, trigger.status)}
+                        className={`text-xs px-3 py-1 rounded transition ${
+                          trigger.status === "active"
+                            ? "bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20"
+                            : "bg-green-500/10 text-green-400 hover:bg-green-500/20"
+                        }`}
+                      >
+                        {trigger.status === "active" ? "Disable" : "Enable"}
+                      </button>
+                      <button
+                        onClick={() => deleteTrigger(trigger.id)}
+                        className="text-xs text-[#666] hover:text-red-400 transition px-2"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Browse Trigger Types */}
       <section>
@@ -548,7 +803,7 @@ export function TriggersTab() {
                     onClick={() => startCreate(tt)}
                     className="w-full mt-3 text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition"
                   >
-                    Create Trigger
+                    {isAgentDojo ? "Subscribe" : "Create Trigger"}
                   </button>
                 </div>
               ))}
@@ -566,28 +821,99 @@ export function TriggersTab() {
       {showCreate && selectedType && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-md mx-4">
-            <h3 className="font-medium mb-1">Create Trigger</h3>
-            <p className="text-xs text-[#666] mb-4">{selectedType.name}</p>
+            <h3 className="font-medium mb-1">
+              {isAgentDojo ? "Create Subscription" : "Create Trigger"}
+            </h3>
+            <p className="text-xs text-[#666] mb-4">
+              {selectedType.name}
+              {selectedType.toolkit_name && <span className="text-[#555]"> ({selectedType.toolkit_name})</span>}
+            </p>
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
-                {connectedAccounts.length === 0 ? (
-                  <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
-                    No connected accounts available. Connect an app first in the Integrations tab.
+              {/* Connected Account — only for Composio */}
+              {!isAgentDojo && (
+                <div>
+                  <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
+                  {connectedAccounts.length === 0 ? (
+                    <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                      No connected accounts available. Connect an app first in the Integrations tab.
+                    </div>
+                  ) : (
+                    <Select
+                      value={selectedAccountId}
+                      onChange={setSelectedAccountId}
+                      placeholder="Select account..."
+                      options={connectedAccounts.map(acc => ({
+                        value: acc.id,
+                        label: `${acc.appName} (${acc.id.slice(0, 8)}...)`,
+                      }))}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Agent selection — for AgentDojo direct subscription */}
+              {isAgentDojo && (
+                <div>
+                  <label className="block text-xs text-[#888] mb-1.5">Route to Agent</label>
+                  {agents.length === 0 ? (
+                    <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                      No agents available. Create an agent first.
+                    </div>
+                  ) : (
+                    <Select
+                      value={createAgentId}
+                      onChange={setCreateAgentId}
+                      placeholder="Select agent..."
+                      options={agents.map(agent => ({
+                        value: agent.id,
+                        label: `${agent.name} (${agent.status})`,
+                      }))}
+                    />
+                  )}
+
+                  {/* Connected account — auto-matched from toolkit */}
+                  <div className="mt-3">
+                    <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
+                    {browseMatchedAccount ? (
+                      <div className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded p-3">
+                        Connected: {browseMatchedAccount.appName}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 rounded p-3">
+                        No connected account for {selectedType?.toolkit_name || "this app"}. Connect it first in the Integrations tab.
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <Select
-                    value={selectedAccountId}
-                    onChange={setSelectedAccountId}
-                    placeholder="Select account..."
-                    options={connectedAccounts.map(acc => ({
-                      value: acc.id,
-                      label: `${acc.appName} (${acc.id.slice(0, 8)}...)`,
-                    }))}
-                  />
-                )}
-              </div>
+
+                  {/* Dynamic config fields from config_schema */}
+                  {selectedType.config_schema && Object.keys((selectedType.config_schema as any).properties || {}).length > 0 && (
+                    <div className="mt-3">
+                      <label className="block text-xs text-[#888] mb-1.5">Configuration</label>
+                      <div className="space-y-2">
+                        {Object.entries((selectedType.config_schema as any).properties || {}).map(([key, schema]: [string, any]) => {
+                          const required = ((selectedType.config_schema as any).required || []).includes(key);
+                          return (
+                            <div key={key}>
+                              <label className="block text-[11px] text-[#888] mb-1">
+                                {schema.title || key}
+                                {required && <span className="text-red-400 ml-0.5">*</span>}
+                              </label>
+                              <input
+                                type="text"
+                                value={browseConfig[key] || ""}
+                                onChange={(e) => setBrowseConfig(prev => ({ ...prev, [key]: e.target.value }))}
+                                placeholder={schema.description || `Enter ${schema.title || key}...`}
+                                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2 mt-4">
@@ -599,10 +925,13 @@ export function TriggersTab() {
               </button>
               <button
                 onClick={handleCreate}
-                disabled={!selectedAccountId || creating}
+                disabled={isAgentDojo ? (
+                  !createAgentId || !browseMatchedAccount || creating ||
+                  (selectedType?.config_schema && ((selectedType.config_schema as any).required || []).some((key: string) => !browseConfig[key]?.trim()))
+                ) : (!selectedAccountId || creating)}
                 className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
               >
-                {creating ? "Creating..." : "Create"}
+                {creating ? "Creating..." : isAgentDojo ? "Subscribe" : "Create"}
               </button>
             </div>
           </div>
@@ -682,6 +1011,156 @@ export function TriggersTab() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* AgentDojo Add Subscription Modal */}
+      {showAddDojo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-lg mx-4">
+            <h3 className="font-medium mb-1">Add Subscription</h3>
+            <p className="text-xs text-[#666] mb-4">
+              Select a trigger from your connected apps and route it to an agent.
+            </p>
+
+            <div className="space-y-4">
+              {/* Trigger type selection */}
+              <div>
+                <label className="block text-xs text-[#888] mb-1.5">Trigger</label>
+                {dojoTypesLoading ? (
+                  <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">Loading triggers...</div>
+                ) : dojoTriggerTypes.length === 0 ? (
+                  <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                    No triggers available. Connect an app first in the Integrations tab.
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      value={dojoTypeSearch}
+                      onChange={(e) => setDojoTypeSearch(e.target.value)}
+                      placeholder="Search triggers..."
+                      className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm mb-2 focus:outline-none focus:border-[#f97316]"
+                    />
+                    <div className="max-h-48 overflow-y-auto border border-[#1a1a1a] rounded-lg">
+                      {dojoTriggerTypes
+                        .filter(t => {
+                          if (!dojoTypeSearch) return true;
+                          const s = dojoTypeSearch.toLowerCase();
+                          return t.name.toLowerCase().includes(s) || t.slug.toLowerCase().includes(s) || t.toolkit_name.toLowerCase().includes(s);
+                        })
+                        .slice(0, 50)
+                        .map(t => (
+                          <button
+                            key={t.slug}
+                            onClick={() => { setDojoSelectedType(t.slug); setDojoConfig({}); }}
+                            className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition border-b border-[#1a1a1a] last:border-0 ${
+                              dojoSelectedType === t.slug
+                                ? "bg-[#f97316]/10 text-[#f97316]"
+                                : "hover:bg-[#1a1a1a] text-[#ccc]"
+                            }`}
+                          >
+                            {t.logo ? (
+                              <img src={t.logo} alt="" className="w-5 h-5 rounded object-contain flex-shrink-0" />
+                            ) : (
+                              <div className="w-5 h-5 rounded bg-[#1a1a1a] flex items-center justify-center text-[10px] flex-shrink-0">
+                                {t.toolkit_name?.[0]?.toUpperCase() || "?"}
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="truncate">{t.name}</div>
+                              <div className="text-[10px] text-[#666] truncate">{t.toolkit_name}</div>
+                            </div>
+                          </button>
+                        ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Connected account — auto-matched */}
+              {dojoSelectedType && (
+                <div>
+                  <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
+                  {dojoMatchedAccount ? (
+                    <div className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded p-3">
+                      Connected: {dojoMatchedAccount.appName}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 rounded p-3">
+                      No connected account for {dojoSelectedTriggerType?.toolkit_name || "this app"}. Connect it first in the Integrations tab.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Dynamic config fields from config_schema */}
+              {dojoSelectedTriggerType && dojoSelectedTriggerType.config_schema && Object.keys(dojoSelectedTriggerType.config_schema.properties || {}).length > 0 && (
+                <div>
+                  <label className="block text-xs text-[#888] mb-1.5">Configuration</label>
+                  <div className="space-y-2">
+                    {Object.entries((dojoSelectedTriggerType.config_schema as any).properties || {}).map(([key, schema]: [string, any]) => {
+                      const required = ((dojoSelectedTriggerType.config_schema as any).required || []).includes(key);
+                      return (
+                        <div key={key}>
+                          <label className="block text-[11px] text-[#888] mb-1">
+                            {schema.title || key}
+                            {required && <span className="text-red-400 ml-0.5">*</span>}
+                          </label>
+                          <input
+                            type="text"
+                            value={dojoConfig[key] || ""}
+                            onChange={(e) => setDojoConfig(prev => ({ ...prev, [key]: e.target.value }))}
+                            placeholder={schema.description || `Enter ${schema.title || key}...`}
+                            className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Agent selection */}
+              <div>
+                <label className="block text-xs text-[#888] mb-1.5">Target Agent</label>
+                {agents.length === 0 ? (
+                  <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                    No agents available. Create an agent first.
+                  </div>
+                ) : (
+                  <Select
+                    value={dojoAgentId}
+                    onChange={setDojoAgentId}
+                    placeholder="Select agent..."
+                    options={agents.map(agent => ({
+                      value: agent.id,
+                      label: `${agent.name} (${agent.status})`,
+                    }))}
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button
+                onClick={() => setShowAddDojo(false)}
+                className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddDojoSub}
+                disabled={!dojoSelectedType || !dojoAgentId || !dojoMatchedAccount || dojoCreating || (
+                  dojoSelectedTriggerType?.config_schema &&
+                  ((dojoSelectedTriggerType.config_schema as any).required || []).some((key: string) => !dojoConfig[key]?.trim())
+                )}
+                className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
+              >
+                {dojoCreating ? "Creating..." : "Subscribe"}
+              </button>
+            </div>
           </div>
         </div>
       )}

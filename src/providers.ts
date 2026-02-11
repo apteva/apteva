@@ -198,35 +198,48 @@ export const ProviderKeys = {
     }
   },
 
-  // Get decrypted API key for a provider (global key)
+  // Get decrypted API key for a provider (global key, falls back to env var)
   getDecrypted(providerId: string): string | null {
     const record = ProviderKeysDB.findByProvider(providerId);
-    if (!record) return null;
-
-    try {
-      return decrypt(record.encrypted_key);
-    } catch (err) {
-      console.error(`Failed to decrypt key for ${providerId}:`, err);
-      return null;
+    if (record) {
+      try {
+        return decrypt(record.encrypted_key);
+      } catch (err) {
+        console.error(`Failed to decrypt key for ${providerId}:`, err);
+      }
     }
+
+    // Fall back to environment variable
+    const provider = PROVIDERS[providerId as ProviderId];
+    if (provider?.envVar) {
+      const envVal = process.env[provider.envVar];
+      if (envVal) return envVal;
+    }
+    return null;
   },
 
   // Get decrypted API key for a provider and project
   // Falls back to global key if no project-specific key exists
   getDecryptedForProject(providerId: string, projectId: string | null): string | null {
+    console.log(`[ProviderKeys.getDecryptedForProject] providerId=${providerId}, projectId=${projectId}`);
     // Try project-specific key first
     if (projectId) {
       const projectRecord = ProviderKeysDB.findByProviderAndProject(providerId, projectId);
+      console.log(`[ProviderKeys.getDecryptedForProject] project record found: ${!!projectRecord}`);
       if (projectRecord) {
         try {
-          return decrypt(projectRecord.encrypted_key);
+          const key = decrypt(projectRecord.encrypted_key);
+          console.log(`[ProviderKeys.getDecryptedForProject] decrypted project key OK, length=${key?.length}`);
+          return key;
         } catch (err) {
           console.error(`Failed to decrypt project key for ${providerId}/${projectId}:`, err);
         }
       }
     }
     // Fall back to global key
-    return this.getDecrypted(providerId);
+    const globalKey = this.getDecrypted(providerId);
+    console.log(`[ProviderKeys.getDecryptedForProject] global fallback: found=${!!globalKey}, length=${globalKey?.length || 0}`);
+    return globalKey;
   },
 
   // Check if a provider has a key configured (global)

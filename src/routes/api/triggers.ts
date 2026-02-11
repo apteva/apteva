@@ -45,10 +45,12 @@ export async function handleTriggerRoutes(
 
   // GET /api/triggers/providers - List available trigger providers
   if (path === "/api/triggers/providers" && method === "GET") {
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id") || null;
     const providerIds = getTriggerProviderIds();
     const providers = providerIds.map(id => {
       const provider = getTriggerProvider(id);
-      const hasKey = !!ProviderKeys.getDecrypted(id);
+      const hasKey = !!ProviderKeys.getDecryptedForProject(id, projectId);
       return { id, name: provider?.name || id, connected: hasKey };
     });
     return json({ providers });
@@ -65,20 +67,24 @@ export async function handleTriggerRoutes(
     const projectId = url.searchParams.get("project_id") || null;
 
     const provider = getTriggerProvider(providerId);
+    console.log(`[triggers/types] provider=${providerId}, toolkitSlugs=${toolkitSlugsParam}, projectId=${projectId}, providerFound=${!!provider}`);
     if (!provider) {
       return json({ error: `Unknown trigger provider: ${providerId}` }, 404);
     }
 
     const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+    console.log(`[triggers/types] apiKey found: ${!!apiKey}, length: ${apiKey?.length || 0}, first4: ${apiKey?.substring(0, 4) || 'none'}`);
     if (!apiKey) {
+      console.log(`[triggers/types] NO API KEY for ${providerId} (projectId=${projectId})`);
       return json({ error: `${provider.name} API key not configured`, types: [] }, 200);
     }
 
     try {
       const types = await provider.listTriggerTypes(apiKey, toolkitSlugs);
+      console.log(`[triggers/types] Got ${types.length} types from ${providerId}`);
       return json({ types });
     } catch (e) {
-      console.error(`Failed to list trigger types from ${providerId}:`, e);
+      console.error(`[triggers/types] Failed to list trigger types from ${providerId}:`, e);
       return json({ error: "Failed to fetch trigger types" }, 500);
     }
   }
@@ -165,6 +171,20 @@ export async function handleTriggerRoutes(
       }
 
       const result = await provider.createTrigger(apiKey, slug, connectedAccountId, config);
+
+      // Also create a local subscription for webhook routing
+      if (config?.agent_id && result.triggerId) {
+        const triggerSlug = config.server ? `${config.server}:${slug.replace(/^.*?-/, '')}` : slug;
+        SubscriptionDB.create({
+          trigger_slug: slug,
+          trigger_instance_id: result.triggerId,
+          agent_id: config.agent_id,
+          enabled: true,
+          project_id: projectId,
+        });
+        console.log(`[triggers] Created local subscription: ${slug} (instance=${result.triggerId}) → agent ${config.agent_id}`);
+      }
+
       return json(result, 201);
     } catch (e: any) {
       console.error(`Failed to create trigger:`, e);

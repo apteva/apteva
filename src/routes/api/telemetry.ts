@@ -139,5 +139,35 @@ export async function handleTelemetryRoutes(
     return json({ deleted });
   }
 
+  // --- Notification endpoints (piggyback on telemetry `seen` flag) ---
+
+  // GET /api/notifications - Get notification-worthy events
+  if (path === "/api/notifications" && method === "GET") {
+    const url = new URL(req.url);
+    const limit = parseInt(url.searchParams.get("limit") || "50");
+    const notifications = TelemetryDB.getNotifications(limit);
+    return json({ notifications });
+  }
+
+  // GET /api/notifications/count - Get unseen notification count
+  if (path === "/api/notifications/count" && method === "GET") {
+    const count = TelemetryDB.getUnseenCount();
+    return json({ count });
+  }
+
+  // POST /api/notifications/mark-seen - Mark specific notifications as seen
+  if (path === "/api/notifications/mark-seen" && method === "POST") {
+    const body = await req.json() as { ids?: string[]; all?: boolean };
+    if (body.all) {
+      const updated = TelemetryDB.markAllSeen();
+      return json({ updated });
+    }
+    if (body.ids && body.ids.length > 0) {
+      const updated = TelemetryDB.markSeen(body.ids);
+      return json({ updated });
+    }
+    return json({ error: "Provide ids array or all: true" }, 400);
+  }
+
   return null;
 }

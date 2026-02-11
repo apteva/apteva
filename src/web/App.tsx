@@ -240,7 +240,7 @@ function AppContent() {
 
   return (
     <div className="h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex flex-col overflow-hidden">
-      <Header onMenuClick={() => setMobileMenuOpen(true)} />
+      <Header onMenuClick={() => setMobileMenuOpen(true)} agents={agents} />
 
       {startError && (
         <ErrorBanner message={startError} onDismiss={() => setStartError(null)} />

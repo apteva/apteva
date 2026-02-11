@@ -217,6 +217,33 @@ export interface SubscriptionRow {
   updated_at: string;
 }
 
+// Channel: external messaging platform bound to an agent
+export interface Channel {
+  id: string;
+  type: "telegram"; // future: "slack", "discord"
+  name: string;
+  agent_id: string;
+  config: string; // encrypted JSON
+  status: "stopped" | "running" | "error";
+  error: string | null;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelRow {
+  id: string;
+  type: string;
+  name: string;
+  agent_id: string;
+  config: string;
+  status: string;
+  error: string | null;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface McpServerRow {
   id: string;
   name: string;
@@ -735,6 +762,33 @@ function runMigrations() {
         CREATE INDEX IF NOT EXISTS idx_subscriptions_agent ON subscriptions(agent_id);
         CREATE INDEX IF NOT EXISTS idx_subscriptions_trigger_slug ON subscriptions(trigger_slug);
         CREATE INDEX IF NOT EXISTS idx_subscriptions_trigger_instance ON subscriptions(trigger_instance_id);
+      `,
+    },
+    {
+      name: "032_create_channels",
+      sql: `
+        CREATE TABLE IF NOT EXISTS channels (
+          id TEXT PRIMARY KEY,
+          type TEXT NOT NULL,
+          name TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          config TEXT NOT NULL,
+          status TEXT DEFAULT 'stopped',
+          error TEXT,
+          project_id TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_channels_agent ON channels(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_channels_status ON channels(status);
+      `,
+    },
+    {
+      name: "033_add_telemetry_seen",
+      sql: `
+        ALTER TABLE telemetry_events ADD COLUMN seen INTEGER DEFAULT 0;
+        CREATE INDEX IF NOT EXISTS idx_telemetry_seen ON telemetry_events(seen);
       `,
     },
     {
@@ -1768,6 +1822,7 @@ export interface TelemetryEvent {
   duration_ms: number | null;
   error: string | null;
   received_at: string;
+  seen?: boolean;
 }
 
 interface TelemetryEventRow {
@@ -1785,6 +1840,7 @@ interface TelemetryEventRow {
   duration_ms: number | null;
   error: string | null;
   received_at: string;
+  seen?: number;
 }
 
 // Telemetry operations
@@ -2066,6 +2122,45 @@ export const TelemetryDB = {
     const row = db.query("SELECT COUNT(*) as count FROM telemetry_events").get() as { count: number };
     return row.count;
   },
+
+  // --- Notification helpers (piggyback on telemetry with `seen` flag) ---
+
+  // Notification-worthy filter: errors + agent crashes
+  getNotifications(limit = 50): TelemetryEvent[] {
+    const rows = db.query(`
+      SELECT * FROM telemetry_events
+      WHERE (level = 'error' OR (category = 'system' AND type = 'agent_stopped') OR category = 'ERROR')
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `).all(limit) as TelemetryEventRow[];
+    return rows.map(rowToTelemetryEvent);
+  },
+
+  getUnseenCount(): number {
+    const row = db.query(`
+      SELECT COUNT(*) as count FROM telemetry_events
+      WHERE seen = 0
+        AND (level = 'error' OR (category = 'system' AND type = 'agent_stopped') OR category = 'ERROR')
+    `).get() as { count: number };
+    return row.count;
+  },
+
+  markSeen(ids: string[]): number {
+    if (ids.length === 0) return 0;
+    const placeholders = ids.map(() => "?").join(",");
+    const result = db.run(
+      `UPDATE telemetry_events SET seen = 1 WHERE id IN (${placeholders})`,
+      ids
+    );
+    return result.changes;
+  },
+
+  markAllSeen(): number {
+    const result = db.run(
+      `UPDATE telemetry_events SET seen = 1 WHERE seen = 0 AND (level = 'error' OR (category = 'system' AND type = 'agent_stopped') OR category = 'ERROR')`
+    );
+    return result.changes;
+  },
 };
 
 function rowToTelemetryEvent(row: TelemetryEventRow): TelemetryEvent {
@@ -2084,6 +2179,7 @@ function rowToTelemetryEvent(row: TelemetryEventRow): TelemetryEvent {
     duration_ms: row.duration_ms,
     error: row.error,
     received_at: row.received_at,
+    seen: row.seen === 1,
   };
 }
 
@@ -2722,6 +2818,90 @@ export const SubscriptionDB = {
 
   delete(id: string): boolean {
     const result = db.run("DELETE FROM subscriptions WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+};
+
+// --- Channel DB ---
+
+function rowToChannel(row: ChannelRow): Channel {
+  return {
+    id: row.id,
+    type: row.type as Channel["type"],
+    name: row.name,
+    agent_id: row.agent_id,
+    config: row.config,
+    status: row.status as Channel["status"],
+    error: row.error,
+    project_id: row.project_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export const ChannelDB = {
+  create(channel: { type: string; name: string; agent_id: string; config: string; project_id?: string | null }): Channel {
+    const id = generateId();
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO channels (id, type, name, agent_id, config, status, project_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'stopped', ?, ?, ?)`,
+      [id, channel.type, channel.name, channel.agent_id, channel.config, channel.project_id || null, now, now]
+    );
+    return this.findById(id)!;
+  },
+
+  findById(id: string): Channel | null {
+    const row = db.query("SELECT * FROM channels WHERE id = ?").get(id) as ChannelRow | null;
+    return row ? rowToChannel(row) : null;
+  },
+
+  findAll(): Channel[] {
+    const rows = db.query("SELECT * FROM channels ORDER BY created_at DESC").all() as ChannelRow[];
+    return rows.map(rowToChannel);
+  },
+
+  findByAgentId(agentId: string): Channel[] {
+    const rows = db.query("SELECT * FROM channels WHERE agent_id = ?").all(agentId) as ChannelRow[];
+    return rows.map(rowToChannel);
+  },
+
+  findRunning(): Channel[] {
+    const rows = db.query("SELECT * FROM channels WHERE status = 'running'").all() as ChannelRow[];
+    return rows.map(rowToChannel);
+  },
+
+  update(id: string, updates: { name?: string; agent_id?: string; config?: string; project_id?: string | null }): Channel | null {
+    const channel = this.findById(id);
+    if (!channel) return null;
+
+    const fields: string[] = [];
+    const values: (string | null)[] = [];
+
+    if (updates.name !== undefined) { fields.push("name = ?"); values.push(updates.name); }
+    if (updates.agent_id !== undefined) { fields.push("agent_id = ?"); values.push(updates.agent_id); }
+    if (updates.config !== undefined) { fields.push("config = ?"); values.push(updates.config); }
+    if (updates.project_id !== undefined) { fields.push("project_id = ?"); values.push(updates.project_id || null); }
+
+    if (fields.length === 0) return channel;
+
+    fields.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(id);
+
+    db.run(`UPDATE channels SET ${fields.join(", ")} WHERE id = ?`, values);
+    return this.findById(id);
+  },
+
+  setStatus(id: string, status: Channel["status"], error?: string | null): void {
+    db.run(
+      "UPDATE channels SET status = ?, error = ?, updated_at = ? WHERE id = ?",
+      [status, error || null, new Date().toISOString(), id]
+    );
+  },
+
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM channels WHERE id = ?", [id]);
     return result.changes > 0;
   },
 };

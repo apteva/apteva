@@ -14,6 +14,7 @@ import { handleMetaAgentRoutes } from "./api/meta-agent";
 import { handleTelemetryRoutes } from "./api/telemetry";
 import { handleTestRoutes } from "./api/tests";
 import { handleApiKeyRoutes } from "./api/api-keys";
+import { handleChannelRoutes } from "./api/channels";
 import { handlePlatformMcpRequest } from "../mcp-platform";
 
 // Re-export for backward compatibility (server.ts dynamic import)
@@ -41,8 +42,9 @@ export async function handleApiRequest(
     (await handleAgentRoutes(req, path, method, authContext)) ??
     (await handleMcpRoutes(req, path, method)) ??
     (await handleSkillRoutes(req, path, method)) ??
-    (await handleIntegrationRoutes(req, path, method)) ??
+    (await handleIntegrationRoutes(req, path, method, authContext)) ??
     (await handleTriggerRoutes(req, path, method, authContext)) ??
+    (await handleChannelRoutes(req, path, method)) ??
     (await handleMetaAgentRoutes(req, path, method)) ??
     (await handleTelemetryRoutes(req, path, method)) ??
     (await handleTestRoutes(req, path, method)) ??
