@@ -9,6 +9,7 @@ import {
   validatePassword,
   REFRESH_TOKEN_EXPIRY,
 } from "../auth";
+import { Onboarding } from "../providers";
 import {
   getTokenFromRequest,
   getRefreshTokenFromCookie,
@@ -26,11 +27,12 @@ function json(data: unknown, status = 200, headers: Record<string, string> = {})
 export async function handleAuthRequest(req: Request, path: string): Promise<Response> {
   const method = req.method;
 
-  // GET /api/auth/check - Check authentication status
+  // GET /api/auth/check - Check authentication status (includes onboarding to avoid extra round trip)
   if (path === "/api/auth/check" && method === "GET") {
     const token = getTokenFromRequest(req);
     const status = getAuthStatus(token || undefined);
-    return json(status);
+    const onboarding = Onboarding.getStatus();
+    return json({ ...status, onboarding });
   }
 
   // POST /api/auth/login - Login with username and password
@@ -108,10 +110,17 @@ export async function handleAuthRequest(req: Request, path: string): Promise<Res
     // Set new refresh token cookie
     const cookieHeader = createRefreshTokenCookie(result.refreshToken, REFRESH_TOKEN_EXPIRY);
 
+    // Include user info + onboarding to avoid extra /api/auth/me round trip
+    const payload = verifyAccessToken(result.accessToken);
+    const user = payload ? UserDB.findById(payload.userId) : null;
+    const onboarding = Onboarding.getStatus();
+
     return json(
       {
         accessToken: result.accessToken,
         expiresIn: result.expiresIn,
+        user: user ? { id: user.id, username: user.username, role: user.role } : undefined,
+        onboarding,
       },
       200,
       { "Set-Cookie": cookieHeader }

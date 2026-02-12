@@ -27,9 +27,22 @@ export async function handleAgentRoutes(
 ): Promise<Response | null> {
   // ==================== AGENT CRUD ====================
 
-  // GET /api/agents - List all agents (excludes meta agent)
+  // GET /api/agents - List agents (excludes meta agent), optionally filtered by project
   if (path === "/api/agents" && method === "GET") {
-    const agents = AgentDB.findAll().filter(a => a.id !== META_AGENT_ID);
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id");
+
+    let agents;
+    if (projectId === "unassigned") {
+      // Agents with no project
+      agents = AgentDB.findByProject(null);
+    } else if (projectId) {
+      agents = AgentDB.findByProject(projectId);
+    } else {
+      agents = AgentDB.findAll();
+    }
+
+    agents = agents.filter(a => a.id !== META_AGENT_ID);
     return json({ agents: toApiAgentsBatch(agents) });
   }
 

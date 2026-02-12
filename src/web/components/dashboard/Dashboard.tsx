@@ -45,10 +45,11 @@ export function Dashboard({
 
   const fetchDashboardData = useCallback(async () => {
     try {
+      const projectParam = currentProjectId ? `project_id=${encodeURIComponent(currentProjectId)}` : "";
       const [dashRes, tasksRes, activityRes] = await Promise.all([
-        authFetch("/api/dashboard"),
-        authFetch("/api/tasks?status=all"),
-        authFetch("/api/telemetry/events?type=thread_activity&limit=20"),
+        authFetch(`/api/dashboard${projectParam ? `?${projectParam}` : ""}`),
+        authFetch(`/api/tasks?status=all${projectParam ? `&${projectParam}` : ""}`),
+        authFetch(`/api/telemetry/events?type=thread_activity&limit=20${projectParam ? `&${projectParam}` : ""}`),
       ]);
 
       if (dashRes.ok) {
@@ -68,7 +69,7 @@ export function Dashboard({
     } catch (e) {
       console.error("Failed to fetch dashboard data:", e);
     }
-  }, [authFetch]);
+  }, [authFetch, currentProjectId]);
 
   useEffect(() => {
     fetchDashboardData();

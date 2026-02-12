@@ -1,12 +1,24 @@
 // Built-in MCP server that exposes the Apteva platform API as MCP tools
 // This allows the meta agent (Apteva Assistant) to control the platform
 
-import { AgentDB, ProjectDB, McpServerDB, SkillDB, TelemetryDB, generateId } from "./db";
+import { AgentDB, ProjectDB, McpServerDB, SkillDB, TelemetryDB, SubscriptionDB, SettingsDB, generateId } from "./db";
 import { TestCaseDB, TestRunDB } from "./db-tests";
 import { runTest, runAll } from "./test-runner";
-import { getProvidersWithStatus, PROVIDERS } from "./providers";
+import { getProvidersWithStatus, PROVIDERS, ProviderKeys } from "./providers";
 import { startAgentProcess, setAgentStatus, toApiAgent, META_AGENT_ID, agentFetch } from "./routes/api/agent-utils";
 import { agentProcesses } from "./server";
+import { getTriggerProvider, getTriggerProviderIds, registerTriggerProvider } from "./triggers";
+import { ComposioTriggerProvider } from "./triggers/composio";
+import { AgentDojoTriggerProvider } from "./triggers/agentdojo";
+import { getProvider, registerProvider } from "./integrations";
+import { ComposioProvider } from "./integrations/composio";
+import { AgentDojoProvider } from "./integrations/agentdojo";
+
+// Register trigger + integration providers on module load
+registerTriggerProvider(ComposioTriggerProvider);
+registerTriggerProvider(AgentDojoTriggerProvider);
+registerProvider(ComposioProvider);
+registerProvider(AgentDojoProvider);
 
 // MCP Protocol version
 const PROTOCOL_VERSION = "2024-11-05";
@@ -445,6 +457,128 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
         test_id: { type: "string", description: "Test case ID to delete" },
       },
       required: ["test_id"],
+    },
+  },
+  // Subscription & Trigger management
+  {
+    name: "list_trigger_providers",
+    description: "List available trigger/webhook providers (e.g. composio, agentdojo) and whether they have API keys configured.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+    },
+  },
+  {
+    name: "list_trigger_types",
+    description: `Browse available trigger types from a provider. Trigger types are events you can subscribe to (e.g. github:push, stripe:payment_intent, slack:message).
+
+Each trigger type has:
+- slug: unique identifier (e.g. "github:push")
+- name: display name
+- description: what the trigger does
+- config_schema: JSON schema of required config fields (e.g. owner, repo for GitHub triggers)
+
+Use this to find trigger slugs before creating a subscription.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Trigger provider ID: composio or agentdojo" },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+      required: ["provider"],
+    },
+  },
+  {
+    name: "list_connected_accounts",
+    description: "List connected accounts (OAuth connections) for a provider. You need a connected_account_id to create a subscription. Each account represents a user's authenticated connection to a service (e.g. GitHub, Slack, Stripe).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: composio or agentdojo" },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+      required: ["provider"],
+    },
+  },
+  {
+    name: "list_subscriptions",
+    description: "List local trigger subscriptions. Subscriptions route incoming webhook events to agents. Each subscription maps a trigger (e.g. github:push) to a specific agent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "Filter by agent ID (optional)" },
+        project_id: { type: "string", description: "Filter by project ID (optional)" },
+      },
+    },
+  },
+  {
+    name: "create_subscription",
+    description: `Create a trigger subscription: registers a webhook with the external service (via the provider) and creates a local subscription to route events to an agent.
+
+WORKFLOW:
+1. Use list_trigger_providers to check which providers have keys
+2. Use list_trigger_types to find the trigger slug you want
+3. Use list_connected_accounts to find the connected_account_id
+4. Use list_agents to find the agent_id to route events to
+5. Call create_subscription with all the above
+
+IMPORTANT: Some triggers require extra config fields (e.g. GitHub triggers need "owner" and "repo"). Check the trigger type's config_schema and pass required fields in the config object.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Trigger provider ID: composio or agentdojo" },
+        trigger_slug: { type: "string", description: "Trigger type slug (e.g. 'github:push', 'GITHUB_PUSH_EVENT'). Use list_trigger_types to find slugs." },
+        connected_account_id: { type: "string", description: "Connected account ID that owns the integration. Use list_connected_accounts to find IDs." },
+        agent_id: { type: "string", description: "Agent ID to route trigger events to. Use list_agents to find IDs." },
+        project_id: { type: "string", description: "Project ID for scoping (optional)" },
+        config: {
+          type: "object",
+          description: "Extra config fields required by the trigger type (e.g. { owner: 'myorg', repo: 'myrepo' } for GitHub). Check config_schema from list_trigger_types.",
+        },
+      },
+      required: ["provider", "trigger_slug", "connected_account_id", "agent_id"],
+    },
+  },
+  {
+    name: "enable_subscription",
+    description: "Enable a disabled subscription so it starts routing events to the agent again. Optionally also enables the remote trigger on the provider.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subscription_id: { type: "string", description: "Local subscription ID" },
+        provider: { type: "string", description: "Provider ID to also enable the remote trigger (optional)" },
+        project_id: { type: "string", description: "Project ID for API key resolution (optional)" },
+      },
+      required: ["subscription_id"],
+    },
+  },
+  {
+    name: "disable_subscription",
+    description: "Disable a subscription so it stops routing events to the agent. Optionally also disables the remote trigger on the provider.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subscription_id: { type: "string", description: "Local subscription ID" },
+        provider: { type: "string", description: "Provider ID to also disable the remote trigger (optional)" },
+        project_id: { type: "string", description: "Project ID for API key resolution (optional)" },
+      },
+      required: ["subscription_id"],
+    },
+  },
+  {
+    name: "delete_subscription",
+    description: "Delete a local subscription. Optionally also deletes the remote trigger on the provider.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subscription_id: { type: "string", description: "Local subscription ID" },
+        delete_remote: { type: "boolean", description: "Also delete the remote trigger on the provider (default false)" },
+        provider: { type: "string", description: "Provider ID (required if delete_remote is true)" },
+        project_id: { type: "string", description: "Project ID for API key resolution (optional)" },
+      },
+      required: ["subscription_id"],
     },
   },
 ];
@@ -964,6 +1098,221 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `Test "${tc.name}" deleted.` }] };
       }
 
+      // Subscription & Trigger tools
+      case "list_trigger_providers": {
+        const providerIds = getTriggerProviderIds();
+        const projectId = args.project_id || null;
+        const result = providerIds.map(id => {
+          const provider = getTriggerProvider(id);
+          const hasKey = !!ProviderKeys.getDecryptedForProject(id, projectId);
+          return {
+            id,
+            name: provider?.name || id,
+            hasKey,
+          };
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "list_trigger_types": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const triggerProvider = getTriggerProvider(providerId);
+        if (!triggerProvider) {
+          return { content: [{ type: "text", text: `Unknown trigger provider: ${providerId}. Available: ${getTriggerProviderIds().join(", ")}` }], isError: true };
+        }
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${triggerProvider.name} API key not configured` }], isError: true };
+        }
+        const types = await triggerProvider.listTriggerTypes(apiKey);
+        const result = types.map(t => ({
+          slug: t.slug,
+          name: t.name,
+          description: t.description,
+          type: t.type,
+          toolkit_slug: t.toolkit_slug,
+          toolkit_name: t.toolkit_name,
+          config_schema: t.config_schema,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "list_connected_accounts": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const integrationProvider = getProvider(providerId);
+        if (!integrationProvider) {
+          return { content: [{ type: "text", text: `Unknown integration provider: ${providerId}` }], isError: true };
+        }
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${integrationProvider.name} API key not configured` }], isError: true };
+        }
+        const accounts = await integrationProvider.listConnectedAccounts(apiKey, "platform-agent");
+        const result = accounts.map(a => ({
+          id: a.id,
+          appName: a.appName,
+          status: a.status,
+          createdAt: a.createdAt,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "list_subscriptions": {
+        let subscriptions;
+        if (args.agent_id) {
+          subscriptions = SubscriptionDB.findByAgentId(args.agent_id);
+        } else {
+          subscriptions = SubscriptionDB.findAll(args.project_id || null);
+        }
+        const result = subscriptions.map(s => {
+          const agent = AgentDB.findById(s.agent_id);
+          return {
+            id: s.id,
+            trigger_slug: s.trigger_slug,
+            trigger_instance_id: s.trigger_instance_id,
+            agent_id: s.agent_id,
+            agent_name: agent?.name || "Unknown",
+            enabled: s.enabled,
+            project_id: s.project_id,
+            created_at: s.created_at,
+          };
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "create_subscription": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const triggerProvider = getTriggerProvider(providerId);
+        if (!triggerProvider) {
+          return { content: [{ type: "text", text: `Unknown trigger provider: ${providerId}. Available: ${getTriggerProviderIds().join(", ")}` }], isError: true };
+        }
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${triggerProvider.name} API key not configured` }], isError: true };
+        }
+        // Validate agent exists
+        const agent = AgentDB.findById(args.agent_id);
+        if (!agent) {
+          return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+        }
+
+        // Auto-setup webhook if not already configured for this provider
+        const existingWebhook = SettingsDB.get(`${providerId}_webhook_url`);
+        if (!existingWebhook) {
+          try {
+            const instanceUrl = SettingsDB.get("instance_url");
+            if (instanceUrl) {
+              const webhookUrl = `${instanceUrl}/api/webhooks/${providerId}`;
+              const webhookResult = await triggerProvider.setupWebhook(apiKey, webhookUrl);
+              if (webhookResult.secret) {
+                SettingsDB.set(`${providerId}_webhook_secret`, webhookResult.secret);
+              }
+              SettingsDB.set(`${providerId}_webhook_url`, webhookUrl);
+              console.log(`[platform-mcp] Auto-configured ${providerId} webhook: ${webhookUrl}`);
+            }
+          } catch (e) {
+            console.warn(`[platform-mcp] Failed to auto-setup ${providerId} webhook:`, e);
+          }
+        }
+
+        // Create remote trigger on the provider
+        const config: Record<string, unknown> = {
+          agent_id: args.agent_id,
+          ...(args.config || {}),
+        };
+        const triggerResult = await triggerProvider.createTrigger(apiKey, args.trigger_slug, args.connected_account_id, config);
+
+        // Create local subscription for webhook routing
+        const subscription = SubscriptionDB.create({
+          trigger_slug: args.trigger_slug,
+          trigger_instance_id: triggerResult.triggerId || null,
+          agent_id: args.agent_id,
+          enabled: true,
+          project_id: projectId,
+        });
+
+        console.log(`[platform-mcp] Created subscription: ${args.trigger_slug} (instance=${triggerResult.triggerId}) → agent ${agent.name} (${agent.id})`);
+        return { content: [{ type: "text", text: `Subscription created:\n${JSON.stringify({
+          subscription_id: subscription.id,
+          trigger_slug: args.trigger_slug,
+          trigger_instance_id: triggerResult.triggerId,
+          agent: agent.name,
+          provider: providerId,
+          enabled: true,
+        }, null, 2)}` }] };
+      }
+
+      case "enable_subscription": {
+        const sub = SubscriptionDB.findById(args.subscription_id);
+        if (!sub) {
+          return { content: [{ type: "text", text: `Subscription not found: ${args.subscription_id}` }], isError: true };
+        }
+        SubscriptionDB.update(args.subscription_id, { enabled: true });
+
+        // Also enable remote trigger if provider specified
+        if (args.provider && sub.trigger_instance_id) {
+          const triggerProvider = getTriggerProvider(args.provider);
+          const apiKey = triggerProvider ? ProviderKeys.getDecryptedForProject(args.provider, args.project_id || null) : null;
+          if (triggerProvider && apiKey) {
+            try {
+              await triggerProvider.enableTrigger(apiKey, sub.trigger_instance_id);
+            } catch (e) {
+              console.warn(`[platform-mcp] Failed to enable remote trigger ${sub.trigger_instance_id}:`, e);
+            }
+          }
+        }
+        return { content: [{ type: "text", text: `Subscription "${sub.trigger_slug}" enabled` }] };
+      }
+
+      case "disable_subscription": {
+        const sub = SubscriptionDB.findById(args.subscription_id);
+        if (!sub) {
+          return { content: [{ type: "text", text: `Subscription not found: ${args.subscription_id}` }], isError: true };
+        }
+        SubscriptionDB.update(args.subscription_id, { enabled: false });
+
+        // Also disable remote trigger if provider specified
+        if (args.provider && sub.trigger_instance_id) {
+          const triggerProvider = getTriggerProvider(args.provider);
+          const apiKey = triggerProvider ? ProviderKeys.getDecryptedForProject(args.provider, args.project_id || null) : null;
+          if (triggerProvider && apiKey) {
+            try {
+              await triggerProvider.disableTrigger(apiKey, sub.trigger_instance_id);
+            } catch (e) {
+              console.warn(`[platform-mcp] Failed to disable remote trigger ${sub.trigger_instance_id}:`, e);
+            }
+          }
+        }
+        return { content: [{ type: "text", text: `Subscription "${sub.trigger_slug}" disabled` }] };
+      }
+
+      case "delete_subscription": {
+        const sub = SubscriptionDB.findById(args.subscription_id);
+        if (!sub) {
+          return { content: [{ type: "text", text: `Subscription not found: ${args.subscription_id}` }], isError: true };
+        }
+
+        // Delete remote trigger if requested
+        if (args.delete_remote && args.provider && sub.trigger_instance_id) {
+          const triggerProvider = getTriggerProvider(args.provider);
+          const apiKey = triggerProvider ? ProviderKeys.getDecryptedForProject(args.provider, args.project_id || null) : null;
+          if (triggerProvider && apiKey) {
+            try {
+              await triggerProvider.deleteTrigger(apiKey, sub.trigger_instance_id);
+              console.log(`[platform-mcp] Deleted remote trigger ${sub.trigger_instance_id} on ${args.provider}`);
+            } catch (e) {
+              console.warn(`[platform-mcp] Failed to delete remote trigger ${sub.trigger_instance_id}:`, e);
+            }
+          }
+        }
+
+        SubscriptionDB.delete(args.subscription_id);
+        return { content: [{ type: "text", text: `Subscription "${sub.trigger_slug}" deleted` }] };
+      }
+
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -1020,8 +1369,10 @@ You can manage:
 - SKILLS: Reusable instruction sets that specialize agent behavior. Use create_skill to create new skills (pass project_id from context to scope to the current project), then assign them to agents. Use list_skills, get_skill, create_skill, toggle_skill, assign_skill_to_agent, unassign_skill_from_agent, delete_skill.
 - PROVIDERS: View which LLM providers have API keys configured.
 - TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Use list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
+- SUBSCRIPTIONS & TRIGGERS: Subscribe agents to external events (webhooks). Supports multiple providers (composio, agentdojo). Use list_trigger_providers → list_trigger_types → list_connected_accounts → create_subscription. Manage with enable_subscription, disable_subscription, delete_subscription, list_subscriptions.
 
 Typical workflow: list_providers → create_agent → assign MCP servers/skills → start_agent.
+Subscription workflow: list_trigger_providers → list_trigger_types (pick trigger) → list_connected_accounts (pick account) → create_subscription (link trigger to agent).
 Test workflow: create_test (set agent, message, eval criteria) → run_test → check results.
 Always use list_providers first to check which providers have API keys before creating agents.`,
       };

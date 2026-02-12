@@ -3,7 +3,7 @@ import type { Agent, AgentFeatures } from "../types";
 import { useAuth } from "../context";
 import { useAgentStatusChange } from "../context/TelemetryContext";
 
-export function useAgents(enabled: boolean) {
+export function useAgents(enabled: boolean, projectId?: string | null) {
   const { accessToken } = useAuth();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -17,11 +17,15 @@ export function useAgents(enabled: boolean) {
   }, [accessToken]);
 
   const fetchAgents = useCallback(async () => {
-    const res = await fetch("/api/agents", { headers: getHeaders() });
+    let url = "/api/agents";
+    if (projectId !== undefined && projectId !== null) {
+      url += `?project_id=${encodeURIComponent(projectId)}`;
+    }
+    const res = await fetch(url, { headers: getHeaders() });
     const data = await res.json();
     setAgents(data.agents || []);
     setLoading(false);
-  }, [getHeaders]);
+  }, [getHeaders, projectId]);
 
   // Fetch on mount + auto-refetch when agents start/stop/crash (via SSE telemetry)
   const statusChangeCounter = useAgentStatusChange();

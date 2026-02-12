@@ -20,6 +20,8 @@ interface AuthContextValue {
   hasUsers: boolean | null;
   isDev: boolean;
   accessToken: string | null;
+  onboardingComplete: boolean | null;
+  setOnboardingComplete: (v: boolean) => void;
   login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   refreshToken: () => Promise<boolean>;
@@ -47,6 +49,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [hasUsers, setHasUsers] = useState<boolean | null>(null);
   const [isDev, setIsDev] = useState(false);
+  const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
 
   // Refs to track state without causing re-renders
   const tokenRef = useRef<string | null>(null);
@@ -80,18 +83,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const data = await res.json();
       updateToken(data.accessToken);
 
-      // Get user info with new token
-      const meRes = await fetch("/api/auth/me", {
-        headers: { Authorization: `Bearer ${data.accessToken}` },
-      });
-
-      if (meRes.ok) {
-        const meData = await meRes.json();
-        setUser(meData.user);
-        return true;
+      // User info + onboarding included in refresh response to avoid extra round trip
+      if (data.user) {
+        setUser(data.user);
+      }
+      if (data.onboarding) {
+        setOnboardingComplete(data.onboarding.completed || data.onboarding.has_any_keys);
       }
 
-      return false;
+      return !!data.user;
     } catch (e) {
       console.error("Token refresh failed:", e);
       return false;
@@ -107,10 +107,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const res = await fetch("/api/auth/check", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      const data: AuthStatus = await res.json();
+      const data: AuthStatus & { onboarding?: { completed: boolean; has_any_keys: boolean } } = await res.json();
 
       setHasUsers(data.hasUsers);
       setIsDev(data.isDev ?? false);
+
+      // Extract onboarding status (piggybacks on auth check to avoid extra round trip)
+      if (data.onboarding) {
+        setOnboardingComplete(data.onboarding.completed || data.onboarding.has_any_keys);
+      }
 
       if (data.authenticated && data.user) {
         setUser(data.user as User);
@@ -218,6 +223,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     hasUsers,
     isDev,
     accessToken,
+    onboardingComplete,
+    setOnboardingComplete,
     login,
     logout,
     refreshToken,

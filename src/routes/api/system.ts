@@ -187,7 +187,18 @@ export async function handleSystemRoutes(
 
   // GET /api/dashboard - Get dashboard statistics
   if (path === "/api/dashboard" && method === "GET") {
-    const agents = AgentDB.findAll();
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id");
+
+    let agents = AgentDB.findAll();
+
+    // Filter agents by project if specified
+    if (projectId === "unassigned") {
+      agents = agents.filter(a => !a.project_id);
+    } else if (projectId) {
+      agents = agents.filter(a => a.project_id === projectId);
+    }
+
     const runningAgents = agents.filter(a => a.status === "running" && a.port);
 
     let totalTasks = 0;

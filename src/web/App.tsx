@@ -64,7 +64,7 @@ function AppContent() {
     updateAgent,
     deleteAgent,
     toggleAgent,
-  } = useAgents(shouldFetchData);
+  } = useAgents(shouldFetchData, currentProjectId);
 
   const {
     providers,
