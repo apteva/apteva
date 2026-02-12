@@ -58,9 +58,9 @@ export function TriggersTab() {
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
 
-  // Provider selection
+  // Provider selection — only show configured providers
   const [providers, setProviders] = useState<TriggerProviderInfo[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState("composio");
+  const [selectedProvider, setSelectedProvider] = useState("");
 
   // Trigger instances (from selected provider)
   const [triggers, setTriggers] = useState<TriggerInstance[]>([]);
@@ -83,6 +83,7 @@ export function TriggersTab() {
   const [creating, setCreating] = useState(false);
   const [createAgentId, setCreateAgentId] = useState(""); // For AgentDojo direct subscription flow
   const [browseConfig, setBrowseConfig] = useState<Record<string, string>>({});
+  const [browseSelectedAccountId, setBrowseSelectedAccountId] = useState("");
 
   // AgentDojo add subscription modal — uses composio as data source (same as Integrations tab)
   const [showAddDojo, setShowAddDojo] = useState(false);
@@ -94,6 +95,7 @@ export function TriggersTab() {
   const [dojoCreating, setDojoCreating] = useState(false);
   const [dojoTypeSearch, setDojoTypeSearch] = useState("");
   const [dojoConfig, setDojoConfig] = useState<Record<string, string>>({});
+  const [dojoSelectedAccountId, setDojoSelectedAccountId] = useState("");
 
   // Add subscription
   const [showAddSub, setShowAddSub] = useState(false);
@@ -108,13 +110,21 @@ export function TriggersTab() {
 
   const projectParam = currentProjectId && currentProjectId !== "unassigned" ? `?project_id=${currentProjectId}` : "";
 
-  // Fetch available providers
+  // Fetch available providers — only show ones with API keys configured
   const fetchProviders = useCallback(async () => {
     try {
       const res = await authFetch(`/api/triggers/providers${projectParam}`);
       if (res.ok) {
         const data = await res.json();
-        setProviders(data.providers || []);
+        const connected = (data.providers || []).filter((p: TriggerProviderInfo) => p.connected);
+        setProviders(connected);
+        // Auto-select first connected provider if none selected
+        if (connected.length > 0) {
+          setSelectedProvider(prev => {
+            if (!prev || !connected.find((p: TriggerProviderInfo) => p.id === prev)) return connected[0].id;
+            return prev;
+          });
+        }
       }
     } catch (e) {
       console.error("Failed to fetch providers:", e);
@@ -214,6 +224,7 @@ export function TriggersTab() {
     setSelectedAccountId("");
     setCreateAgentId("");
     setBrowseConfig({});
+    setBrowseSelectedAccountId("");
     setShowCreate(true);
     fetchConnectedAccounts();
   };
@@ -227,51 +238,32 @@ export function TriggersTab() {
     setDojoAgentId("");
     setDojoTypeSearch("");
     setDojoConfig({});
+    setDojoSelectedAccountId("");
 
-    console.log("[openAddDojoSub] Opening modal, selectedProvider:", selectedProvider);
-    console.log("[openAddDojoSub] currentProjectId:", currentProjectId, "projectParam:", projectParam);
-    console.log("[openAddDojoSub] existing dojoTriggerTypes:", dojoTriggerTypes.length, "dojoAccounts:", dojoAccounts.length);
-
-    // Fetch trigger types from agentdojo (same provider as Integrations tab uses)
     const loadTypes = async () => {
-      if (dojoTriggerTypes.length > 0) {
-        console.log("[openAddDojoSub] Already have", dojoTriggerTypes.length, "trigger types, skipping fetch");
-        return;
-      }
+      if (dojoTriggerTypes.length > 0) return;
       setDojoTypesLoading(true);
       try {
         let url = `/api/triggers/types?provider=agentdojo`;
         if (currentProjectId && currentProjectId !== "unassigned") url += `&project_id=${currentProjectId}`;
-        console.log("[openAddDojoSub] Fetching trigger types:", url);
         const res = await authFetch(url);
         const data = await res.json();
-        console.log("[openAddDojoSub] Trigger types response:", res.status, "ok:", res.ok, "types count:", (data.types || []).length, "error:", data.error);
-        if (data.types && data.types.length > 0) {
-          console.log("[openAddDojoSub] Sample trigger type:", JSON.stringify(data.types[0]));
-        }
         setDojoTriggerTypes(data.types || []);
       } catch (e) {
-        console.error("[openAddDojoSub] Failed to load trigger types:", e);
+        console.error("Failed to load trigger types:", e);
       }
       setDojoTypesLoading(false);
     };
 
-    // Fetch connected accounts from agentdojo (same as Integrations tab)
     const loadAccounts = async () => {
       try {
         const url = `/api/integrations/agentdojo/connected${projectParam}`;
-        console.log("[openAddDojoSub] Fetching connected accounts:", url);
         const res = await authFetch(url);
         const data = await res.json();
-        console.log("[openAddDojoSub] Connected accounts response:", res.status, "ok:", res.ok, "accounts count:", (data.accounts || []).length, "error:", data.error);
-        if (data.accounts && data.accounts.length > 0) {
-          console.log("[openAddDojoSub] Sample account:", JSON.stringify(data.accounts[0]));
-        }
         const active = (data.accounts || []).filter((a: ConnectedAccount) => a.status === "active");
-        console.log("[openAddDojoSub] Active accounts:", active.length);
         setDojoAccounts(active);
       } catch (e) {
-        console.error("[openAddDojoSub] Failed to load connected accounts:", e);
+        console.error("Failed to load connected accounts:", e);
       }
     };
 
@@ -281,8 +273,8 @@ export function TriggersTab() {
   // Create AgentDojo subscription from the add-subscription modal
   const handleAddDojoSub = async () => {
     const tt = dojoTriggerTypes.find(t => t.slug === dojoSelectedType);
-    const matched = tt ? matchAccount(dojoAccounts, tt.toolkit_slug) : null;
-    console.log("[handleAddDojoSub] tt:", tt?.slug, "matched:", matched?.id, matched?.appName, "agentId:", dojoAgentId);
+    // Use derived dojoMatchedAccount (respects user dropdown selection + auto-match fallback)
+    const matched = dojoMatchedAccount;
     if (!tt || !dojoAgentId || !matched) return;
 
     setDojoCreating(true);
@@ -298,9 +290,8 @@ export function TriggersTab() {
         title: `${tt.name} → ${agent?.name || "Agent"}`,
         server: tt.toolkit_slug,
         agent_id: dojoAgentId,
-        ...dojoConfig, // Merge dynamic config fields (e.g. owner, repo for GitHub)
+        ...dojoConfig,
       };
-      console.log("[handleAddDojoSub] config:", JSON.stringify(configPayload));
       const res = await authFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -507,27 +498,57 @@ export function TriggersTab() {
     return t.name.toLowerCase().includes(s) || t.slug.toLowerCase().includes(s) || t.description.toLowerCase().includes(s);
   });
 
-  // Auto-match connected account from toolkit slug
+  // Best-effort match connected account from toolkit slug
+  // A single credential can serve multiple toolkits (e.g. "OmniKit Platform" for "OmniKit Messaging")
   const matchAccount = (accounts: ConnectedAccount[], toolkitSlug: string): ConnectedAccount | null => {
     if (!toolkitSlug || accounts.length === 0) return null;
-    const slug = toolkitSlug.toLowerCase();
-    return accounts.find(a =>
-      a.appId?.toLowerCase() === slug ||
-      a.appName?.toLowerCase() === slug ||
+    const slug = toolkitSlug.toLowerCase().replace(/[-_]/g, " ");
+    // Exact match
+    const exact = accounts.find(a =>
+      a.appId?.toLowerCase() === toolkitSlug.toLowerCase() ||
+      a.appName?.toLowerCase() === toolkitSlug.toLowerCase()
+    );
+    if (exact) return exact;
+    // Contains match
+    const contains = accounts.find(a =>
       a.appId?.toLowerCase().includes(slug) ||
-      a.appName?.toLowerCase().includes(slug)
-    ) || null;
+      a.appName?.toLowerCase().replace(/[-_]/g, " ").includes(slug) ||
+      slug.includes(a.appId?.toLowerCase() || "") ||
+      slug.includes(a.appName?.toLowerCase().replace(/[-_]/g, " ") || "")
+    );
+    if (contains) return contains;
+    // Prefix match — first word overlap (e.g. "omnikit" matches "omnikit platform" and "omnikit messaging")
+    const slugWords = slug.split(/\s+/);
+    return accounts.find(a => {
+      const nameWords = (a.appName || "").toLowerCase().replace(/[-_]/g, " ").split(/\s+/);
+      return slugWords[0] && nameWords[0] && slugWords[0] === nameWords[0];
+    }) || null;
   };
 
-  // Derived: auto-matched account for Add Subscription modal
+  // Derived: auto-matched or user-selected account for Add Subscription modal
   const dojoSelectedTriggerType = dojoTriggerTypes.find(t => t.slug === dojoSelectedType);
-  const dojoMatchedAccount = dojoSelectedTriggerType ? matchAccount(dojoAccounts, dojoSelectedTriggerType.toolkit_slug) : null;
+  const dojoAutoMatch = dojoSelectedTriggerType ? matchAccount(dojoAccounts, dojoSelectedTriggerType.toolkit_slug) : null;
+  const dojoMatchedAccount = dojoSelectedAccountId
+    ? dojoAccounts.find(a => a.id === dojoSelectedAccountId) || dojoAutoMatch
+    : dojoAutoMatch;
 
-  // Derived: auto-matched account for Browse Subscribe modal
-  const browseMatchedAccount = selectedType && isAgentDojo ? matchAccount(connectedAccounts, selectedType.toolkit_slug) : null;
+  // Derived: auto-matched or user-selected account for Browse Subscribe modal
+  const browseAutoMatch = selectedType && isAgentDojo ? matchAccount(connectedAccounts, selectedType.toolkit_slug) : null;
+  const browseMatchedAccount = browseSelectedAccountId
+    ? connectedAccounts.find(a => a.id === browseSelectedAccountId) || browseAutoMatch
+    : browseAutoMatch;
 
   // Agent map for quick lookups
   const agentMap = new Map(agents.map(a => [a.id, a]));
+
+  if (providers.length === 0 && !triggersLoading) {
+    return (
+      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
+        <p className="text-[#666]">No trigger providers configured.</p>
+        <p className="text-sm text-[#555] mt-1">Add API keys for Composio or AgentDojo in Settings to enable triggers.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -539,7 +560,7 @@ export function TriggersTab() {
         </div>
       )}
 
-      {/* Provider Selector */}
+      {/* Provider Selector — only show if multiple configured */}
       {providers.length > 1 && (
         <div className="flex items-center gap-2">
           <span className="text-xs text-[#666]">Provider:</span>
@@ -560,9 +581,6 @@ export function TriggersTab() {
                 }`}
               >
                 {p.name}
-                {!p.connected && (
-                  <span className="ml-1 text-[10px] text-yellow-500" title="API key not configured">!</span>
-                )}
               </button>
             ))}
           </div>

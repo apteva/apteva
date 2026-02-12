@@ -128,7 +128,7 @@ export const AgentDojoProvider: IntegrationProvider = {
     return credentials.map((cred: any) => ({
       id: String(cred.id),
       appId: cred.provider_name || cred.toolkit_name || String(cred.provider_id || cred.toolkit_id),
-      appName: cred.provider_name || cred.name || cred.toolkit_name || String(cred.provider_id),
+      appName: cred.name || cred.display_name || cred.provider_name || cred.toolkit_name || String(cred.provider_id),
       status: (cred.status === "active" || cred.is_valid !== false) ? "active" as const : "failed" as const,
       createdAt: cred.created_at || new Date().toISOString(),
       metadata: {
