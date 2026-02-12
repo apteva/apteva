@@ -164,10 +164,10 @@ export function TriggersTab() {
     }
   }, [authFetch, projectParam]);
 
-  // Fetch agents
+  // Fetch agents (project-scoped)
   const fetchAgents = useCallback(async () => {
     try {
-      const res = await authFetch(`/api/agents`);
+      const res = await authFetch(`/api/agents${projectParam}`);
       if (res.ok) {
         const data = await res.json();
         setAgents(data.agents || []);
@@ -175,7 +175,7 @@ export function TriggersTab() {
     } catch (e) {
       // Ignore
     }
-  }, [authFetch]);
+  }, [authFetch, projectParam]);
 
   useEffect(() => {
     fetchProviders();
