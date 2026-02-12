@@ -96,6 +96,7 @@ export function TriggersTab() {
   const [dojoTypeSearch, setDojoTypeSearch] = useState("");
   const [dojoConfig, setDojoConfig] = useState<Record<string, string>>({});
   const [dojoSelectedAccountId, setDojoSelectedAccountId] = useState("");
+  const [dojoSelectedToolkit, setDojoSelectedToolkit] = useState("");
 
   // Add subscription
   const [showAddSub, setShowAddSub] = useState(false);
@@ -235,6 +236,7 @@ export function TriggersTab() {
   const openAddDojoSub = async () => {
     setShowAddDojo(true);
     setDojoSelectedType("");
+    setDojoSelectedToolkit("");
     setDojoAgentId("");
     setDojoTypeSearch("");
     setDojoConfig({});
@@ -537,6 +539,25 @@ export function TriggersTab() {
   const browseMatchedAccount = browseSelectedAccountId
     ? connectedAccounts.find(a => a.id === browseSelectedAccountId) || browseAutoMatch
     : browseAutoMatch;
+
+  // Derived: group trigger types by toolkit for the app picker
+  const dojoToolkits = React.useMemo(() => {
+    const map = new Map<string, { slug: string; name: string; logo: string | null; count: number }>();
+    for (const t of dojoTriggerTypes) {
+      const existing = map.get(t.toolkit_slug);
+      if (existing) {
+        existing.count++;
+      } else {
+        map.set(t.toolkit_slug, { slug: t.toolkit_slug, name: t.toolkit_name, logo: t.logo, count: 1 });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [dojoTriggerTypes]);
+
+  // Derived: triggers for the selected toolkit
+  const dojoToolkitTriggers = dojoSelectedToolkit
+    ? dojoTriggerTypes.filter(t => t.toolkit_slug === dojoSelectedToolkit)
+    : [];
 
   // Agent map for quick lookups
   const agentMap = new Map(agents.map(a => [a.id, a]));
@@ -1036,149 +1057,208 @@ export function TriggersTab() {
       {/* AgentDojo Add Subscription Modal */}
       {showAddDojo && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-lg mx-4">
-            <h3 className="font-medium mb-1">Add Subscription</h3>
-            <p className="text-xs text-[#666] mb-4">
-              Select a trigger from your connected apps and route it to an agent.
-            </p>
-
-            <div className="space-y-4">
-              {/* Trigger type selection */}
-              <div>
-                <label className="block text-xs text-[#888] mb-1.5">Trigger</label>
-                {dojoTypesLoading ? (
-                  <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">Loading triggers...</div>
-                ) : dojoTriggerTypes.length === 0 ? (
-                  <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
-                    No triggers available. Connect an app first in the Integrations tab.
-                  </div>
-                ) : (
-                  <>
-                    <input
-                      type="text"
-                      value={dojoTypeSearch}
-                      onChange={(e) => setDojoTypeSearch(e.target.value)}
-                      placeholder="Search triggers..."
-                      className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm mb-2 focus:outline-none focus:border-[#f97316]"
-                    />
-                    <div className="max-h-48 overflow-y-auto border border-[#1a1a1a] rounded-lg">
-                      {dojoTriggerTypes
-                        .filter(t => {
-                          if (!dojoTypeSearch) return true;
-                          const s = dojoTypeSearch.toLowerCase();
-                          return t.name.toLowerCase().includes(s) || t.slug.toLowerCase().includes(s) || t.toolkit_name.toLowerCase().includes(s);
-                        })
-                        .slice(0, 50)
-                        .map(t => (
-                          <button
-                            key={t.slug}
-                            onClick={() => { setDojoSelectedType(t.slug); setDojoConfig({}); }}
-                            className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition border-b border-[#1a1a1a] last:border-0 ${
-                              dojoSelectedType === t.slug
-                                ? "bg-[#f97316]/10 text-[#f97316]"
-                                : "hover:bg-[#1a1a1a] text-[#ccc]"
-                            }`}
-                          >
-                            {t.logo ? (
-                              <img src={t.logo} alt="" className="w-5 h-5 rounded object-contain flex-shrink-0" />
-                            ) : (
-                              <div className="w-5 h-5 rounded bg-[#1a1a1a] flex items-center justify-center text-[10px] flex-shrink-0">
-                                {t.toolkit_name?.[0]?.toUpperCase() || "?"}
-                              </div>
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <div className="truncate">{t.name}</div>
-                              <div className="text-[10px] text-[#666] truncate">{t.toolkit_name}</div>
-                            </div>
-                          </button>
-                        ))}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Connected account — auto-matched */}
-              {dojoSelectedType && (
-                <div>
-                  <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
-                  {dojoMatchedAccount ? (
-                    <div className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded p-3">
-                      Connected: {dojoMatchedAccount.appName}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 rounded p-3">
-                      No connected account for {dojoSelectedTriggerType?.toolkit_name || "this app"}. Connect it first in the Integrations tab.
-                    </div>
-                  )}
-                </div>
+          <div className="bg-[#111] border border-[#333] rounded-lg w-full max-w-lg mx-4 max-h-[85vh] flex flex-col">
+            {/* Header */}
+            <div className="p-4 border-b border-[#1a1a1a] flex items-center gap-3 flex-shrink-0">
+              {dojoSelectedToolkit && (
+                <button
+                  onClick={() => { setDojoSelectedToolkit(""); setDojoSelectedType(""); setDojoConfig({}); }}
+                  className="text-[#666] hover:text-white transition text-sm"
+                >
+                  &larr;
+                </button>
               )}
-
-              {/* Dynamic config fields from config_schema */}
-              {dojoSelectedTriggerType && dojoSelectedTriggerType.config_schema && Object.keys(dojoSelectedTriggerType.config_schema.properties || {}).length > 0 && (
-                <div>
-                  <label className="block text-xs text-[#888] mb-1.5">Configuration</label>
-                  <div className="space-y-2">
-                    {Object.entries((dojoSelectedTriggerType.config_schema as any).properties || {}).map(([key, schema]: [string, any]) => {
-                      const required = ((dojoSelectedTriggerType.config_schema as any).required || []).includes(key);
-                      return (
-                        <div key={key}>
-                          <label className="block text-[11px] text-[#888] mb-1">
-                            {schema.title || key}
-                            {required && <span className="text-red-400 ml-0.5">*</span>}
-                          </label>
-                          <input
-                            type="text"
-                            value={dojoConfig[key] || ""}
-                            onChange={(e) => setDojoConfig(prev => ({ ...prev, [key]: e.target.value }))}
-                            placeholder={schema.description || `Enter ${schema.title || key}...`}
-                            className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Agent selection */}
-              <div>
-                <label className="block text-xs text-[#888] mb-1.5">Target Agent</label>
-                {agents.length === 0 ? (
-                  <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
-                    No agents available. Create an agent first.
-                  </div>
-                ) : (
-                  <Select
-                    value={dojoAgentId}
-                    onChange={setDojoAgentId}
-                    placeholder="Select agent..."
-                    options={agents.map(agent => ({
-                      value: agent.id,
-                      label: `${agent.name} (${agent.status})`,
-                    }))}
-                  />
-                )}
+              <div className="flex-1 min-w-0">
+                <h3 className="font-medium">
+                  {!dojoSelectedToolkit
+                    ? "Choose App"
+                    : dojoSelectedType
+                      ? "Configure Subscription"
+                      : `${dojoToolkits.find(t => t.slug === dojoSelectedToolkit)?.name || dojoSelectedToolkit} Triggers`
+                  }
+                </h3>
+                <p className="text-xs text-[#666]">
+                  {!dojoSelectedToolkit
+                    ? "Select an app to see available triggers"
+                    : dojoSelectedType
+                      ? dojoSelectedTriggerType?.name
+                      : "Choose a trigger to subscribe to"
+                  }
+                </p>
               </div>
-            </div>
-
-            <div className="flex gap-2 mt-5">
               <button
                 onClick={() => setShowAddDojo(false)}
-                className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                className="text-[#666] hover:text-white transition text-lg px-2"
               >
-                Cancel
-              </button>
-              <button
-                onClick={handleAddDojoSub}
-                disabled={!dojoSelectedType || !dojoAgentId || !dojoMatchedAccount || dojoCreating || (
-                  dojoSelectedTriggerType?.config_schema &&
-                  ((dojoSelectedTriggerType.config_schema as any).required || []).some((key: string) => !dojoConfig[key]?.trim())
-                )}
-                className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
-              >
-                {dojoCreating ? "Creating..." : "Subscribe"}
+                &times;
               </button>
             </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {dojoTypesLoading ? (
+                <div className="text-center py-8 text-[#666] text-sm">Loading apps...</div>
+              ) : dojoTriggerTypes.length === 0 ? (
+                <div className="text-center py-8 text-[#666] text-sm">
+                  No triggers available. Connect an app first in the Integrations tab.
+                </div>
+
+              ) : !dojoSelectedToolkit ? (
+                /* Step 1: App grid */
+                <>
+                  <input
+                    type="text"
+                    value={dojoTypeSearch}
+                    onChange={(e) => setDojoTypeSearch(e.target.value)}
+                    placeholder="Search apps..."
+                    className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm mb-3 focus:outline-none focus:border-[#f97316]"
+                  />
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {dojoToolkits
+                      .filter(tk => {
+                        if (!dojoTypeSearch) return true;
+                        const s = dojoTypeSearch.toLowerCase();
+                        return tk.name.toLowerCase().includes(s) || tk.slug.toLowerCase().includes(s);
+                      })
+                      .map(tk => (
+                        <button
+                          key={tk.slug}
+                          onClick={() => { setDojoSelectedToolkit(tk.slug); setDojoTypeSearch(""); }}
+                          className="bg-[#0a0a0a] border border-[#1a1a1a] hover:border-[#f97316] rounded-lg p-3 text-left transition flex flex-col items-center gap-2"
+                        >
+                          {tk.logo ? (
+                            <img src={tk.logo} alt={tk.name} className="w-10 h-10 rounded object-contain" />
+                          ) : (
+                            <div className="w-10 h-10 rounded bg-[#1a1a1a] flex items-center justify-center text-lg">
+                              {tk.name?.[0]?.toUpperCase() || "?"}
+                            </div>
+                          )}
+                          <div className="text-center w-full">
+                            <div className="text-sm font-medium truncate">{tk.name}</div>
+                            <div className="text-[10px] text-[#666]">{tk.count} trigger{tk.count !== 1 ? "s" : ""}</div>
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                </>
+
+              ) : !dojoSelectedType ? (
+                /* Step 2: Trigger list for selected app */
+                <div className="space-y-1">
+                  {dojoToolkitTriggers.map(t => (
+                    <button
+                      key={t.slug}
+                      onClick={() => { setDojoSelectedType(t.slug); setDojoConfig({}); }}
+                      className="w-full text-left px-3 py-2.5 text-sm flex items-center gap-3 transition rounded-lg hover:bg-[#1a1a1a]"
+                    >
+                      {t.logo ? (
+                        <img src={t.logo} alt="" className="w-6 h-6 rounded object-contain flex-shrink-0" />
+                      ) : (
+                        <div className="w-6 h-6 rounded bg-[#1a1a1a] flex items-center justify-center text-[10px] flex-shrink-0">
+                          {t.toolkit_name?.[0]?.toUpperCase() || "?"}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{t.name}</div>
+                        <div className="text-xs text-[#666] line-clamp-1">{t.description}</div>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${
+                        t.type === "webhook" ? "bg-blue-500/10 text-blue-400" : "bg-yellow-500/10 text-yellow-400"
+                      }`}>
+                        {t.type}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+              ) : (
+                /* Step 3: Configure selected trigger */
+                <div className="space-y-4">
+                  {/* Connected account — auto-matched */}
+                  <div>
+                    <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
+                    {dojoMatchedAccount ? (
+                      <div className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded p-3">
+                        Connected: {dojoMatchedAccount.appName}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 rounded p-3">
+                        No connected account for {dojoSelectedTriggerType?.toolkit_name || "this app"}. Connect it first in the Integrations tab.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dynamic config fields from config_schema */}
+                  {dojoSelectedTriggerType && dojoSelectedTriggerType.config_schema && Object.keys(dojoSelectedTriggerType.config_schema.properties || {}).length > 0 && (
+                    <div>
+                      <label className="block text-xs text-[#888] mb-1.5">Configuration</label>
+                      <div className="space-y-2">
+                        {Object.entries((dojoSelectedTriggerType.config_schema as any).properties || {}).map(([key, schema]: [string, any]) => {
+                          const required = ((dojoSelectedTriggerType.config_schema as any).required || []).includes(key);
+                          return (
+                            <div key={key}>
+                              <label className="block text-[11px] text-[#888] mb-1">
+                                {schema.title || key}
+                                {required && <span className="text-red-400 ml-0.5">*</span>}
+                              </label>
+                              <input
+                                type="text"
+                                value={dojoConfig[key] || ""}
+                                onChange={(e) => setDojoConfig(prev => ({ ...prev, [key]: e.target.value }))}
+                                placeholder={schema.description || `Enter ${schema.title || key}...`}
+                                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Agent selection */}
+                  <div>
+                    <label className="block text-xs text-[#888] mb-1.5">Target Agent</label>
+                    {agents.length === 0 ? (
+                      <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                        No agents available. Create an agent first.
+                      </div>
+                    ) : (
+                      <Select
+                        value={dojoAgentId}
+                        onChange={setDojoAgentId}
+                        placeholder="Select agent..."
+                        options={agents.map(agent => ({
+                          value: agent.id,
+                          label: `${agent.name} (${agent.status})`,
+                        }))}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer — only show Subscribe button on step 3 */}
+            {dojoSelectedType && (
+              <div className="p-4 border-t border-[#1a1a1a] flex gap-2 flex-shrink-0">
+                <button
+                  onClick={() => { setDojoSelectedType(""); setDojoConfig({}); }}
+                  className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleAddDojoSub}
+                  disabled={!dojoAgentId || !dojoMatchedAccount || dojoCreating || (
+                    dojoSelectedTriggerType?.config_schema &&
+                    ((dojoSelectedTriggerType.config_schema as any).required || []).some((key: string) => !dojoConfig[key]?.trim())
+                  )}
+                  className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
+                >
+                  {dojoCreating ? "Creating..." : "Subscribe"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
