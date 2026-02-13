@@ -236,7 +236,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
   );
 }
 
-interface TaskDetailPanelProps {
+export interface TaskDetailPanelProps {
   task: Task;
   statusColors: Record<string, string>;
   onClose: () => void;
@@ -244,7 +244,7 @@ interface TaskDetailPanelProps {
   loading?: boolean;
 }
 
-function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading }: TaskDetailPanelProps) {
+export function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading }: TaskDetailPanelProps) {
   return (
     <div className="w-full md:w-1/2 lg:w-1/3 border-l border-[#1a1a1a] bg-[#0a0a0a] flex flex-col overflow-hidden">
       {/* Header */}
@@ -378,7 +378,7 @@ function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading }
   );
 }
 
-function TrajectoryView({ trajectory }: { trajectory: TaskTrajectoryStep[] }) {
+export function TrajectoryView({ trajectory }: { trajectory: TaskTrajectoryStep[] }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const toggleStep = (id: string) => {

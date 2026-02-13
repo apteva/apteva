@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Chat, convertApiMessages } from "@apteva/apteva-kit";
 import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, RecurringIcon, ScheduledIcon, TaskOnceIcon } from "../common/Icons";
-import { formatCron, formatRelativeTime } from "../tasks/TasksPage";
+import { formatCron, formatRelativeTime, TrajectoryView } from "../tasks/TasksPage";
 import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
 import { useTelemetry } from "../../context";
 import { useAuth } from "../../context";
-import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, AgentMode, MultiAgentConfig } from "../../types";
+import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, AgentMode, MultiAgentConfig, Task } from "../../types";
 import { getMultiAgentConfig } from "../../types";
 
 type Tab = "chat" | "threads" | "tasks" | "memory" | "files" | "settings";
@@ -314,10 +314,13 @@ function ThreadsTab({ agent }: { agent: Agent }) {
 }
 
 function TasksTab({ agent }: { agent: Agent }) {
-  const [tasks, setTasks] = useState<any[]>([]);
+  const { authFetch } = useAuth();
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [loadingTask, setLoadingTask] = useState(false);
   const { events } = useTelemetry({ agent_id: agent.id, category: "task" });
 
   // Reset state when agent changes
@@ -325,6 +328,7 @@ function TasksTab({ agent }: { agent: Agent }) {
     setTasks([]);
     setError(null);
     setLoading(true);
+    setSelectedTask(null);
   }, [agent.id]);
 
   const fetchTasks = async () => {
@@ -343,6 +347,24 @@ function TasksTab({ agent }: { agent: Agent }) {
       setError(err instanceof Error ? err.message : "Failed to load tasks");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const selectTask = async (task: Task) => {
+    setSelectedTask(task);
+    setLoadingTask(true);
+    try {
+      const res = await authFetch(`/api/tasks/${task.agentId || agent.id}/${task.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.task) {
+          setSelectedTask({ ...data.task, agentId: task.agentId || agent.id, agentName: task.agentName || agent.name });
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch task details:", e);
+    } finally {
+      setLoadingTask(false);
     }
   };
 
@@ -403,6 +425,133 @@ function TasksTab({ agent }: { agent: Agent }) {
     { value: "failed", label: "Failed" },
   ];
 
+  // Show task detail view when a task is selected
+  if (selectedTask) {
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Back button */}
+        <div className="px-4 pt-3 pb-2 border-b border-[#1a1a1a] shrink-0">
+          <button
+            onClick={() => setSelectedTask(null)}
+            className="text-sm text-[#666] hover:text-[#e0e0e0] transition flex items-center gap-1"
+          >
+            <span>←</span> Back to tasks
+          </button>
+        </div>
+
+        {/* Task detail content */}
+        <div className="flex-1 overflow-auto p-4 space-y-4">
+          {/* Title & Status */}
+          <div>
+            <div className="flex items-start justify-between gap-2 mb-1">
+              <h3 className="text-lg font-medium">{selectedTask.title}</h3>
+              <span className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${statusColors[selectedTask.status]}`}>
+                {selectedTask.status}
+              </span>
+            </div>
+          </div>
+
+          {/* Description */}
+          {selectedTask.description && (
+            <div>
+              <h4 className="text-xs text-[#666] uppercase tracking-wider mb-1">Description</h4>
+              <p className="text-sm text-[#888] whitespace-pre-wrap">{selectedTask.description}</p>
+            </div>
+          )}
+
+          {/* Metadata */}
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-[#666]">Type</span>
+              <p className="capitalize">{selectedTask.type}</p>
+            </div>
+            <div>
+              <span className="text-[#666]">Priority</span>
+              <p>{selectedTask.priority}</p>
+            </div>
+            {selectedTask.recurrence && (
+              <div>
+                <span className="text-[#666]">Recurrence</span>
+                <p>{formatCron(selectedTask.recurrence)}</p>
+                <p className="text-xs text-[#444] mt-0.5 font-mono">{selectedTask.recurrence}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Timestamps */}
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-[#666]">Created</span>
+              <span>{new Date(selectedTask.created_at).toLocaleString()}</span>
+            </div>
+            {selectedTask.execute_at && (
+              <div className="flex justify-between">
+                <span className="text-[#666]">Scheduled</span>
+                <span className="text-[#f97316]">{formatRelativeTime(selectedTask.execute_at)}</span>
+              </div>
+            )}
+            {selectedTask.executed_at && (
+              <div className="flex justify-between">
+                <span className="text-[#666]">Started</span>
+                <span>{new Date(selectedTask.executed_at).toLocaleString()}</span>
+              </div>
+            )}
+            {selectedTask.completed_at && (
+              <div className="flex justify-between">
+                <span className="text-[#666]">Completed</span>
+                <span>{new Date(selectedTask.completed_at).toLocaleString()}</span>
+              </div>
+            )}
+            {selectedTask.next_run && (
+              <div className="flex justify-between">
+                <span className="text-[#666]">Next Run</span>
+                <span className="text-[#f97316]">{formatRelativeTime(selectedTask.next_run)}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Error */}
+          {selectedTask.status === "failed" && selectedTask.error && (
+            <div className="min-w-0">
+              <h4 className="text-xs text-red-400 uppercase tracking-wider mb-1">Error</h4>
+              <div className="bg-red-500/10 border border-red-500/20 rounded p-3 overflow-x-auto">
+                <pre className="text-sm text-red-400 whitespace-pre-wrap break-words">{selectedTask.error}</pre>
+              </div>
+            </div>
+          )}
+
+          {/* Result */}
+          {selectedTask.status === "completed" && selectedTask.result && (
+            <div className="min-w-0">
+              <h4 className="text-xs text-green-400 uppercase tracking-wider mb-1">Result</h4>
+              <div className="bg-green-500/10 border border-green-500/20 rounded p-3 overflow-x-auto">
+                <pre className="text-sm text-green-400 whitespace-pre-wrap break-words">
+                  {typeof selectedTask.result === "string" ? selectedTask.result : JSON.stringify(selectedTask.result, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+
+          {/* Trajectory */}
+          {loadingTask && !selectedTask.trajectory && (
+            <div>
+              <h4 className="text-xs text-[#666] uppercase tracking-wider mb-2">Trajectory</h4>
+              <div className="text-sm text-[#555]">Loading trajectory...</div>
+            </div>
+          )}
+          {selectedTask.trajectory && selectedTask.trajectory.length > 0 && (
+            <div>
+              <h4 className="text-xs text-[#666] uppercase tracking-wider mb-2">
+                Trajectory ({selectedTask.trajectory.length} steps)
+              </h4>
+              <TrajectoryView trajectory={selectedTask.trajectory} />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 overflow-auto p-4">
       {/* Filter tabs */}
@@ -431,7 +580,11 @@ function TasksTab({ agent }: { agent: Agent }) {
       ) : (
         <div className="space-y-3">
           {tasks.map(task => (
-            <div key={task.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+            <div
+              key={task.id}
+              onClick={() => selectTask(task)}
+              className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 cursor-pointer hover:border-[#333] transition"
+            >
               <div className="flex items-start justify-between mb-2">
                 <div className="flex-1 min-w-0">
                   <h3 className="font-medium">{task.title || task.name}</h3>
