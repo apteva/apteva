@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import { DashboardIcon, ActivityIcon, AgentsIcon, TasksIcon, ConnectionsIcon, McpIcon, SkillsIcon, TestsIcon, TelemetryIcon, ApiIcon, SettingsIcon, CloseIcon } from "../common/Icons";
+import { useAuth } from "../../context";
 import type { Route } from "../../types";
 
 interface SidebarProps {
@@ -12,9 +13,17 @@ interface SidebarProps {
 }
 
 export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onClose }: SidebarProps) {
+  const { user, logout } = useAuth();
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
   const handleNavigate = (newRoute: Route) => {
     onNavigate(newRoute);
     onClose?.();
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    setShowUserMenu(false);
   };
 
   return (
@@ -30,7 +39,7 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
       {/* Sidebar - hidden on mobile unless open, always visible on md+ */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 w-64 bg-[#0a0a0a] border-r border-[#1a1a1a] p-4 transform transition-transform duration-200 ease-in-out
+          fixed inset-y-0 left-0 z-50 w-64 bg-[#0a0a0a] border-r border-[#1a1a1a] p-4 flex flex-col transform transition-transform duration-200 ease-in-out
           md:relative md:w-56 md:translate-x-0 md:z-auto
           ${isOpen ? "translate-x-0" : "-translate-x-full"}
         `}
@@ -49,7 +58,7 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
           </button>
         </div>
 
-        <nav className="space-y-1">
+        <nav className="space-y-1 flex-1">
           <NavButton
             icon={<DashboardIcon />}
             label="Dashboard"
@@ -119,6 +128,37 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
             onClick={() => handleNavigate("settings")}
           />
         </nav>
+
+        {/* User profile - pinned to bottom */}
+        {user && (
+          <div className="relative border-t border-[#1a1a1a] pt-3 mt-3">
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded hover:bg-[#111] transition"
+            >
+              <div className="w-8 h-8 rounded-full bg-[#f97316] flex items-center justify-center text-black font-medium text-sm flex-shrink-0">
+                {user.username.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-sm font-medium truncate">{user.username}</p>
+                <p className="text-xs text-[#555]">{user.role}</p>
+              </div>
+            </button>
+            {showUserMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+                <div className="absolute left-3 bottom-full mb-1 w-48 bg-[#111] border border-[#222] rounded-lg shadow-xl z-50">
+                  <button
+                    onClick={handleLogout}
+                    className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-[#1a1a1a] transition rounded-lg"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </aside>
     </>
   );

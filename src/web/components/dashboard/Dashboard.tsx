@@ -59,7 +59,7 @@ export function Dashboard({
 
       if (tasksRes.ok) {
         const data = await tasksRes.json();
-        setRecentTasks((data.tasks || []).slice(0, 5));
+        setRecentTasks(data.tasks || []);
       }
 
       if (activityRes.ok) {
@@ -75,10 +75,12 @@ export function Dashboard({
     fetchDashboardData();
   }, [fetchDashboardData, statusChangeCounter]);
 
-  // Filter tasks by project agents
+  // Filter tasks by project agents and sort by next execution (soonest first)
   const filteredTasks = useMemo(() => {
-    if (!currentProjectId) return recentTasks;
-    return recentTasks.filter(t => projectAgentIds.has(t.agentId));
+    let list = currentProjectId
+      ? recentTasks.filter(t => projectAgentIds.has(t.agentId))
+      : recentTasks;
+    return sortTasksByNextExecution(list);
   }, [recentTasks, currentProjectId, projectAgentIds]);
 
   // Calculate task stats from filtered tasks
@@ -179,9 +181,9 @@ export function Dashboard({
           )}
         </DashboardCard>
 
-        {/* Recent Tasks */}
+        {/* Tasks */}
         <DashboardCard
-          title="Recent Tasks"
+          title="Tasks"
           actionLabel="View All"
           onAction={() => onNavigate("tasks")}
         >
@@ -192,7 +194,7 @@ export function Dashboard({
             </div>
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
-              {filteredTasks.map((task) => (
+              {filteredTasks.slice(0, 5).map((task) => (
                 <div
                   key={`${task.agentId}-${task.id}`}
                   className="px-4 py-3 flex items-center justify-between"
@@ -341,6 +343,36 @@ function TaskStatusBadge({ status }: { status: Task["status"] }) {
       {status}
     </span>
   );
+}
+
+// --- Task sorting helper ---
+
+function statusPriority(task: Task): number {
+  if (task.status === "running") return 0;
+  if (task.status === "pending") return 1;
+  if (task.status === "completed") return 2;
+  if (task.status === "failed") return 3;
+  return 4; // cancelled etc
+}
+
+function sortTasksByNextExecution(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => {
+    const aPri = statusPriority(a);
+    const bPri = statusPriority(b);
+    if (aPri !== bPri) return aPri - bPri;
+    // Within running/pending: soonest next execution first
+    if (aPri <= 1) {
+      const aTime = a.next_run || a.execute_at || null;
+      const bTime = b.next_run || b.execute_at || null;
+      const aTs = aTime ? new Date(aTime).getTime() : Infinity;
+      const bTs = bTime ? new Date(bTime).getTime() : Infinity;
+      return aTs - bTs;
+    }
+    // Within completed/failed: most recent first
+    const aDate = a.completed_at || a.executed_at || a.created_at;
+    const bDate = b.completed_at || b.executed_at || b.created_at;
+    return new Date(bDate).getTime() - new Date(aDate).getTime();
+  });
 }
 
 // --- Schedule formatting helpers (compact versions for dashboard) ---

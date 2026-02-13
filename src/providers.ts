@@ -92,6 +92,8 @@ export const PROVIDERS = {
     models: [
       { value: "accounts/fireworks/models/kimi-k2p5", label: "Kimi K2.5", recommended: true },
       { value: "accounts/fireworks/models/kimi-k2-thinking", label: "Kimi K2 Thinking (Reasoning)" },
+      { value: "accounts/fireworks/models/minimax-m2p5", label: "MiniMax M2.5" },
+      { value: "accounts/fireworks/models/glm-5", label: "GLM 5" },
     ],
   },
   moonshot: {

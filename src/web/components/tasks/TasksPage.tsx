@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { TasksIcon, CloseIcon, RecurringIcon, ScheduledIcon, TaskOnceIcon } from "../common/Icons";
 import { useAuth, useProjects } from "../../context";
 import { useTelemetry } from "../../context/TelemetryContext";
@@ -87,6 +87,32 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
     }
   }, [authFetch]);
 
+  // Sort tasks: running first, then pending by next execution (soonest first), then completed/failed by date
+  const sortedTasks = useMemo(() => {
+    return [...tasks].sort((a, b) => {
+      // Running tasks first
+      if (a.status === "running" && b.status !== "running") return -1;
+      if (b.status === "running" && a.status !== "running") return 1;
+      // Pending tasks next
+      const aIsPending = a.status === "pending";
+      const bIsPending = b.status === "pending";
+      if (aIsPending && !bIsPending) return -1;
+      if (bIsPending && !aIsPending) return 1;
+      // For running/pending: sort by next execution time (soonest first)
+      if (aIsPending && bIsPending || a.status === "running" && b.status === "running") {
+        const aTime = a.next_run || a.execute_at || null;
+        const bTime = b.next_run || b.execute_at || null;
+        const aTs = aTime ? new Date(aTime).getTime() : Infinity;
+        const bTs = bTime ? new Date(bTime).getTime() : Infinity;
+        return aTs - bTs;
+      }
+      // For completed/failed: most recent first
+      const aDate = a.completed_at || a.executed_at || a.created_at;
+      const bDate = b.completed_at || b.executed_at || b.created_at;
+      return new Date(bDate).getTime() - new Date(aDate).getTime();
+    });
+  }, [tasks]);
+
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-500/20 text-yellow-400",
     running: "bg-blue-500/20 text-blue-400",
@@ -134,7 +160,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
 
           {loading ? (
             <div className="text-center py-12 text-[#666]">Loading tasks...</div>
-          ) : tasks.length === 0 ? (
+          ) : sortedTasks.length === 0 ? (
             <div className="text-center py-12">
               <TasksIcon className="w-12 h-12 mx-auto mb-4 text-[#333]" />
               <p className="text-[#666]">No tasks found</p>
@@ -144,7 +170,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
             </div>
           ) : (
             <div className="space-y-3">
-              {tasks.map(task => (
+              {sortedTasks.map(task => (
                 <div
                   key={`${task.agentId}-${task.id}`}
                   onClick={() => selectTask(task)}

@@ -266,7 +266,19 @@ export async function handleTriggerRoutes(
 
     try {
       const success = await provider.deleteTrigger(apiKey, triggerId);
-      return json({ success });
+
+      // Also clean up any local subscriptions referencing this trigger instance
+      const localSubs = SubscriptionDB.findByTriggerInstanceId(triggerId);
+      let localDeleted = 0;
+      for (const sub of localSubs) {
+        SubscriptionDB.delete(sub.id);
+        localDeleted++;
+      }
+      if (localDeleted > 0) {
+        console.log(`[triggers] Cleaned up ${localDeleted} local subscription(s) for trigger ${triggerId}`);
+      }
+
+      return json({ success, localSubscriptionsDeleted: localDeleted });
     } catch (e) {
       console.error(`Failed to delete trigger ${triggerId}:`, e);
       return json({ error: "Failed to delete trigger" }, 500);
@@ -446,14 +458,42 @@ export async function handleTriggerRoutes(
     }
   }
 
-  // DELETE /api/subscriptions/:id
+  // DELETE /api/subscriptions/:id?provider=composio&project_id=xxx
   const subDeleteMatch = path.match(/^\/api\/subscriptions\/([^/]+)$/);
   if (subDeleteMatch && method === "DELETE") {
-    const success = SubscriptionDB.delete(subDeleteMatch[1]);
-    if (!success) {
+    const subId = subDeleteMatch[1];
+    const sub = SubscriptionDB.findById(subId);
+    if (!sub) {
       return json({ error: "Subscription not found" }, 404);
     }
-    return json({ success: true });
+
+    // Also delete the remote trigger if it exists
+    let remoteDeleted = false;
+    if (sub.trigger_instance_id) {
+      const url = new URL(req.url);
+      const providerId = url.searchParams.get("provider") || null;
+      const projectId = url.searchParams.get("project_id") || sub.project_id || null;
+
+      // Try to determine provider — check query param, or try all registered providers
+      const providerIds = providerId ? [providerId] : getTriggerProviderIds();
+      for (const pid of providerIds) {
+        const provider = getTriggerProvider(pid);
+        const apiKey = provider ? ProviderKeys.getDecryptedForProject(pid, projectId) : null;
+        if (provider && apiKey) {
+          try {
+            await provider.deleteTrigger(apiKey, sub.trigger_instance_id);
+            remoteDeleted = true;
+            console.log(`[subscriptions] Deleted remote trigger ${sub.trigger_instance_id} via ${pid}`);
+            break;
+          } catch (e) {
+            console.warn(`[subscriptions] Failed to delete remote trigger ${sub.trigger_instance_id} via ${pid}:`, e);
+          }
+        }
+      }
+    }
+
+    const success = SubscriptionDB.delete(subId);
+    return json({ success, remoteDeleted });
   }
 
   // POST /api/subscriptions/:id/enable

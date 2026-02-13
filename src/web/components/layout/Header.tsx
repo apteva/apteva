@@ -22,10 +22,8 @@ interface HeaderProps {
 
 export function Header({ onMenuClick, agents = [] }: HeaderProps) {
   const { connected } = useTelemetryContext();
-  const { user, logout } = useAuth();
   const authHeaders = useAuthHeaders();
   const { projects, currentProjectId, currentProject, setCurrentProjectId, unassignedCount, projectsEnabled } = useProjects();
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProjectMenu, setShowProjectMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unseenCount, setUnseenCount] = useState(0);
@@ -123,11 +121,6 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
       }
     }
   }, [showNotifications, unseenCount, accessToken, projectAgentIds]);
-
-  const handleLogout = async () => {
-    await logout();
-    setShowUserMenu(false);
-  };
 
   const handleProjectSelect = (projectId: string | null) => {
     setCurrentProjectId(projectId);
@@ -305,33 +298,6 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
             )}
           </div>
           <MetaAgentButton />
-          {user && (
-            <div className="relative">
-              <button
-                onClick={() => setShowUserMenu(!showUserMenu)}
-                className="flex items-center gap-2 px-2 md:px-3 py-2 rounded hover:bg-[#1a1a1a] transition"
-              >
-                <div className="w-8 h-8 rounded-full bg-[#f97316] flex items-center justify-center text-black font-medium text-sm">
-                  {user.username.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm text-[#888] hidden sm:block">{user.username}</span>
-              </button>
-              {showUserMenu && (
-                <div className="absolute right-0 top-full mt-1 w-48 bg-[#111] border border-[#222] rounded-lg shadow-xl z-50">
-                  <div className="px-4 py-3 border-b border-[#222]">
-                    <p className="text-sm font-medium">{user.username}</p>
-                    <p className="text-xs text-[#f97316] mt-1">{user.role}</p>
-                  </div>
-                  <button
-                    onClick={handleLogout}
-                    className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-[#1a1a1a] transition"
-                  >
-                    Sign out
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
     </header>

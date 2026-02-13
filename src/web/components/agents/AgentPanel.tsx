@@ -971,6 +971,15 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const [availableSkills, setAvailableSkills] = useState<AvailableSkill[]>([]);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [subscriptions, setSubscriptions] = useState<{ id: string; trigger_slug: string; enabled: boolean }[]>([]);
+
+  // Fetch subscriptions for this agent
+  useEffect(() => {
+    authFetch(`/api/subscriptions?agent_id=${agent.id}`)
+      .then(res => res.ok ? res.json() : { subscriptions: [] })
+      .then(data => setSubscriptions(data.subscriptions || []))
+      .catch(() => {});
+  }, [agent.id, authFetch]);
 
   // Fetch available MCP servers
   useEffect(() => {
@@ -1442,6 +1451,28 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             Changes will be applied to the running agent
           </p>
         )}
+
+        {/* Subscriptions */}
+        <div className="mt-8 pt-6 border-t border-[#222]">
+          <p className="text-sm text-[#666] mb-3">Subscriptions</p>
+          {subscriptions.length === 0 ? (
+            <p className="text-xs text-[#555]">No subscriptions. Set up triggers in Connections to have this agent listen to external events.</p>
+          ) : (
+            <div className="space-y-2">
+              {subscriptions.map(sub => (
+                <div key={sub.id} className="flex items-center gap-2 px-3 py-2 bg-[#111] rounded border border-[#1a1a1a]">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${sub.enabled ? "bg-cyan-400" : "bg-[#444]"}`} />
+                  <span className={`text-sm flex-1 ${sub.enabled ? "text-cyan-400" : "text-[#666]"}`}>
+                    {sub.trigger_slug.replace(/_/g, " ")}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${sub.enabled ? "bg-cyan-500/10 text-cyan-400" : "bg-[#222] text-[#555]"}`}>
+                    {sub.enabled ? "active" : "disabled"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Developer Info (dev mode only) */}
         {isDev && apiKey && (

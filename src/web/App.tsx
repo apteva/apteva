@@ -264,6 +264,7 @@ function AppContent() {
             <ActivityPage
               agents={agents}
               loading={loading}
+              onNavigate={setRoute}
             />
           )}
 

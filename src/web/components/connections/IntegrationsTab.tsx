@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useAuth, useProjects } from "../../context";
 import { IntegrationsPanel } from "../mcp/IntegrationsPanel";
 
@@ -12,18 +12,35 @@ interface TriggerType {
   logo: string | null;
 }
 
+interface ProviderInfo {
+  id: string;
+  name: string;
+  connected: boolean;
+}
+
 export function IntegrationsTab() {
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
 
   const projectId = currentProjectId && currentProjectId !== "unassigned" ? currentProjectId : null;
+  const projectParam = projectId ? `?project_id=${projectId}` : "";
 
-  // Provider selection
-  const [selectedProvider, setSelectedProvider] = useState("composio");
-  const providerOptions = [
-    { id: "composio", name: "Composio" },
-    { id: "agentdojo", name: "AgentDojo" },
-  ];
+  // Provider selection — only show configured providers
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState("");
+
+  useEffect(() => {
+    authFetch(`/api/triggers/providers${projectParam}`)
+      .then(r => r.json())
+      .then(data => {
+        const connected = (data.providers || []).filter((p: ProviderInfo) => p.connected);
+        setProviders(connected);
+        if (connected.length > 0 && !connected.find((p: ProviderInfo) => p.id === selectedProvider)) {
+          setSelectedProvider(connected[0].id);
+        }
+      })
+      .catch(() => {});
+  }, [authFetch]);
 
   // Trigger type browsing
   const [browsingToolkit, setBrowsingToolkit] = useState<string | null>(null);
@@ -53,32 +70,41 @@ export function IntegrationsTab() {
         Connect external apps via OAuth or API Key. Connected apps can be used for triggers and MCP integrations.
       </p>
 
-      {/* Provider Selector */}
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-xs text-[#666]">Provider:</span>
-        <div className="flex gap-1 bg-[#111] border border-[#1a1a1a] rounded-lg p-0.5">
-          {providerOptions.map(p => (
-            <button
-              key={p.id}
-              onClick={() => setSelectedProvider(p.id)}
-              className={`px-3 py-1 rounded text-xs font-medium transition ${
-                selectedProvider === p.id
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
-              }`}
-            >
-              {p.name}
-            </button>
-          ))}
+      {/* Provider Selector — only show if multiple configured */}
+      {providers.length > 1 && (
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-xs text-[#666]">Provider:</span>
+          <div className="flex gap-1 bg-[#111] border border-[#1a1a1a] rounded-lg p-0.5">
+            {providers.map(p => (
+              <button
+                key={p.id}
+                onClick={() => setSelectedProvider(p.id)}
+                className={`px-3 py-1 rounded text-xs font-medium transition ${
+                  selectedProvider === p.id
+                    ? "bg-[#1a1a1a] text-white"
+                    : "text-[#666] hover:text-[#888]"
+                }`}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      <IntegrationsPanel
-        providerId={selectedProvider}
-        projectId={projectId}
-        hideMcpConfig
-        onBrowseTriggers={handleBrowseTriggers}
-      />
+      {providers.length === 0 ? (
+        <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
+          <p className="text-[#666]">No integration providers configured.</p>
+          <p className="text-sm text-[#555] mt-1">Add API keys for Composio or AgentDojo in Settings.</p>
+        </div>
+      ) : (
+        <IntegrationsPanel
+          providerId={selectedProvider}
+          projectId={projectId}
+          hideMcpConfig
+          onBrowseTriggers={handleBrowseTriggers}
+        />
+      )}
 
       {/* Trigger Types Panel */}
       {browsingToolkit && (

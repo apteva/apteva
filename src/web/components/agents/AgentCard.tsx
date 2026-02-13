@@ -1,6 +1,6 @@
-import React from "react";
-import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, SkillsIcon } from "../common/Icons";
-import { useAgentActivity, useProjects } from "../../context";
+import React, { useState, useEffect } from "react";
+import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, SkillsIcon, ActivityIcon } from "../common/Icons";
+import { useAgentActivity, useProjects, useAuth } from "../../context";
 import type { Agent, AgentFeatures } from "../../types";
 
 interface AgentCardProps {
@@ -28,7 +28,16 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
   const skills = agent.skillDetails || [];
   const { isActive, type } = useAgentActivity(agent.id);
   const { projects } = useProjects();
+  const { authFetch } = useAuth();
   const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
+  const [subscriptions, setSubscriptions] = useState<{ id: string; trigger_slug: string; enabled: boolean }[]>([]);
+
+  useEffect(() => {
+    authFetch(`/api/subscriptions?agent_id=${agent.id}`)
+      .then(res => res.ok ? res.json() : { subscriptions: [] })
+      .then(data => setSubscriptions(data.subscriptions || []))
+      .catch(() => {});
+  }, [agent.id, authFetch]);
 
   return (
     <div
@@ -110,6 +119,26 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
             >
               <SkillsIcon className="w-3 h-3" />
               {skill.name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Subscriptions (triggers listening to) */}
+      {subscriptions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {subscriptions.map((sub) => (
+            <span
+              key={sub.id}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+                sub.enabled
+                  ? "bg-cyan-500/10 text-cyan-400"
+                  : "bg-[#222] text-[#666]"
+              }`}
+              title={`Trigger: ${sub.trigger_slug.replace(/_/g, " ")}`}
+            >
+              <ActivityIcon className="w-3 h-3" />
+              {sub.trigger_slug.replace(/_/g, " ")}
             </span>
           ))}
         </div>
