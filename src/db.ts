@@ -18,11 +18,19 @@ export interface AgentBuiltinTools {
   webFetch: boolean;
 }
 
+export interface OperatorConfig {
+  enabled: boolean;
+  browser_provider?: string; // "browserbase" | "steel" | "browserengine" | "chrome"
+  display_width?: number;
+  display_height?: number;
+  max_actions_per_turn?: number;
+}
+
 export interface AgentFeatures {
   memory: boolean;
   tasks: boolean;
   vision: boolean;
-  operator: boolean;
+  operator: boolean | OperatorConfig; // Can be boolean for backwards compat or full config
   mcp: boolean;
   realtime: boolean;
   files: boolean;
@@ -41,6 +49,15 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   agents: false,
   builtinTools: { webSearch: false, webFetch: false },
 };
+
+// Helper to normalize operator feature to OperatorConfig
+export function getOperatorConfig(features: AgentFeatures): OperatorConfig {
+  const op = features.operator;
+  if (typeof op === "boolean") {
+    return { enabled: op };
+  }
+  return op;
+}
 
 // Helper to normalize agents feature to MultiAgentConfig
 export function getMultiAgentConfig(features: AgentFeatures, projectId?: string | null): MultiAgentConfig {
@@ -1480,6 +1497,7 @@ export const McpServerDB = {
     // Assign port permanently at creation time (like agents)
     // HTTP and local servers don't need a local proxy port
     const port = (server.type === "http" || server.type === "local") ? null : this.getNextAvailablePort();
+    console.log(`[McpServerDB.create] id=${server.id} name=${server.name} type=${server.type} source=${server.source} project_id=${server.project_id} url=${server.url?.substring(0, 60)}`);
     const stmt = db.prepare(`
       INSERT INTO mcp_servers (id, name, type, package, pip_module, command, args, env, url, headers, source, project_id, status, port, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?)
@@ -1488,7 +1506,12 @@ export const McpServerDB = {
       server.id, server.name, server.type, server.package, server.pip_module || null, server.command, server.args,
       envEncrypted, server.url || null, headersEncrypted, server.source || null, server.project_id || null, port, now
     );
-    return this.findById(server.id)!;
+    const created = this.findById(server.id);
+    console.log(`[McpServerDB.create] findById after INSERT: ${created ? `found id=${created.id} project_id=${created.project_id}` : "NOT FOUND"}`);
+    if (!created) {
+      console.error(`[McpServerDB.create] CRITICAL: INSERT succeeded but findById returned null for id=${server.id}`);
+    }
+    return created!;
   },
 
   findById(id: string): McpServer | null {

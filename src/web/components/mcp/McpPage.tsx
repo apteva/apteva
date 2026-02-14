@@ -1366,6 +1366,7 @@ function AgentDojoContent({
       const serversUrl = projectId && projectId !== "unassigned"
         ? `/api/mcp/servers?project=${encodeURIComponent(projectId)}`
         : "/api/mcp/servers";
+      console.log(`[AgentDojo:fetchConfigs] projectId=${projectId} serversUrl=${serversUrl}`);
       const [configsRes, serversRes] = await Promise.all([
         authFetch(`/api/integrations/agentdojo/configs${projectParam}`),
         authFetch(serversUrl),
@@ -1373,18 +1374,24 @@ function AgentDojoContent({
       const configsData = await configsRes.json();
       const serversData = await serversRes.json();
 
+      console.log(`[AgentDojo:fetchConfigs] configs=${(configsData.configs || []).length} servers=${(serversData.servers || []).length}`);
       setConfigs(configsData.configs || []);
 
       // Track which configs are already added as local servers
+      const agentdojoServers = (serversData.servers || []).filter((s: any) => s.source === "agentdojo");
+      console.log(`[AgentDojo:fetchConfigs] agentdojo servers found: ${agentdojoServers.length}`);
+      for (const s of agentdojoServers) {
+        const match = s.url?.match(/\/mcp\/([^/?]+)/);
+        console.log(`[AgentDojo:fetchConfigs]   server: id=${s.id} name=${s.name} project_id=${s.project_id} url=${s.url?.substring(0, 80)} extracted=${match ? match[1] : s.name}`);
+      }
       const agentdojoServerIds = new Set(
-        (serversData.servers || [])
-          .filter((s: any) => s.source === "agentdojo")
-          .map((s: any) => {
+        agentdojoServers.map((s: any) => {
             // Extract config ID from URL or match by name
             const match = s.url?.match(/\/mcp\/([^/?]+)/);
             return match ? match[1] : s.name;
           })
       );
+      console.log(`[AgentDojo:fetchConfigs] addedServers set:`, [...agentdojoServerIds]);
       setAddedServers(agentdojoServerIds);
     } catch (e) {
       console.error("Failed to fetch AgentDojo configs:", e);
@@ -1396,15 +1403,19 @@ function AgentDojoContent({
     setAddingConfig(configId);
     try {
       const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      console.log(`[AgentDojo:addConfig] configId=${configId} projectParam=${projectParam}`);
       const res = await authFetch(`/api/integrations/agentdojo/configs/${configId}/add${projectParam}`, {
         method: "POST",
       });
+      const data = await res.json();
+      console.log(`[AgentDojo:addConfig] response status=${res.status} ok=${res.ok} message=${data.message} server.id=${data.server?.id} server.project_id=${data.server?.project_id}`);
       if (res.ok) {
         const config = configs.find(c => c.id === configId);
-        setAddedServers(prev => new Set([...prev, config?.slug || configId]));
+        const addKey = config?.slug || configId;
+        console.log(`[AgentDojo:addConfig] marking as added: key=${addKey} config.slug=${config?.slug} config.id=${config?.id} config.name=${config?.name}`);
+        setAddedServers(prev => new Set([...prev, addKey]));
         onServerAdded?.();
       } else {
-        const data = await res.json();
         await alert(data.error || "Failed to add config", { title: "Error", variant: "error" });
       }
     } catch (e) {

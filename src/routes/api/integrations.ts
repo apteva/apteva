@@ -518,20 +518,29 @@ export async function handleIntegrationRoutes(
     }
 
     try {
+      console.log(`[agentdojo:add] configId=${configId} projectId=${projectId}`);
       const server = await getAgentDojoServer(apiKey, configId);
       if (!server) {
+        console.log(`[agentdojo:add] server not found from AgentDojo API for configId=${configId}`);
         return json({ error: "Config not found" }, 404);
       }
+      console.log(`[agentdojo:add] fetched server: slug=${server.slug} name=${server.name} url=${server.url?.substring(0, 80)}`);
 
-      // Check if already exists
-      const existing = McpServerDB.findAll().find(
-        s => s.source === "agentdojo" && (s.url?.includes(server.slug) || s.url?.includes(configId))
+      // Check if already exists — match by slug in URL, scoped to same project
+      const effectiveProjectId = projectId && projectId !== "unassigned" ? projectId : null;
+      const allServers = McpServerDB.findAll();
+      const agentdojoServers = allServers.filter(s => s.source === "agentdojo");
+      console.log(`[agentdojo:add] total servers=${allServers.length} agentdojo servers=${agentdojoServers.length}`);
+      const existing = agentdojoServers.find(
+        s => s.project_id === effectiveProjectId && s.url?.endsWith(`/${server.slug}`)
       );
       if (existing) {
+        console.log(`[agentdojo:add] ALREADY EXISTS: id=${existing.id} project_id=${existing.project_id} slug=${server.slug}`);
         return json({ server: existing, message: "Server already exists" });
       }
 
       // Create the MCP server entry
+      console.log(`[agentdojo:add] creating new server with effectiveProjectId=${effectiveProjectId}`);
       const mcpServer = McpServerDB.create({
         id: generateId(),
         name: server.name,
@@ -544,12 +553,13 @@ export async function handleIntegrationRoutes(
         url: server.url,
         headers: { "X-API-Key": apiKey },
         source: "agentdojo",
-        project_id: projectId && projectId !== "unassigned" ? projectId : null,
+        project_id: effectiveProjectId,
       });
+      console.log(`[agentdojo:add] created server: id=${mcpServer.id} project_id=${mcpServer.project_id}`);
 
       return json({ server: mcpServer, message: "Server added successfully" });
     } catch (e) {
-      console.error("Failed to add AgentDojo config:", e);
+      console.error("[agentdojo:add] Failed to add AgentDojo config:", e);
       return json({ error: "Failed to add AgentDojo config" }, 500);
     }
   }

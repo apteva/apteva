@@ -110,20 +110,47 @@ export async function handleAgentRoutes(
 
       const updated = AgentDB.update(agentMatch[1], updates);
 
-      // If agent is running, push the new config and skills
+      // If agent is running, handle config update
       if (updated && updated.status === "running" && updated.port) {
-        const providerKey = ProviderKeys.getDecrypted(updated.provider);
-        if (providerKey) {
-          const config = buildAgentConfig(updated, providerKey);
-          const configResult = await pushConfigToAgent(updated.id, updated.port, config);
-          if (!configResult.success) {
-            console.error(`Failed to push config to running agent: ${configResult.error}`);
+        const providerChanged = body.provider !== undefined && body.provider !== agent.provider;
+
+        if (providerChanged) {
+          // Provider changed — must restart to get new API key in env
+          console.log(`Provider changed for ${updated.name} (${agent.provider} -> ${updated.provider}), restarting...`);
+          const agentProc = agentProcesses.get(updated.id);
+          if (agentProc) {
+            // Graceful shutdown
+            try {
+              await fetch(`http://localhost:${updated.port}/shutdown`, {
+                method: "POST",
+                signal: AbortSignal.timeout(2000),
+              });
+              await new Promise(r => setTimeout(r, 500));
+            } catch {}
+            try { agentProc.proc.kill(); } catch {}
+            agentProcesses.delete(updated.id);
           }
-          // Push skills via /skills endpoint
-          if (config.skills?.definitions?.length > 0) {
-            const skillsResult = await pushSkillsToAgent(updated.id, updated.port, config.skills.definitions);
-            if (!skillsResult.success) {
-              console.error(`Failed to push skills to running agent: ${skillsResult.error}`);
+          setAgentStatus(updated.id, "stopped", "provider_changed");
+          // Start with new provider
+          const startResult = await startAgentProcess(updated, { silent: true });
+          if (!startResult.success) {
+            console.error(`Failed to restart agent after provider change: ${startResult.error}`);
+          }
+        } else {
+          // Same provider — just push updated config
+          const providerKey = ProviderKeys.getDecrypted(updated.provider);
+          if (providerKey) {
+            const config = buildAgentConfig(updated, providerKey);
+            const configResult = await pushConfigToAgent(updated.id, updated.port, config);
+            if (!configResult.success) {
+              console.error(`Failed to push config to running agent: ${configResult.error}`);
+            }
+            // Push skills via /skills endpoint
+            if (config.skills?.definitions?.length > 0) {
+              const skillsResult = await pushSkillsToAgent(updated.id, updated.port, config.skills.definitions);
+              if (!skillsResult.success) {
+                console.error(`Failed to push skills to running agent: ${skillsResult.error}`);
+              }
             }
           }
         }
@@ -215,10 +242,11 @@ export async function handleAgentRoutes(
       return json({ error: "No API key found for this agent" }, 404);
     }
 
-    // Return masked key (show only first 8 chars)
+    // Return masked key + full key (full key only shown on demand by frontend)
     const masked = apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length - 4);
     return json({
       apiKey: masked,
+      fullKey: apiKey,
       hasKey: true,
     });
   }

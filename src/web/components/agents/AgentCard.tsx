@@ -26,7 +26,7 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
   const enabledFeatures = FEATURE_ICONS.filter(f => agent.features?.[f.key]);
   const mcpServers = agent.mcpServerDetails || [];
   const skills = agent.skillDetails || [];
-  const { isActive, type } = useAgentActivity(agent.id);
+  const { isActive, label: activityLabel } = useAgentActivity(agent.id);
   const { projects } = useProjects();
   const { authFetch } = useAuth();
   const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
@@ -62,7 +62,7 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
             </p>
           )}
         </div>
-        <StatusBadge status={agent.status} isActive={isActive && agent.status === "running"} activityType={type} />
+        <StatusBadge status={agent.status} isActive={isActive && agent.status === "running"} activityLabel={activityLabel} />
       </div>
 
       {enabledFeatures.length > 0 && (
@@ -165,11 +165,11 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
   );
 }
 
-function StatusBadge({ status, isActive, activityType }: { status: Agent["status"]; isActive?: boolean; activityType?: string }) {
-  if (status === "running" && isActive && activityType) {
+function StatusBadge({ status, isActive, activityLabel }: { status: Agent["status"]; isActive?: boolean; activityLabel?: string }) {
+  if (status === "running" && isActive && activityLabel) {
     return (
       <span className="px-2 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400 animate-pulse">
-        {activityType}
+        {activityLabel}
       </span>
     );
   }

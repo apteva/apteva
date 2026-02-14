@@ -5,16 +5,17 @@ import { Select } from "../common/Select";
 import { useProjects, useAuth, type Project } from "../../context";
 import type { Provider } from "../../types";
 
-type SettingsTab = "general" | "providers" | "projects" | "channels" | "api-keys" | "account" | "updates" | "data";
+type SettingsTab = "general" | "providers" | "projects" | "channels" | "api-keys" | "account" | "updates" | "data" | "assistant";
 
 export function SettingsPage() {
-  const { projectsEnabled } = useProjects();
+  const { projectsEnabled, metaAgentEnabled } = useProjects();
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
 
   const tabs: { key: SettingsTab; label: string }[] = [
     { key: "general", label: "General" },
     { key: "providers", label: "Providers" },
     ...(projectsEnabled ? [{ key: "projects" as SettingsTab, label: "Projects" }] : []),
+    ...(metaAgentEnabled ? [{ key: "assistant" as SettingsTab, label: "Assistant" }] : []),
     { key: "channels", label: "Channels" },
     { key: "api-keys", label: "API Keys" },
     { key: "account", label: "Account" },
@@ -68,6 +69,7 @@ export function SettingsPage() {
         {activeTab === "account" && <AccountSettings />}
         {activeTab === "updates" && <UpdatesSettings />}
         {activeTab === "data" && <DataSettings />}
+        {activeTab === "assistant" && metaAgentEnabled && <AssistantSettings />}
       </div>
     </div>
   );
@@ -273,8 +275,10 @@ function ProvidersSettings() {
 
   const llmProviders = providers.filter(p => p.type === "llm");
   const integrations = providers.filter(p => p.type === "integration");
+  const browserProviders = providers.filter(p => p.type === "browser");
   const llmConfiguredCount = llmProviders.filter(p => p.hasKey).length;
   const intConfiguredCount = integrations.filter(p => p.hasKey).length;
+  const browserConfiguredCount = browserProviders.filter(p => p.hasKey).length;
 
   // Auto-dismiss success message after 5 seconds
   useEffect(() => {
@@ -378,6 +382,44 @@ function ProvidersSettings() {
               projectsEnabled={projectsEnabled}
               projects={projects}
               onRefresh={fetchProviders}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Browser Providers Section */}
+      <div>
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-1">Browser Providers</h2>
+          <p className="text-[#666]">
+            Configure browser environments for operator mode (computer use). {browserConfiguredCount} of {browserProviders.length} configured.
+          </p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {browserProviders.map(provider => (
+            <ProviderKeyCard
+              key={provider.id}
+              provider={provider}
+              isEditing={selectedProvider === provider.id}
+              apiKey={apiKey}
+              saving={saving}
+              testing={testing}
+              error={selectedProvider === provider.id ? error : null}
+              success={selectedProvider === provider.id ? success : null}
+              onStartEdit={() => {
+                setSelectedProvider(provider.id);
+                setError(null);
+                setSuccess(null);
+              }}
+              onCancelEdit={() => {
+                setSelectedProvider(null);
+                setApiKey("");
+                setError(null);
+              }}
+              onApiKeyChange={setApiKey}
+              onSave={saveKey}
+              onDelete={() => deleteKey(provider.id)}
             />
           ))}
         </div>
@@ -899,6 +941,8 @@ function ProviderKeyCard({
   onDelete,
 }: ProviderKeyCardProps) {
   const isOllama = provider.id === "ollama";
+  const isUrlBased = isOllama || provider.id === "browserengine" || provider.id === "chrome";
+  const isBrowser = provider.type === "browser";
   const [ollamaStatus, setOllamaStatus] = React.useState<{ connected: boolean; modelCount?: number } | null>(null);
 
   // Check Ollama status when configured
@@ -919,11 +963,13 @@ function ProviderKeyCard({
         <div className="min-w-0">
           <h3 className="font-medium">{provider.name}</h3>
           <p className="text-sm text-[#666] truncate">
-            {provider.type === "integration"
-              ? (provider.description || "MCP integration")
-              : isOllama
-                ? "Run models locally"
-                : `${provider.models.length} models`}
+            {isBrowser
+              ? (provider.description || "Browser automation")
+              : provider.type === "integration"
+                ? (provider.description || "MCP integration")
+                : isOllama
+                  ? "Run models locally"
+                  : `${provider.models.length} models`}
           </p>
         </div>
         {provider.hasKey ? (
@@ -940,6 +986,8 @@ function ProviderKeyCard({
               ) : (
                 <>Not running</>
               )
+            ) : isUrlBased ? (
+              <><CheckIcon className="w-3 h-3" />Configured</>
             ) : (
               <><CheckIcon className="w-3 h-3" />{provider.keyHint}</>
             )}
@@ -955,18 +1003,26 @@ function ProviderKeyCard({
         {isEditing ? (
           <div className="space-y-3">
             <input
-              type={isOllama ? "text" : "password"}
+              type={isUrlBased ? "text" : "password"}
               value={apiKey}
               onChange={e => onApiKeyChange(e.target.value)}
               placeholder={isOllama
                 ? "http://localhost:11434"
-                : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+                : provider.id === "browserengine"
+                  ? "http://localhost:8098"
+                  : provider.id === "chrome"
+                    ? "http://localhost:9222"
+                    : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
               autoFocus
               className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
             />
-            {isOllama && (
+            {isUrlBased && (
               <p className="text-xs text-[#666]">
-                Enter your Ollama server URL. Default is http://localhost:11434
+                {isOllama
+                  ? "Enter your Ollama server URL. Default is http://localhost:11434"
+                  : provider.id === "browserengine"
+                    ? "Enter your BrowserEngine service URL (e.g., http://localhost:8098)"
+                    : "Enter your Chrome DevTools URL (e.g., http://localhost:9222)"}
               </p>
             )}
             {error && <p className="text-red-400 text-sm">{error}</p>}
@@ -983,26 +1039,30 @@ function ProviderKeyCard({
                 disabled={!apiKey || saving}
                 className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
               >
-                {testing ? "Validating..." : saving ? "Saving..." : isOllama ? "Connect" : "Save"}
+                {testing ? "Validating..." : saving ? "Saving..." : isUrlBased ? "Connect" : "Save"}
               </button>
             </div>
           </div>
         ) : provider.hasKey ? (
           <div className="flex items-center justify-between">
-            <a
-              href={provider.docsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-[#3b82f6] hover:underline"
-            >
-              {isOllama ? "Download Ollama" : "View docs"}
-            </a>
+            {provider.docsUrl ? (
+              <a
+                href={provider.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-[#3b82f6] hover:underline"
+              >
+                {isOllama ? "Download Ollama" : "View docs"}
+              </a>
+            ) : (
+              <span />
+            )}
             <div className="flex items-center gap-3">
               <button
                 onClick={onStartEdit}
                 className="text-sm text-[#888] hover:text-[#e0e0e0]"
               >
-                {isOllama ? "Change URL" : "Update key"}
+                {isUrlBased ? "Change URL" : "Update key"}
               </button>
               <button
                 onClick={onDelete}
@@ -1014,19 +1074,23 @@ function ProviderKeyCard({
           </div>
         ) : (
           <div className="flex items-center justify-between">
-            <a
-              href={provider.docsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-[#3b82f6] hover:underline"
-            >
-              {isOllama ? "Download Ollama" : "Get API key"}
-            </a>
+            {provider.docsUrl ? (
+              <a
+                href={provider.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-[#3b82f6] hover:underline"
+              >
+                {isOllama ? "Download Ollama" : isBrowser ? "View docs" : "Get API key"}
+              </a>
+            ) : (
+              <span />
+            )}
             <button
               onClick={onStartEdit}
               className="text-sm text-[#f97316] hover:text-[#fb923c]"
             >
-              {isOllama ? "Configure" : "+ Add key"}
+              {isUrlBased ? "Configure" : "+ Add key"}
             </button>
           </div>
         )}
@@ -2150,5 +2214,190 @@ function ChannelsSettings() {
       )}
     </div>
     </>
+  );
+}
+
+function AssistantSettings() {
+  const { authFetch } = useAuth();
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [status, setStatus] = useState<"running" | "stopped" | "unknown">("unknown");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [starting, setStarting] = useState(false);
+
+  // Original values for change detection
+  const [original, setOriginal] = useState({ provider: "", model: "", systemPrompt: "" });
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [statusRes, providersRes] = await Promise.all([
+          authFetch("/api/meta-agent/status"),
+          authFetch("/api/providers"),
+        ]);
+        const statusData = await statusRes.json();
+        const providersData = await providersRes.json();
+        setProviders((providersData.providers || []).filter((p: Provider) => p.type === "llm" && p.hasKey));
+
+        if (statusData.agent) {
+          const a = statusData.agent;
+          setProvider(a.provider || "");
+          setModel(a.model || "");
+          setSystemPrompt(a.systemPrompt || "");
+          setStatus(a.status || "stopped");
+          setOriginal({ provider: a.provider || "", model: a.model || "", systemPrompt: a.systemPrompt || "" });
+        }
+      } catch {
+        setMessage({ type: "error", text: "Failed to load assistant config" });
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [authFetch]);
+
+  const selectedProvider = providers.find(p => p.id === provider);
+  const models = selectedProvider?.models || [];
+
+  const handleProviderChange = (newProvider: string) => {
+    setProvider(newProvider);
+    const p = providers.find(pr => pr.id === newProvider);
+    const defaultModel = p?.models.find(m => m.recommended)?.value || p?.models[0]?.value || "";
+    setModel(defaultModel);
+  };
+
+  const hasChanges = provider !== original.provider || model !== original.model || systemPrompt !== original.systemPrompt;
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await authFetch("/api/agents/apteva-assistant", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model, systemPrompt }),
+      });
+      if (res.ok) {
+        setOriginal({ provider, model, systemPrompt });
+        setMessage({ type: "success", text: "Assistant settings saved" });
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setMessage({ type: "error", text: data.error || "Failed to save" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to save settings" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggle = async () => {
+    setStarting(true);
+    setMessage(null);
+    try {
+      const endpoint = status === "running" ? "/api/meta-agent/stop" : "/api/meta-agent/start";
+      const res = await authFetch(endpoint, { method: "POST" });
+      if (res.ok) {
+        setStatus(status === "running" ? "stopped" : "running");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setMessage({ type: "error", text: data.error || "Failed to toggle assistant" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to toggle assistant" });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="text-[#666]">Loading assistant settings...</div>;
+  }
+
+  return (
+    <div className="max-w-2xl">
+      <h2 className="text-lg font-medium mb-1">Apteva Assistant</h2>
+      <p className="text-sm text-[#666] mb-6">Configure the built-in AI assistant that manages your agents and platform.</p>
+
+      {message && (
+        <div className={`mb-4 px-3 py-2 rounded text-sm ${
+          message.type === "success" ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
+        }`}>
+          {message.text}
+        </div>
+      )}
+
+      {/* Status */}
+      <div className="mb-6 flex items-center gap-3">
+        <span className="text-sm text-[#666]">Status:</span>
+        <span className={`px-2 py-1 rounded text-xs font-medium ${
+          status === "running" ? "bg-[#3b82f6]/20 text-[#3b82f6]" : "bg-[#333] text-[#666]"
+        }`}>
+          {status}
+        </span>
+        <button
+          onClick={handleToggle}
+          disabled={starting}
+          className={`px-3 py-1.5 rounded text-sm font-medium transition ${
+            status === "running"
+              ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
+              : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
+          } disabled:opacity-50`}
+        >
+          {starting ? "..." : status === "running" ? "Stop" : "Start"}
+        </button>
+      </div>
+
+      {/* Provider */}
+      <div className="mb-4">
+        <label className="block text-sm text-[#666] mb-1">Provider</label>
+        <Select
+          value={provider}
+          onChange={handleProviderChange}
+          options={providers.map(p => ({ value: p.id, label: p.name }))}
+          placeholder="Select provider..."
+        />
+      </div>
+
+      {/* Model */}
+      <div className="mb-4">
+        <label className="block text-sm text-[#666] mb-1">Model</label>
+        <Select
+          value={model}
+          onChange={setModel}
+          options={models.map(m => ({ value: m.value, label: m.label, recommended: m.recommended }))}
+          placeholder="Select model..."
+        />
+      </div>
+
+      {/* System Prompt */}
+      <div className="mb-6">
+        <label className="block text-sm text-[#666] mb-1">System Prompt</label>
+        <textarea
+          value={systemPrompt}
+          onChange={e => setSystemPrompt(e.target.value)}
+          rows={12}
+          className="w-full bg-[#111] border border-[#1a1a1a] rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#f97316] resize-y"
+        />
+      </div>
+
+      {/* Save */}
+      <button
+        onClick={handleSave}
+        disabled={!hasChanges || saving}
+        className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
+      >
+        {saving ? "Saving..." : "Save Changes"}
+      </button>
+
+      {status === "running" && hasChanges && (
+        <p className="text-xs text-[#666] mt-2">Changes will be applied to the running assistant</p>
+      )}
+    </div>
   );
 }

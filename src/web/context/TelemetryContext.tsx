@@ -233,6 +233,19 @@ export function useTelemetry(filter?: {
   };
 }
 
+// Map raw telemetry event types to user-friendly labels
+export function getActivityLabel(type: string): string {
+  switch (type) {
+    case "llm_request": return "Thinking";
+    case "tool_invocation": return "Using tools";
+    case "tool_result": return "Using tools";
+    case "thread_activity": return "Working";
+    case "agent_started": return "Starting";
+    case "agent_stopped": return "Stopped";
+    default: return "Working";
+  }
+}
+
 // Hook for agent activity indicator - uses context-level tracking
 export function useAgentActivity(agentId: string) {
   const { activeAgents } = useTelemetryContext();
@@ -241,6 +254,7 @@ export function useAgentActivity(agentId: string) {
   return {
     isActive: !!activity,
     type: activity?.type,
+    label: activity ? getActivityLabel(activity.type) : undefined,
   };
 }
 

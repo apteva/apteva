@@ -25,16 +25,23 @@ export async function handleMcpRoutes(
     const forAgent = url.searchParams.get("forAgent"); // agent's project ID (shows global + project)
 
     let servers;
+    let queryMode: string;
     if (forAgent !== null) {
       // Get servers available for an agent (global + agent's project)
       servers = McpServerDB.findForAgent(forAgent || null);
+      queryMode = `forAgent=${forAgent}`;
     } else if (projectFilter === "global") {
       servers = McpServerDB.findGlobal();
+      queryMode = "global";
     } else if (projectFilter && projectFilter !== "all") {
       servers = McpServerDB.findByProject(projectFilter);
+      queryMode = `project=${projectFilter}`;
     } else {
       servers = McpServerDB.findAll();
+      queryMode = "all";
     }
+    const agentdojoCount = servers.filter(s => s.source === "agentdojo").length;
+    console.log(`[mcp:GET] mode=${queryMode} total=${servers.length} agentdojo=${agentdojoCount}`);
     return json({ servers });
   }
 

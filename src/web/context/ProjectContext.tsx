@@ -19,6 +19,7 @@ interface ProjectContextValue {
   error: string | null;
   unassignedCount: number;
   projectsEnabled: boolean; // Feature flag
+  metaAgentEnabled: boolean; // Feature flag
   setCurrentProjectId: (id: string | null) => void;
   createProject: (data: { name: string; description?: string; color?: string }) => Promise<Project | null>;
   updateProject: (id: string, data: { name?: string; description?: string; color?: string }) => Promise<Project | null>;
@@ -56,6 +57,7 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
   const [error, setError] = useState<string | null>(null);
   const [unassignedCount, setUnassignedCount] = useState(0);
   const [projectsEnabled, setProjectsEnabled] = useState(false);
+  const [metaAgentEnabled, setMetaAgentEnabled] = useState(false);
 
   // Fetch feature flags on mount
   useEffect(() => {
@@ -63,9 +65,11 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
       .then(res => res.json())
       .then(data => {
         setProjectsEnabled(data.projects === true);
+        setMetaAgentEnabled(data.metaAgent === true);
       })
       .catch(() => {
         setProjectsEnabled(false);
+        setMetaAgentEnabled(false);
       });
   }, []);
 
@@ -193,6 +197,7 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     error,
     unassignedCount,
     projectsEnabled,
+    metaAgentEnabled,
     setCurrentProjectId,
     createProject,
     updateProject,

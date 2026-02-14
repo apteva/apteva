@@ -216,7 +216,7 @@ function AgentRow({ agent, selected, onSelect }: {
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { isActive, type } = useAgentActivity(agent.id);
+  const { isActive, label } = useAgentActivity(agent.id);
   const isRunning = agent.status === "running";
 
   return (
@@ -244,8 +244,8 @@ function AgentRow({ agent, selected, onSelect }: {
           </span>
           <span className="text-[10px] text-[#555] shrink-0">{agent.provider}</span>
         </div>
-        {isActive && type ? (
-          <p className="text-[11px] text-green-400 truncate">{type}</p>
+        {isActive && label ? (
+          <p className="text-[11px] text-green-400 truncate">{label}</p>
         ) : (
           <p className={`text-[11px] ${isRunning ? "text-[#555]" : "text-[#444]"}`}>
             {isRunning ? "idle" : "stopped"}

@@ -128,6 +128,49 @@ export const PROVIDERS = {
       { value: "deepseek-r1", label: "DeepSeek R1" },
     ],
   },
+  // Browser Providers
+  browserbase: {
+    id: "browserbase",
+    name: "Browserbase",
+    displayName: "Browserbase",
+    type: "browser" as const,
+    envVar: "BROWSERBASE_API_KEY",
+    docsUrl: "https://www.browserbase.com/",
+    description: "Cloud browser sessions with proxies and stealth mode",
+    models: [],
+  },
+  steel: {
+    id: "steel",
+    name: "Steel",
+    displayName: "Steel.dev",
+    type: "browser" as const,
+    envVar: "STEEL_API_KEY",
+    docsUrl: "https://steel.dev/",
+    description: "Cloud browser automation with CDP",
+    models: [],
+  },
+  browserengine: {
+    id: "browserengine",
+    name: "BrowserEngine",
+    displayName: "BrowserEngine (Self-hosted)",
+    type: "browser" as const,
+    envVar: "BROWSER_ENGINE_URL",
+    docsUrl: "",
+    description: "Your own virtual browser service",
+    isLocal: true,
+    models: [],
+  },
+  chrome: {
+    id: "chrome",
+    name: "Chrome",
+    displayName: "Chrome DevTools",
+    type: "browser" as const,
+    envVar: "CHROME_DEBUG_URL",
+    docsUrl: "",
+    description: "Direct CDP connection to Chrome",
+    isLocal: true,
+    models: [],
+  },
   // MCP Integrations
   composio: {
     id: "composio",
@@ -390,5 +433,6 @@ export function getProvidersWithStatus() {
     hasKey: configuredProviders.has(provider.id),
     keyHint: keyStatuses.get(provider.id)?.key_hint || null,
     isValid: keyStatuses.get(provider.id)?.is_valid ?? null,
+    isLocal: "isLocal" in provider ? provider.isLocal : undefined,
   }));
 }

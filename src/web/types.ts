@@ -13,11 +13,19 @@ export interface AgentBuiltinTools {
   webFetch: boolean;
 }
 
+export interface OperatorConfig {
+  enabled: boolean;
+  browser_provider?: string; // "browserbase" | "steel" | "browserengine" | "chrome"
+  display_width?: number;
+  display_height?: number;
+  max_actions_per_turn?: number;
+}
+
 export interface AgentFeatures {
   memory: boolean;
   tasks: boolean;
   vision: boolean;
-  operator: boolean;
+  operator: boolean | OperatorConfig; // Can be boolean for backwards compat or full config
   mcp: boolean;
   realtime: boolean;
   files: boolean;
@@ -36,6 +44,15 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   agents: false,
   builtinTools: { webSearch: false, webFetch: false },
 };
+
+// Helper to normalize operator feature to OperatorConfig
+export function getOperatorConfig(features: AgentFeatures): OperatorConfig {
+  const op = features.operator;
+  if (typeof op === "boolean") {
+    return { enabled: op };
+  }
+  return op;
+}
 
 // Helper to normalize agents feature to MultiAgentConfig
 export function getMultiAgentConfig(features: AgentFeatures, projectId?: string | null): MultiAgentConfig {
@@ -127,7 +144,7 @@ export interface ProviderModel {
 export interface Provider {
   id: string;
   name: string;
-  type: "llm" | "integration";
+  type: "llm" | "integration" | "browser";
   docsUrl: string;
   description?: string;
   models: ProviderModel[];
@@ -135,6 +152,7 @@ export interface Provider {
   keyHint: string | null;
   isValid: boolean | null;
   configured?: boolean; // for backwards compatibility
+  isLocal?: boolean; // Uses URL instead of API key (ollama, browserengine, chrome)
 }
 
 export interface OnboardingStatus {

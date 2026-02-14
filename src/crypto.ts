@@ -136,12 +136,12 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
     return { valid: false, error: "API key cannot be empty" };
   }
 
-  // Ollama uses base URL instead of API key - accept any valid URL
-  if (provider === "ollama") {
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+  // Ollama and local browser providers use base URL instead of API key
+  if (provider === "ollama" || provider === "browserengine" || provider === "chrome") {
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("ws://") || trimmed.startsWith("wss://")) {
       return { valid: true };
     }
-    return { valid: false, error: "Ollama requires a valid URL (e.g., http://localhost:11434)" };
+    return { valid: false, error: `${provider} requires a valid URL (e.g., http://localhost:8098)` };
   }
 
   // Provider-specific format validation
@@ -194,6 +194,15 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
     agentdojo: {
       pattern: /^(key_)?[a-zA-Z0-9_-]+$/,
       example: "key_...",
+    },
+    // Browser providers
+    browserbase: {
+      pattern: /^bb_[a-zA-Z0-9_-]+$|^[a-zA-Z0-9_-]+$/,
+      example: "bb_live_...",
+    },
+    steel: {
+      pattern: /^steel_[a-zA-Z0-9_-]+$|^[a-zA-Z0-9_-]+$/,
+      example: "steel_...",
     },
   };
 

@@ -219,6 +219,11 @@ async function streamAndSend(
               break;
             }
 
+            // Thinking — strip, never send to channel
+            case "thinking":
+            case "thinking_delta":
+              break;
+
             // Intermediate tool events — skip, but signal activity
             case "tool_input_delta":
             case "tool_use":

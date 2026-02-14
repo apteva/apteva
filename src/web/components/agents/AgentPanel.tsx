@@ -6,8 +6,8 @@ import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
 import { useTelemetry } from "../../context";
 import { useAuth } from "../../context";
-import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, AgentMode, MultiAgentConfig, Task } from "../../types";
-import { getMultiAgentConfig } from "../../types";
+import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, AgentMode, MultiAgentConfig, OperatorConfig, Task } from "../../types";
+import { getMultiAgentConfig, getOperatorConfig } from "../../types";
 
 type Tab = "chat" | "threads" | "tasks" | "memory" | "files" | "settings";
 
@@ -1123,6 +1123,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
   const [availableSkills, setAvailableSkills] = useState<AvailableSkill[]>([]);
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [apiKeyFull, setApiKeyFull] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [subscriptions, setSubscriptions] = useState<{ id: string; trigger_slug: string; enabled: boolean }[]>([]);
 
@@ -1148,22 +1149,22 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     fetchMcpServers();
   }, [authFetch]);
 
-  // Fetch API key (dev mode only)
+  // Fetch API key
   useEffect(() => {
-    if (!isDev) return;
     const fetchApiKey = async () => {
       try {
         const res = await authFetch(`/api/agents/${agent.id}/api-key`);
         if (res.ok) {
           const data = await res.json();
           setApiKey(data.apiKey);
+          setApiKeyFull(data.fullKey || null);
         }
       } catch (e) {
         // Ignore - not critical
       }
     };
     fetchApiKey();
-  }, [agent.id, isDev, authFetch]);
+  }, [agent.id, authFetch]);
 
   // Fetch available skills
   useEffect(() => {
@@ -1217,24 +1218,34 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const toggleFeature = (key: keyof AgentFeatures) => {
     if (key === "agents") {
       // Special handling for agents feature - convert to MultiAgentConfig
-      const current = prev => {
-        const agentConfig = getMultiAgentConfig(prev.features, agent.projectId);
-        return agentConfig.enabled;
-      };
       setForm(prev => {
         const isEnabled = typeof prev.features.agents === "boolean"
           ? prev.features.agents
           : (prev.features.agents as MultiAgentConfig)?.enabled ?? false;
         if (isEnabled) {
-          // Turning off - set to false
           return { ...prev, features: { ...prev.features, agents: false } };
         } else {
-          // Turning on - set to config with defaults
           return {
             ...prev,
             features: {
               ...prev.features,
               agents: { enabled: true, mode: "worker" as AgentMode, group: agent.projectId || undefined },
+            },
+          };
+        }
+      });
+    } else if (key === "operator") {
+      // Special handling for operator feature - convert to OperatorConfig
+      setForm(prev => {
+        const opConfig = getOperatorConfig(prev.features);
+        if (opConfig.enabled) {
+          return { ...prev, features: { ...prev.features, operator: false } };
+        } else {
+          return {
+            ...prev,
+            features: {
+              ...prev.features,
+              operator: { enabled: true },
             },
           };
         }
@@ -1272,6 +1283,33 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const getAgentMode = (): AgentMode => {
     const config = getMultiAgentConfig(form.features, agent.projectId);
     return config.mode || "worker";
+  };
+
+  // Helper to check if operator feature is enabled
+  const isOperatorEnabled = () => {
+    return getOperatorConfig(form.features).enabled;
+  };
+
+  // Get current operator config
+  const getOperatorCfg = (): OperatorConfig => {
+    return getOperatorConfig(form.features);
+  };
+
+  // Get browser providers from the providers list
+  const browserProviders = providers.filter(p => p.type === "browser" && p.hasKey);
+
+  // Set operator browser provider
+  const setOperatorBrowserProvider = (browserProvider: string) => {
+    setForm(prev => {
+      const current = getOperatorConfig(prev.features);
+      return {
+        ...prev,
+        features: {
+          ...prev.features,
+          operator: { ...current, enabled: true, browser_provider: browserProvider },
+        },
+      };
+    });
   };
 
   const toggleMcpServer = (serverId: string) => {
@@ -1353,8 +1391,10 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
         <FormField label="Features">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {FEATURE_CONFIG.map(({ key, label, description, icon: Icon }) => {
-              // For agents feature, check the enabled property of the config
-              const isEnabled = key === "agents" ? isAgentsEnabled() : !!form.features[key];
+              // For agents/operator features, check the enabled property of the config
+              const isEnabled = key === "agents" ? isAgentsEnabled()
+                : key === "operator" ? isOperatorEnabled()
+                : !!form.features[key];
               return (
                 <button
                   key={key}
@@ -1415,6 +1455,29 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             {agent.projectId && (
               <p className="text-xs text-[#555] mt-2">
                 Group: Using project as agent group
+              </p>
+            )}
+          </FormField>
+        )}
+
+        {/* Operator Browser Provider - shown when operator is enabled */}
+        {isOperatorEnabled() && (
+          <FormField label="Browser Provider">
+            {browserProviders.length > 0 ? (
+              <Select
+                value={getOperatorCfg().browser_provider || ""}
+                options={[
+                  { value: "", label: "Auto (first available)" },
+                  ...browserProviders.map(p => ({
+                    value: p.id,
+                    label: p.name,
+                  })),
+                ]}
+                onChange={(value) => setOperatorBrowserProvider(value)}
+              />
+            ) : (
+              <p className="text-sm text-[#666] p-3 border border-[#222] rounded bg-[#0a0a0a]">
+                No browser providers configured. Go to Settings &rarr; Providers to add one.
               </p>
             )}
           </FormField>
@@ -1628,7 +1691,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
         </div>
 
         {/* Developer Info (dev mode only) */}
-        {isDev && apiKey && (
+        {apiKey && (
           <div className="mt-8 pt-6 border-t border-[#222]">
             <p className="text-sm text-[#666] mb-3">Developer Info</p>
             <div className="space-y-2">
@@ -1650,17 +1713,15 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                     {showApiKey ? "Hide" : "Show"}
                   </button>
                 </div>
-                {showApiKey && (
-                  <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888] break-all">
-                    {apiKey}
-                  </code>
-                )}
+                <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888] break-all">
+                  {showApiKey ? (apiKeyFull || apiKey) : apiKey}
+                </code>
               </div>
               {agent.status === "running" && agent.port && (
                 <div className="flex flex-col gap-1 mt-2">
                   <span className="text-xs text-[#666]">Test with curl</span>
                   <code className="text-xs bg-[#1a1a1a] px-2 py-1.5 rounded text-[#666] break-all">
-                    curl -H "X-API-Key: {showApiKey ? apiKey : "***"}" http://localhost:{agent.port}/config
+                    curl -H "X-API-Key: {showApiKey ? (apiKeyFull || apiKey) : "***"}" http://localhost:{agent.port}/config
                   </code>
                 </div>
               )}

@@ -3,7 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync } from "fs";
 import { agentProcesses, agentsStarting, getBinaryPathForAgent, getBinaryStatus, BIN_DIR, telemetryBroadcaster, isShuttingDown, type TelemetryEvent } from "../../server";
-import { AgentDB, McpServerDB, SkillDB, TelemetryDB, generateId, getMultiAgentConfig, type Agent, type Project } from "../../db";
+import { AgentDB, McpServerDB, SkillDB, TelemetryDB, generateId, getMultiAgentConfig, getOperatorConfig, type Agent, type Project } from "../../db";
 import { ProviderKeys, PROVIDERS, type ProviderId } from "../../providers";
 import { binaryExists } from "../../binary";
 
@@ -84,6 +84,67 @@ export async function agentFetch(
     ...options,
     headers,
   });
+}
+
+// Build operator config from features, resolving browser provider credentials
+function buildOperatorConfig(features: Agent["features"], projectId: string | null) {
+  const opConfig = getOperatorConfig(features);
+
+  if (!opConfig.enabled) {
+    return {
+      enabled: false,
+      virtual_browser: "http://localhost:8098",
+      display_width: 1024,
+      display_height: 768,
+      max_actions_per_turn: 5,
+    };
+  }
+
+  const browserProvider = opConfig.browser_provider || "";
+  const displayWidth = opConfig.display_width || 1024;
+  const displayHeight = opConfig.display_height || 768;
+  const maxActions = opConfig.max_actions_per_turn || 5;
+
+  // Map browser provider IDs to agent binary config
+  const operatorResult: Record<string, unknown> = {
+    enabled: true,
+    display_width: displayWidth,
+    display_height: displayHeight,
+    max_actions_per_turn: maxActions,
+  };
+
+  if (browserProvider === "browserbase") {
+    const apiKey = ProviderKeys.getDecryptedForProject("browserbase", projectId);
+    operatorResult.browser_provider = "browserbase";
+    operatorResult.virtual_browser = "http://localhost:8098"; // fallback
+    if (apiKey) {
+      operatorResult.browserbase = { api_key: apiKey, project_id: "" };
+    }
+  } else if (browserProvider === "steel") {
+    const apiKey = ProviderKeys.getDecryptedForProject("steel", projectId);
+    operatorResult.browser_provider = "steel";
+    operatorResult.virtual_browser = "http://localhost:8098"; // fallback
+    if (apiKey) {
+      operatorResult.steel = { api_key: apiKey, base_url: "https://api.steel.dev" };
+    }
+  } else if (browserProvider === "chrome") {
+    const debugUrl = ProviderKeys.getDecryptedForProject("chrome", projectId);
+    operatorResult.browser_provider = "chrome";
+    operatorResult.virtual_browser = "http://localhost:8098"; // fallback
+    if (debugUrl) {
+      operatorResult.chrome = { debug_url: debugUrl };
+    }
+  } else if (browserProvider === "browserengine") {
+    const url = ProviderKeys.getDecryptedForProject("browserengine", projectId);
+    operatorResult.browser_provider = "self";
+    operatorResult.virtual_browser = url || "http://localhost:8098";
+  } else {
+    // Default: auto-select first configured browser provider, or fall back to self
+    operatorResult.browser_provider = "self";
+    operatorResult.virtual_browser = ProviderKeys.getDecryptedForProject("browserengine", projectId) || "http://localhost:8098";
+  }
+
+  return operatorResult;
 }
 
 // Build agent config from apteva agent data
@@ -229,13 +290,7 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
       auto_extract_memories: features.memory ? true : null,
       auto_ingest_files: true,
     },
-    operator: {
-      enabled: features.operator,
-      virtual_browser: "http://localhost:8098",
-      display_width: 1024,
-      display_height: 768,
-      max_actions_per_turn: 5,
-    },
+    operator: buildOperatorConfig(features, agent.project_id),
     mcp: {
       enabled: features.mcp || agent.id === META_AGENT_ID,
       base_url: "http://localhost:3000/mcp",
@@ -256,7 +311,7 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
       keep_images: 5,
     },
     filesystem: {
-      enabled: true,
+      enabled: features.files,
       max_file_size: 10485760,
       max_total_size: 104857600,
       auto_extract: true,
