@@ -196,6 +196,7 @@ function ProvidersSettings() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [extraField, setExtraField] = useState("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -218,12 +219,18 @@ function ProvidersSettings() {
     setError(null);
     setSuccess(null);
 
+    // For multi-field providers, combine into JSON
+    let keyToSave = apiKey;
+    if (selectedProvider === "browserbase" && extraField) {
+      keyToSave = JSON.stringify({ api_key: apiKey, project_id: extraField });
+    }
+
     try {
       setTesting(true);
       const testRes = await authFetch(`/api/keys/${selectedProvider}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: apiKey }),
+        body: JSON.stringify({ key: keyToSave }),
       });
       const testData = await testRes.json();
       setTesting(false);
@@ -237,7 +244,7 @@ function ProvidersSettings() {
       const saveRes = await authFetch(`/api/keys/${selectedProvider}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: apiKey }),
+        body: JSON.stringify({ key: keyToSave }),
       });
 
       const saveData = await saveRes.json();
@@ -257,6 +264,7 @@ function ProvidersSettings() {
         }
         setSuccess(msg);
         setApiKey("");
+        setExtraField("");
         setSelectedProvider(null);
         fetchProviders();
       }
@@ -415,11 +423,14 @@ function ProvidersSettings() {
               onCancelEdit={() => {
                 setSelectedProvider(null);
                 setApiKey("");
+                setExtraField("");
                 setError(null);
               }}
               onApiKeyChange={setApiKey}
               onSave={saveKey}
               onDelete={() => deleteKey(provider.id)}
+              extraField={extraField}
+              onExtraFieldChange={setExtraField}
             />
           ))}
         </div>
@@ -664,6 +675,8 @@ interface ProviderKeyCardProps {
   onApiKeyChange: (key: string) => void;
   onSave: () => void;
   onDelete: () => void;
+  extraField?: string;
+  onExtraFieldChange?: (val: string) => void;
 }
 
 interface VersionInfo {
@@ -939,10 +952,13 @@ function ProviderKeyCard({
   onApiKeyChange,
   onSave,
   onDelete,
+  extraField,
+  onExtraFieldChange,
 }: ProviderKeyCardProps) {
   const isOllama = provider.id === "ollama";
   const isUrlBased = isOllama || provider.id === "browserengine" || provider.id === "chrome";
   const isBrowser = provider.type === "browser";
+  const isMultiField = provider.id === "browserbase";
   const [ollamaStatus, setOllamaStatus] = React.useState<{ connected: boolean; modelCount?: number } | null>(null);
 
   // Check Ollama status when configured
@@ -1002,20 +1018,46 @@ function ProviderKeyCard({
       <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
         {isEditing ? (
           <div className="space-y-3">
-            <input
-              type={isUrlBased ? "text" : "password"}
-              value={apiKey}
-              onChange={e => onApiKeyChange(e.target.value)}
-              placeholder={isOllama
-                ? "http://localhost:11434"
-                : provider.id === "browserengine"
-                  ? "http://localhost:8098"
-                  : provider.id === "chrome"
-                    ? "http://localhost:9222"
-                    : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
-              autoFocus
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
-            />
+            {isMultiField ? (
+              <>
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">API Key</label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={e => onApiKeyChange(e.target.value)}
+                    placeholder={provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+                    autoFocus
+                    className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-[#888] mb-1">Project ID</label>
+                  <input
+                    type="text"
+                    value={extraField || ""}
+                    onChange={e => onExtraFieldChange?.(e.target.value)}
+                    placeholder="Enter your Browserbase project ID..."
+                    className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                  />
+                </div>
+              </>
+            ) : (
+              <input
+                type={isUrlBased ? "text" : "password"}
+                value={apiKey}
+                onChange={e => onApiKeyChange(e.target.value)}
+                placeholder={isOllama
+                  ? "http://localhost:11434"
+                  : provider.id === "browserengine"
+                    ? "http://localhost:8098"
+                    : provider.id === "chrome"
+                      ? "http://localhost:9222"
+                      : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+                autoFocus
+                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              />
+            )}
             {isUrlBased && (
               <p className="text-xs text-[#666]">
                 {isOllama

@@ -114,11 +114,17 @@ function buildOperatorConfig(features: Agent["features"], projectId: string | nu
   };
 
   if (browserProvider === "browserbase") {
-    const apiKey = ProviderKeys.getDecryptedForProject("browserbase", projectId);
+    const raw = ProviderKeys.getDecryptedForProject("browserbase", projectId);
     operatorResult.browser_provider = "browserbase";
     operatorResult.virtual_browser = "http://localhost:8098"; // fallback
-    if (apiKey) {
-      operatorResult.browserbase = { api_key: apiKey, project_id: "" };
+    if (raw) {
+      // Parse JSON object {api_key, project_id} or plain string (backwards compat)
+      try {
+        const parsed = JSON.parse(raw);
+        operatorResult.browserbase = { api_key: parsed.api_key || raw, project_id: parsed.project_id || "" };
+      } catch {
+        operatorResult.browserbase = { api_key: raw, project_id: "" };
+      }
     }
   } else if (browserProvider === "steel") {
     const apiKey = ProviderKeys.getDecryptedForProject("steel", projectId);
@@ -239,6 +245,7 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
       provider: agent.provider,
       model: agent.model,
       max_tokens: 4000,
+      max_turns: features.maxTurns || 50,
       temperature: 0.7,
       system_prompt: agent.system_prompt,
       vision: {

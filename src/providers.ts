@@ -235,7 +235,15 @@ export const ProviderKeys = {
 
     try {
       const encryptedKey = encrypt(apiKey.trim());
-      const keyHint = createKeyHint(apiKey.trim());
+      // For multi-field JSON keys (e.g. browserbase), use the api_key field for the hint
+      let hintSource = apiKey.trim();
+      if (providerId === "browserbase") {
+        try {
+          const parsed = JSON.parse(hintSource);
+          if (parsed.api_key) hintSource = parsed.api_key;
+        } catch {}
+      }
+      const keyHint = createKeyHint(hintSource);
       const record = ProviderKeysDB.save(providerId, encryptedKey, keyHint, projectId, name);
       return { success: true, id: record.id };
     } catch (err) {

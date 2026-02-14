@@ -144,6 +144,18 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
     return { valid: false, error: `${provider} requires a valid URL (e.g., http://localhost:8098)` };
   }
 
+  // Multi-field providers store JSON objects — validate the inner api_key
+  if (provider === "browserbase") {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed.api_key && typeof parsed.api_key === "string") {
+        return { valid: true };
+      }
+    } catch {
+      // Not JSON — treat as plain API key (backwards compat)
+    }
+  }
+
   // Provider-specific format validation
   const patterns: Record<string, { pattern: RegExp; example: string }> = {
     anthropic: {

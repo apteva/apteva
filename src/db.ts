@@ -36,6 +36,7 @@ export interface AgentFeatures {
   files: boolean;
   agents: boolean | MultiAgentConfig; // Can be boolean for backwards compat or full config
   builtinTools?: AgentBuiltinTools;
+  maxTurns?: number; // Max agentic loop iterations per request (default 50)
 }
 
 export const DEFAULT_FEATURES: AgentFeatures = {
@@ -48,6 +49,7 @@ export const DEFAULT_FEATURES: AgentFeatures = {
   files: false,
   agents: false,
   builtinTools: { webSearch: false, webFetch: false },
+  maxTurns: 50,
 };
 
 // Helper to normalize operator feature to OperatorConfig
