@@ -189,12 +189,21 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --tag ${{ steps.version.outputs.tag }}
 
+      - name: Rename binaries for release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cp dist-bin/apteva-linux-x64/apteva apteva-linux-x64
+          cp dist-bin/apteva-darwin-arm64/apteva apteva-darwin-arm64
+          cp dist-bin/apteva-darwin-x64/apteva apteva-darwin-x64
+          cp dist-bin/apteva-win32-x64/apteva.exe apteva-win32-x64.exe
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            dist-bin/apteva-linux-x64/apteva
-            dist-bin/apteva-darwin-arm64/apteva
-            dist-bin/apteva-win32-x64/apteva.exe
+            apteva-linux-x64
+            apteva-darwin-arm64
+            apteva-darwin-x64
+            apteva-win32-x64.exe
