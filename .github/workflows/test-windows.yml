@@ -1,6 +1,9 @@
 name: Test Windows Install
 
 on:
+  push:
+    paths:
+      - ".github/workflows/test-windows.yml"
   workflow_dispatch:
 
 jobs:
