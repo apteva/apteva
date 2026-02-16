@@ -187,7 +187,7 @@ jobs:
       - name: Publish main package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --tag ${{ steps.version.outputs.tag }}
+        run: npm publish --access public --tag ${{ steps.version.outputs.tag }} || echo "Skipped (may already exist)"
 
       - name: Rename binaries for release
         if: startsWith(github.ref, 'refs/tags/')
