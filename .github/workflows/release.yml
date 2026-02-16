@@ -47,7 +47,7 @@ jobs:
             bunTarget: bun-darwin-x64
             os: darwin
             cpu: x64
-            runner: macos-13
+            runner: macos-14
             ext: ""
           - target: apteva-win32-x64
             bunTarget: bun-windows-x64
