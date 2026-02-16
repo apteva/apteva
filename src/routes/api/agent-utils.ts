@@ -575,9 +575,40 @@ export async function startAgentProcess(
     const proc = spawn({
       cmd: [binaryPath],
       env,
-      stdout: "ignore",
-      stderr: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
     });
+
+    // Log agent stdout/stderr for debugging
+    const agentLabel = `[agent:${agent.name}]`;
+    if (proc.stdout) {
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value, { stream: true }).trimEnd();
+            if (text) console.log(`${agentLabel} ${text}`);
+          }
+        } catch {}
+      })();
+    }
+    if (proc.stderr) {
+      const reader = proc.stderr.getReader();
+      const decoder = new TextDecoder();
+      (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value, { stream: true }).trimEnd();
+            if (text) console.error(`${agentLabel} ${text}`);
+          }
+        } catch {}
+      })();
+    }
 
     // Store process with port for tracking
     agentProcesses.set(agent.id, { proc, port });
