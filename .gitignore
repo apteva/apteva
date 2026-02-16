@@ -19,6 +19,10 @@ agent-config.json
 
 # Platform binaries (auto-downloaded)
 bin/agent-*
+bin/apteva-server
+
+# Compiled binaries output
+dist-bin/
 
 # OS files
 .DS_Store

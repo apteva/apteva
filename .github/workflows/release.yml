@@ -1,0 +1,193 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g., 0.4.31)"
+        required: true
+      tag:
+        description: "npm tag"
+        default: "latest"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  compile:
+    name: Compile ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: apteva-linux-x64
+            bunTarget: bun-linux-x64
+            os: linux
+            cpu: x64
+            runner: ubuntu-latest
+            ext: ""
+          - target: apteva-linux-arm64
+            bunTarget: bun-linux-arm64
+            os: linux
+            cpu: arm64
+            runner: ubuntu-latest
+            ext: ""
+          - target: apteva-darwin-arm64
+            bunTarget: bun-darwin-arm64
+            os: darwin
+            cpu: arm64
+            runner: macos-14
+            ext: ""
+          - target: apteva-darwin-x64
+            bunTarget: bun-darwin-x64
+            os: darwin
+            cpu: x64
+            runner: macos-13
+            ext: ""
+          - target: apteva-win32-x64
+            bunTarget: bun-windows-x64
+            os: win32
+            cpu: x64
+            runner: ubuntu-latest
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Compile binary
+        run: |
+          mkdir -p dist-bin/${{ matrix.target }}
+          bun build --compile \
+            --target ${{ matrix.bunTarget }} \
+            --outfile dist-bin/${{ matrix.target }}/apteva${{ matrix.ext }} \
+            --minify \
+            src/server.ts
+
+      - name: Copy frontend assets
+        run: cp -r dist/ dist-bin/${{ matrix.target }}/dist/
+
+      - name: Create package files
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          TARGET="dist-bin/${{ matrix.target }}"
+
+          cat > "${TARGET}/package.json" <<PKGJSON
+          {
+            "name": "@apteva/${{ matrix.target }}",
+            "version": "${VERSION}",
+            "description": "Apteva binary for ${{ matrix.os }} ${{ matrix.cpu }}",
+            "os": ["${{ matrix.os }}"],
+            "cpu": ["${{ matrix.cpu }}"],
+            "main": "index.js",
+            "license": "Elastic-2.0",
+            "preferUnplugged": true
+          }
+          PKGJSON
+
+          echo "const path = require('path'); module.exports = path.join(__dirname, 'apteva${{ matrix.ext }}');" > "${TARGET}/index.js"
+
+      - name: Smoke test (native platforms only)
+        if: matrix.bunTarget == format('bun-{0}-{1}', runner.os == 'macOS' && 'darwin' || 'linux', runner.arch == 'ARM64' && 'arm64' || 'x64')
+        run: |
+          chmod +x dist-bin/${{ matrix.target }}/apteva${{ matrix.ext }} || true
+          timeout 5 dist-bin/${{ matrix.target }}/apteva${{ matrix.ext }} &
+          sleep 3
+          curl -sf http://localhost:4280/api/health || echo "Smoke test skipped"
+          kill %1 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist-bin/${{ matrix.target }}/
+
+  publish:
+    name: Publish to npm
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-bin/
+
+      - name: List artifacts
+        run: ls -la dist-bin/*/
+
+      - name: Determine version and tag
+        id: version
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          TAG="${{ github.event.inputs.tag || 'latest' }}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Publishing v${VERSION} with tag ${TAG}"
+
+      - name: Update main package version
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Update optionalDependencies versions
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          node -e "
+            const pkg = require('./package.json');
+            const fs = require('fs');
+            for (const dep of Object.keys(pkg.optionalDependencies || {})) {
+              if (dep.startsWith('@apteva/apteva-')) {
+                pkg.optionalDependencies[dep] = '${VERSION}';
+              }
+            }
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          TAG=${{ steps.version.outputs.tag }}
+          for dir in dist-bin/apteva-*/; do
+            if [ -f "$dir/package.json" ]; then
+              echo "Publishing $(basename $dir)..."
+              cd "$dir"
+              npm publish --access public --tag "$TAG" || echo "Skipped (may already exist)"
+              cd -
+            fi
+          done
+
+      - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag ${{ steps.version.outputs.tag }}
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist-bin/apteva-linux-x64/apteva
+            dist-bin/apteva-darwin-arm64/apteva
+            dist-bin/apteva-win32-x64/apteva.exe

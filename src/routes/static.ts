@@ -1,11 +1,12 @@
 import { join } from "path";
 import { existsSync, statSync } from "fs";
 
-// Find dist directory - handle both development and npx contexts
+// Find dist directory - handle development, npx, and compiled binary contexts
 function findDistDir(): string {
   const candidates = [
     join(import.meta.dir, "../../dist"),
     join(import.meta.dir, "../dist"),
+    join(import.meta.dir, "dist"),    // compiled binary: dist/ alongside the executable
     join(process.cwd(), "dist"),
   ];
 

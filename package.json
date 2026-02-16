@@ -1,6 +1,6 @@
 {
   "name": "apteva",
-  "version": "0.4.30",
+  "version": "0.4.31",
   "description": "Run AI agents locally. Multi-provider support for Claude, GPT, Gemini, Llama, and more.",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,15 +12,20 @@
     "dev": "bun run --watch src/server.ts",
     "build": "bun run build.ts",
     "build:cli": "bun build ./src/cli.ts --outdir ./dist --target node",
+    "compile": "bun run build && bun run scripts/compile.ts",
+    "compile:single": "bun run build && bun run scripts/compile.ts --single",
     "start": "bun run src/server.ts",
     "tui": "bun run src/tui/index.tsx",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "bun run build"
   },
   "files": [
     "bin/apteva.js",
+    "scripts/postinstall.mjs",
     "dist/*.js",
     "dist/*.css",
     "dist/*.html",
+    "dist/*.png",
     "src",
     "LICENSE",
     "README.md"
@@ -70,6 +75,11 @@
     "react-dom": "19"
   },
   "optionalDependencies": {
+    "@apteva/apteva-darwin-arm64": "0.4.31",
+    "@apteva/apteva-darwin-x64": "0.4.31",
+    "@apteva/apteva-linux-arm64": "0.4.31",
+    "@apteva/apteva-linux-x64": "0.4.31",
+    "@apteva/apteva-win32-x64": "0.4.31",
     "@apteva/agent-darwin-arm64": "^1.33.73",
     "@apteva/agent-darwin-x64": "^1.33.73",
     "@apteva/agent-linux-arm64": "^1.33.73",

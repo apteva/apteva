@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
-import { spawn } from "child_process";
+import { spawn, execFileSync } from "child_process";
+import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const require = createRequire(import.meta.url);
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -32,8 +34,9 @@ for (let i = 0; i < args.length; i++) {
 }
 
 if (showVersion) {
-  const pkg = await import("../package.json", { assert: { type: "json" } });
-  console.log(`apteva v${pkg.default.version}`);
+  const pkgPath = join(__dirname, "..", "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  console.log(`apteva v${pkg.version}`);
   process.exit(0);
 }
 
@@ -82,19 +85,7 @@ DOCUMENTATION:
   process.exit(0);
 }
 
-// Find the server entry point
-const serverPath = join(__dirname, "..", "src", "server.ts");
-const distServerPath = join(__dirname, "..", "dist", "server.js");
-
-let entryPoint;
-if (existsSync(serverPath)) {
-  entryPoint = serverPath;
-} else if (existsSync(distServerPath)) {
-  entryPoint = distServerPath;
-} else {
-  console.error("Error: Could not find server entry point");
-  process.exit(1);
-}
+// ============ Find the server executable ============
 
 // Build environment
 const env = { ...process.env };
@@ -102,46 +93,104 @@ env.PORT = String(port);
 if (dataDir) env.DATA_DIR = dataDir;
 if (configFile) env.CONFIG_FILE = configFile;
 
-// Check if bun is available
-const runtime = process.env.BUN_INSTALL ? "bun" : "node";
+// Strategy 1: Compiled platform binary (works without Bun)
+function findCompiledBinary() {
+  const platform = { darwin: "darwin", linux: "linux", win32: "win32" }[process.platform];
+  const arch = { x64: "x64", arm64: "arm64" }[process.arch];
+  if (!platform || !arch) return null;
 
-// Build args - use --silent for bun to suppress "Started development server" message
-const runtimeArgs = runtime === "bun" ? ["--silent", entryPoint] : [entryPoint];
+  const packageName = `@apteva/apteva-${platform}-${arch}`;
 
-// Spawn the server
-const child = spawn(runtime, runtimeArgs, {
-  env,
-  stdio: "inherit",
-  shell: false,
-});
+  // Try require.resolve() first (most reliable for npm-installed packages)
+  try {
+    const binaryPath = require(packageName);
+    if (existsSync(binaryPath)) return binaryPath;
+  } catch {
+    // Package not installed
+  }
 
-child.on("error", (err) => {
-  if (err.code === "ENOENT" && runtime === "bun") {
-    // Fallback to node if bun not found
-    const nodeChild = spawn("node", [entryPoint], {
+  // Try direct paths in node_modules
+  const binaryName = process.platform === "win32" ? "apteva.exe" : "apteva";
+  const directPaths = [
+    join(__dirname, "..", "node_modules", packageName, binaryName),
+    join(__dirname, "..", "..", packageName, binaryName),
+  ];
+  for (const p of directPaths) {
+    if (existsSync(p)) return p;
+  }
+
+  // Try postinstall symlink
+  const symlinkPath = join(__dirname, process.platform === "win32" ? "apteva-server.exe" : "apteva-server");
+  if (existsSync(symlinkPath)) return symlinkPath;
+
+  return null;
+}
+
+// Strategy 2: Source mode with Bun
+function findSourceEntry() {
+  const serverPath = join(__dirname, "..", "src", "server.ts");
+  if (existsSync(serverPath)) return serverPath;
+  return null;
+}
+
+function hasBun() {
+  try {
+    execFileSync("bun", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Try compiled binary first
+const compiledBinary = findCompiledBinary();
+if (compiledBinary) {
+  // Run the compiled binary directly — no Bun needed
+  const child = spawn(compiledBinary, [], {
+    env,
+    stdio: "inherit",
+    shell: false,
+  });
+
+  child.on("error", (err) => {
+    console.error("Error starting apteva:", err.message);
+    process.exit(1);
+  });
+
+  child.on("exit", (code) => process.exit(code || 0));
+  process.on("SIGINT", () => child.kill("SIGINT"));
+  process.on("SIGTERM", () => child.kill("SIGTERM"));
+} else {
+  // Fall back to source mode
+  const sourceEntry = findSourceEntry();
+
+  if (sourceEntry && hasBun()) {
+    // Run with Bun (development mode)
+    const child = spawn("bun", ["--silent", sourceEntry], {
       env,
       stdio: "inherit",
       shell: false,
     });
-    nodeChild.on("error", (nodeErr) => {
-      console.error("Error starting server:", nodeErr.message);
+
+    child.on("error", (err) => {
+      console.error("Error starting apteva:", err.message);
       process.exit(1);
     });
+
+    child.on("exit", (code) => process.exit(code || 0));
+    process.on("SIGINT", () => child.kill("SIGINT"));
+    process.on("SIGTERM", () => child.kill("SIGTERM"));
   } else {
-    console.error("Error starting server:", err.message);
+    // No binary, no Bun — show helpful error
+    console.error("Error: Could not find apteva binary for your platform.");
+    console.error("");
+    console.error("Options:");
+    console.error("  1. Install Bun (recommended for development):");
+    console.error("     curl -fsSL https://bun.sh/install | bash        # macOS/Linux");
+    console.error("     powershell -c \"irm bun.sh/install.ps1 | iex\"    # Windows");
+    console.error("");
+    console.error("  2. Reinstall apteva (to get the platform binary):");
+    console.error("     npm install -g apteva");
     process.exit(1);
   }
-});
-
-child.on("exit", (code) => {
-  process.exit(code || 0);
-});
-
-// Handle termination
-process.on("SIGINT", () => {
-  child.kill("SIGINT");
-});
-
-process.on("SIGTERM", () => {
-  child.kill("SIGTERM");
-});
+}
