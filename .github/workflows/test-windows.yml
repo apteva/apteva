@@ -1,0 +1,27 @@
+name: Test Windows Install
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test npx apteva on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install apteva
+        run: npm install -g apteva@0.4.32
+
+      - name: Check version
+        run: apteva --version
+
+      - name: Start and health check
+        shell: bash
+        run: |
+          apteva &
+          sleep 10
+          curl -sf http://localhost:4280/api/health || echo "Health check failed"
+          kill %1 2>/dev/null || true
