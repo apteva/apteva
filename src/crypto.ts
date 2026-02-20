@@ -136,12 +136,13 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
     return { valid: false, error: "API key cannot be empty" };
   }
 
-  // Ollama and local browser providers use base URL instead of API key
-  if (provider === "ollama" || provider === "browserengine" || provider === "chrome") {
+  // Ollama and CDP use URLs instead of API keys
+  if (provider === "ollama" || provider === "cdp") {
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("ws://") || trimmed.startsWith("wss://")) {
       return { valid: true };
     }
-    return { valid: false, error: `${provider} requires a valid URL (e.g., http://localhost:8098)` };
+    const example = provider === "cdp" ? "ws://localhost:9222" : "http://localhost:11434";
+    return { valid: false, error: `${provider} requires a valid URL (e.g., ${example})` };
   }
 
   // Multi-field providers store JSON objects — validate the inner api_key

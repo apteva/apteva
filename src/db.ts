@@ -20,7 +20,7 @@ export interface AgentBuiltinTools {
 
 export interface OperatorConfig {
   enabled: boolean;
-  browser_provider?: string; // "browserbase" | "steel" | "browserengine" | "chrome"
+  browser_provider?: string; // "browserengine" | "browserbase" | "steel" | "cdp"
   display_width?: number;
   display_height?: number;
   max_actions_per_turn?: number;
@@ -328,6 +328,12 @@ export function initDatabase(dataDir: string): Database {
   db.run("PRAGMA busy_timeout = 5000");
   db.run("PRAGMA foreign_keys = ON");
 
+  // Performance PRAGMAs
+  db.run("PRAGMA synchronous = NORMAL"); // Safe with WAL, much faster than FULL
+  db.run("PRAGMA cache_size = -20000"); // 20MB page cache (negative = KB)
+  db.run("PRAGMA mmap_size = 30000000"); // 30MB memory-mapped I/O
+  db.run("PRAGMA temp_store = MEMORY"); // Keep temp tables in memory
+
   // Run migrations
   runMigrations();
 
@@ -486,6 +492,7 @@ function runMigrations() {
         );
         CREATE INDEX IF NOT EXISTS idx_telemetry_agent ON telemetry_events(agent_id);
         CREATE INDEX IF NOT EXISTS idx_telemetry_time ON telemetry_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_telemetry_agent_time ON telemetry_events(agent_id, timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_telemetry_category ON telemetry_events(category);
         CREATE INDEX IF NOT EXISTS idx_telemetry_level ON telemetry_events(level);
         CREATE INDEX IF NOT EXISTS idx_telemetry_trace ON telemetry_events(trace_id);
@@ -835,6 +842,31 @@ function runMigrations() {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_unique ON provider_keys(provider_id, COALESCE(project_id, ''));
       `,
     },
+    {
+      name: "034_repair_provider_keys_project_support",
+      sql: `
+        -- Repair: migrations 022 and 029 may have failed but were marked as applied.
+        -- Recreate provider_keys with project_id support from whatever current state.
+        CREATE TABLE IF NOT EXISTS provider_keys_repair (
+          id TEXT PRIMARY KEY,
+          provider_id TEXT NOT NULL,
+          encrypted_key TEXT NOT NULL,
+          key_hint TEXT,
+          is_valid INTEGER DEFAULT 1,
+          last_tested_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+          name TEXT
+        );
+        INSERT OR IGNORE INTO provider_keys_repair (id, provider_id, encrypted_key, key_hint, is_valid, last_tested_at, created_at)
+          SELECT id, provider_id, encrypted_key, key_hint, is_valid, last_tested_at, created_at FROM provider_keys;
+        DROP TABLE IF EXISTS provider_keys;
+        ALTER TABLE provider_keys_repair RENAME TO provider_keys;
+        CREATE INDEX IF NOT EXISTS idx_provider_keys_provider ON provider_keys(provider_id);
+        CREATE INDEX IF NOT EXISTS idx_provider_keys_project ON provider_keys(project_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_unique ON provider_keys(provider_id, COALESCE(project_id, ''));
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -1056,10 +1088,10 @@ export const AgentDB = {
 
   // Find agents that have a specific skill
   findBySkill(skillId: string): Agent[] {
-    // SQLite JSON query: check if skills array contains the skillId
+    // Use json_each to properly search the JSON array (avoids full table scan with LIKE)
     const rows = db.query(
-      `SELECT * FROM agents WHERE skills LIKE ? ORDER BY created_at DESC`
-    ).all(`%"${skillId}"%`) as AgentRow[];
+      `SELECT DISTINCT a.* FROM agents a, json_each(a.skills) AS s WHERE s.value = ? ORDER BY a.created_at DESC`
+    ).all(skillId) as AgentRow[];
     return rows.map(rowToAgent);
   },
 
@@ -1091,14 +1123,23 @@ export const AgentDB = {
     return row.count;
   },
 
-  // Get decrypted API key for an agent
+  // In-memory cache for decrypted API keys (avoids expensive scryptSync on every request)
+  _apiKeyCache: new Map<string, string>(),
+
+  // Get decrypted API key for an agent (cached)
   getApiKey(id: string): string | null {
+    // Check cache first
+    const cached = this._apiKeyCache.get(id);
+    if (cached) return cached;
+
     const agent = this.findById(id);
     if (!agent || !agent.api_key_encrypted) {
       return null;
     }
     try {
-      return decrypt(agent.api_key_encrypted);
+      const key = decrypt(agent.api_key_encrypted);
+      if (key) this._apiKeyCache.set(id, key);
+      return key;
     } catch {
       return null;
     }
@@ -1118,6 +1159,8 @@ export const AgentDB = {
       [encrypted, now, id]
     );
 
+    // Update cache
+    this._apiKeyCache.set(id, newApiKey);
     return newApiKey;
   },
 
@@ -1129,7 +1172,9 @@ export const AgentDB = {
     // If agent already has a key, return it
     if (agent.api_key_encrypted) {
       try {
-        return decrypt(agent.api_key_encrypted);
+        const key = decrypt(agent.api_key_encrypted);
+        if (key) this._apiKeyCache.set(id, key);
+        return key;
       } catch {
         // Key is corrupted, regenerate
       }
@@ -1395,7 +1440,7 @@ export const ProviderKeysDB = {
 
   // Find all keys for a provider (global + all projects)
   findAllByProvider(providerId: string): ProviderKey[] {
-    const rows = db.query("SELECT * FROM provider_keys WHERE provider_id = ? ORDER BY project_id NULLS FIRST, created_at DESC").all(providerId) as ProviderKeyRow[];
+    const rows = db.query("SELECT * FROM provider_keys WHERE provider_id = ? ORDER BY (project_id IS NOT NULL), created_at DESC").all(providerId) as ProviderKeyRow[];
     return rows.map(rowToProviderKey);
   },
 
@@ -1407,7 +1452,7 @@ export const ProviderKeysDB = {
 
   // Get all provider keys
   findAll(): ProviderKey[] {
-    const rows = db.query("SELECT * FROM provider_keys ORDER BY provider_id, project_id NULLS FIRST, created_at DESC").all() as ProviderKeyRow[];
+    const rows = db.query("SELECT * FROM provider_keys ORDER BY provider_id, (project_id IS NOT NULL), created_at DESC").all() as ProviderKeyRow[];
     return rows.map(rowToProviderKey);
   },
 
@@ -1535,6 +1580,22 @@ export const McpServerDB = {
     return rows.map(rowToMcpServer);
   },
 
+  // Light version: skips expensive decryption for listing endpoints
+  findAllLight(): McpServer[] {
+    const rows = db.query("SELECT * FROM mcp_servers ORDER BY created_at DESC").all() as McpServerRow[];
+    return rows.map(rowToMcpServerLight);
+  },
+
+  // Light batch load by IDs: skips decryption (used by toApiAgentsBatch)
+  findByIdsLight(ids: string[]): Map<string, McpServer> {
+    if (ids.length === 0) return new Map();
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db.query(`SELECT * FROM mcp_servers WHERE id IN (${placeholders})`).all(...ids) as McpServerRow[];
+    const map = new Map<string, McpServer>();
+    for (const row of rows) map.set(row.id, rowToMcpServerLight(row));
+    return map;
+  },
+
   findRunning(): McpServer[] {
     const rows = db.query("SELECT * FROM mcp_servers WHERE status = 'running'").all() as McpServerRow[];
     return rows.map(rowToMcpServer);
@@ -1660,6 +1721,30 @@ export const McpServerDB = {
   findGlobal(): McpServer[] {
     const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY created_at DESC").all() as McpServerRow[];
     return rows.map(rowToMcpServer);
+  },
+
+  // Light versions (skip decryption) for listing endpoints
+  findByProjectLight(projectId: string | null): McpServer[] {
+    if (projectId === null) {
+      const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY created_at DESC").all() as McpServerRow[];
+      return rows.map(rowToMcpServerLight);
+    }
+    const rows = db.query("SELECT * FROM mcp_servers WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as McpServerRow[];
+    return rows.map(rowToMcpServerLight);
+  },
+
+  findForAgentLight(agentProjectId: string | null): McpServer[] {
+    if (agentProjectId === null) {
+      const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY created_at DESC").all() as McpServerRow[];
+      return rows.map(rowToMcpServerLight);
+    }
+    const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL OR project_id = ? ORDER BY created_at DESC").all(agentProjectId) as McpServerRow[];
+    return rows.map(rowToMcpServerLight);
+  },
+
+  findGlobalLight(): McpServer[] {
+    const rows = db.query("SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY created_at DESC").all() as McpServerRow[];
+    return rows.map(rowToMcpServerLight);
   },
 };
 
@@ -1792,6 +1877,27 @@ function rowToMcpServer(row: McpServerRow): McpServer {
   };
 }
 
+// Light version: skips expensive decryption of env/headers for listing endpoints
+function rowToMcpServerLight(row: McpServerRow): McpServer {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type as McpServer["type"],
+    package: row.package,
+    pip_module: row.pip_module,
+    command: row.command,
+    args: row.args,
+    env: {},
+    url: row.url,
+    headers: {},
+    port: row.port,
+    status: row.status as "stopped" | "running",
+    source: row.source,
+    project_id: row.project_id,
+    created_at: row.created_at,
+  };
+}
+
 // Telemetry Event types
 // User types
 export interface User {
@@ -1892,26 +1998,30 @@ export const TelemetryDB = {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
+    // Wrap in transaction for massive speedup (single fsync instead of one per row)
     let inserted = 0;
-    for (const event of events) {
-      const result = stmt.run(
-        event.id,
-        agentId,
-        event.timestamp,
-        event.category,
-        event.type,
-        event.level,
-        event.trace_id || null,
-        event.span_id || null,
-        event.thread_id || null,
-        event.data ? JSON.stringify(event.data) : null,
-        event.metadata ? JSON.stringify(event.metadata) : null,
-        event.duration_ms || null,
-        event.error || null,
-        now
-      );
-      if (result.changes > 0) inserted++;
-    }
+    const insertAll = db.transaction(() => {
+      for (const event of events) {
+        const result = stmt.run(
+          event.id,
+          agentId,
+          event.timestamp,
+          event.category,
+          event.type,
+          event.level,
+          event.trace_id || null,
+          event.span_id || null,
+          event.thread_id || null,
+          event.data ? JSON.stringify(event.data) : null,
+          event.metadata ? JSON.stringify(event.metadata) : null,
+          event.duration_ms || null,
+          event.error || null,
+          now
+        );
+        if (result.changes > 0) inserted++;
+      }
+    });
+    insertAll();
     return inserted;
   },
 
@@ -2808,6 +2918,21 @@ export const SubscriptionDB = {
   findByAgentId(agentId: string): Subscription[] {
     const rows = db.query("SELECT * FROM subscriptions WHERE agent_id = ?").all(agentId) as SubscriptionRow[];
     return rows.map(rowToSubscription);
+  },
+
+  // Batch load subscriptions for multiple agents (1 query instead of N)
+  findByAgentIds(agentIds: string[]): Map<string, Subscription[]> {
+    const result = new Map<string, Subscription[]>();
+    if (agentIds.length === 0) return result;
+    const placeholders = agentIds.map(() => "?").join(",");
+    const rows = db.query(`SELECT * FROM subscriptions WHERE agent_id IN (${placeholders})`).all(...agentIds) as SubscriptionRow[];
+    for (const row of rows) {
+      const sub = rowToSubscription(row);
+      const list = result.get(sub.agent_id) || [];
+      list.push(sub);
+      result.set(sub.agent_id, list);
+    }
+    return result;
   },
 
   findAll(projectId?: string | null): Subscription[] {

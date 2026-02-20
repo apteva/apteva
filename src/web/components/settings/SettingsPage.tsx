@@ -406,7 +406,7 @@ function ProvidersSettings() {
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {browserProviders.map(provider => (
-            <ProviderKeyCard
+            <IntegrationKeyCard
               key={provider.id}
               provider={provider}
               isEditing={selectedProvider === provider.id}
@@ -423,14 +423,14 @@ function ProvidersSettings() {
               onCancelEdit={() => {
                 setSelectedProvider(null);
                 setApiKey("");
-                setExtraField("");
                 setError(null);
               }}
               onApiKeyChange={setApiKey}
               onSave={saveKey}
               onDelete={() => deleteKey(provider.id)}
-              extraField={extraField}
-              onExtraFieldChange={setExtraField}
+              projectsEnabled={projectsEnabled}
+              projects={projects}
+              onRefresh={fetchProviders}
             />
           ))}
         </div>
@@ -956,20 +956,47 @@ function ProviderKeyCard({
   onExtraFieldChange,
 }: ProviderKeyCardProps) {
   const isOllama = provider.id === "ollama";
-  const isUrlBased = isOllama || provider.id === "browserengine" || provider.id === "chrome";
+  const isCDP = provider.id === "cdp";
+  const isUrlBased = isOllama || isCDP;
   const isBrowser = provider.type === "browser";
   const isMultiField = provider.id === "browserbase";
-  const [ollamaStatus, setOllamaStatus] = React.useState<{ connected: boolean; modelCount?: number } | null>(null);
+  const [ollamaStatus, setOllamaStatus] = React.useState<{ connected: boolean; modelCount?: number; isDocker?: boolean } | null>(null);
+  const [installing, setInstalling] = React.useState(false);
+  const [installResult, setInstallResult] = React.useState<{ success: boolean; message: string } | null>(null);
 
-  // Check Ollama status when configured
+  // Check Ollama status when configured or after install
+  const checkOllamaStatus = React.useCallback(() => {
+    fetch("/api/providers/ollama/status")
+      .then(res => res.json())
+      .then(data => setOllamaStatus({ connected: data.connected, modelCount: data.modelCount, isDocker: data.isDocker }))
+      .catch(() => setOllamaStatus({ connected: false }));
+  }, []);
+
   React.useEffect(() => {
-    if (isOllama && provider.hasKey) {
-      fetch("/api/providers/ollama/status")
-        .then(res => res.json())
-        .then(data => setOllamaStatus({ connected: data.connected, modelCount: data.modelCount }))
-        .catch(() => setOllamaStatus({ connected: false }));
+    if (isOllama) {
+      checkOllamaStatus();
     }
-  }, [isOllama, provider.hasKey]);
+  }, [isOllama, provider.hasKey, checkOllamaStatus]);
+
+  const handleInstallOllama = async () => {
+    setInstalling(true);
+    setInstallResult(null);
+    try {
+      const res = await fetch("/api/providers/ollama/install", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        setInstallResult({ success: true, message: data.message });
+        // Auto-save the default URL and refresh status
+        checkOllamaStatus();
+      } else {
+        setInstallResult({ success: false, message: data.error || "Installation failed" });
+      }
+    } catch {
+      setInstallResult({ success: false, message: "Failed to connect to server" });
+    } finally {
+      setInstalling(false);
+    }
+  };
 
   return (
     <div className={`bg-[#111] border rounded-lg p-4 ${
@@ -1049,22 +1076,17 @@ function ProviderKeyCard({
                 onChange={e => onApiKeyChange(e.target.value)}
                 placeholder={isOllama
                   ? "http://localhost:11434"
-                  : provider.id === "browserengine"
-                    ? "http://localhost:8098"
-                    : provider.id === "chrome"
-                      ? "http://localhost:9222"
-                      : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+                  : isCDP ? "ws://localhost:9222"
+                  : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
                 autoFocus
                 className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
               />
             )}
             {isUrlBased && (
               <p className="text-xs text-[#666]">
-                {isOllama
-                  ? "Enter your Ollama server URL. Default is http://localhost:11434"
-                  : provider.id === "browserengine"
-                    ? "Enter your BrowserEngine service URL (e.g., http://localhost:8098)"
-                    : "Enter your Chrome DevTools URL (e.g., http://localhost:9222)"}
+                {isCDP
+                  ? "Enter the CDP URL of your browser (e.g., ws://localhost:9222)"
+                  : "Enter your Ollama server URL. Default is http://localhost:11434"}
               </p>
             )}
             {error && <p className="text-red-400 text-sm">{error}</p>}
@@ -1086,7 +1108,24 @@ function ProviderKeyCard({
             </div>
           </div>
         ) : provider.hasKey ? (
-          <div className="flex items-center justify-between">
+          <div>
+            {isOllama && ollamaStatus && !ollamaStatus.connected && !ollamaStatus.isDocker && (
+              <div className="mb-3">
+                <button
+                  onClick={handleInstallOllama}
+                  disabled={installing}
+                  className="w-full px-3 py-1.5 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded text-sm font-medium transition disabled:opacity-50 disabled:cursor-wait"
+                >
+                  {installing ? "Starting Ollama..." : "Start Ollama"}
+                </button>
+                {installResult && (
+                  <p className={`text-xs mt-1.5 ${installResult.success ? "text-green-400" : "text-red-400"}`}>
+                    {installResult.message}
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="flex items-center justify-between">
             {provider.docsUrl ? (
               <a
                 href={provider.docsUrl}
@@ -1094,7 +1133,7 @@ function ProviderKeyCard({
                 rel="noopener noreferrer"
                 className="text-sm text-[#3b82f6] hover:underline"
               >
-                {isOllama ? "Download Ollama" : "View docs"}
+                {isOllama ? "Ollama docs" : "View docs"}
               </a>
             ) : (
               <span />
@@ -1113,27 +1152,46 @@ function ProviderKeyCard({
                 Remove
               </button>
             </div>
+            </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between">
-            {provider.docsUrl ? (
-              <a
-                href={provider.docsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-[#3b82f6] hover:underline"
-              >
-                {isOllama ? "Download Ollama" : isBrowser ? "View docs" : "Get API key"}
-              </a>
-            ) : (
-              <span />
+          <div>
+            {isOllama && !ollamaStatus?.isDocker && (
+              <div className="mb-3">
+                <button
+                  onClick={handleInstallOllama}
+                  disabled={installing}
+                  className="w-full px-3 py-2 bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30 rounded text-sm font-medium transition disabled:opacity-50 disabled:cursor-wait"
+                >
+                  {installing ? "Installing Ollama..." : ollamaStatus?.connected ? "Ollama Running" : "Install Ollama"}
+                </button>
+                {installResult && (
+                  <p className={`text-xs mt-1.5 ${installResult.success ? "text-green-400" : "text-red-400"}`}>
+                    {installResult.message}
+                  </p>
+                )}
+              </div>
             )}
-            <button
-              onClick={onStartEdit}
-              className="text-sm text-[#f97316] hover:text-[#fb923c]"
-            >
-              {isUrlBased ? "Configure" : "+ Add key"}
-            </button>
+            <div className="flex items-center justify-between">
+              {provider.docsUrl ? (
+                <a
+                  href={provider.docsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-[#3b82f6] hover:underline"
+                >
+                  {isOllama ? "Manual install" : isBrowser ? "View docs" : "Get API key"}
+                </a>
+              ) : (
+                <span />
+              )}
+              <button
+                onClick={onStartEdit}
+                className="text-sm text-[#f97316] hover:text-[#fb923c]"
+              >
+                {isUrlBased ? "Configure" : "+ Add key"}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -1180,7 +1238,10 @@ function IntegrationKeyCard({
   const [expanded, setExpanded] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [localSaving, setLocalSaving] = useState(false);
+  const [bbProjectId, setBbProjectId] = useState(""); // Browserbase project ID (their internal ID)
   const { confirm, ConfirmDialog } = useConfirm();
+
+  const isBrowserbase = provider.id === "browserbase";
 
   // Fetch all keys for this provider
   const fetchKeys = async () => {
@@ -1212,12 +1273,18 @@ function IntegrationKeyCard({
     setLocalSaving(true);
     setLocalError(null);
 
+    // For Browserbase, combine API key + BB project ID into JSON
+    let keyToSave = apiKey;
+    if (isBrowserbase && bbProjectId) {
+      keyToSave = JSON.stringify({ api_key: apiKey, project_id: bbProjectId });
+    }
+
     try {
       const res = await authFetch(`/api/keys/${provider.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          key: apiKey,
+          key: keyToSave,
           project_id: selectedProjectId || null,
         }),
       });
@@ -1226,6 +1293,7 @@ function IntegrationKeyCard({
 
       if (res.ok) {
         onApiKeyChange("");
+        setBbProjectId("");
         setSelectedProjectId("");
         onCancelEdit();
         fetchKeys();
@@ -1288,10 +1356,10 @@ function IntegrationKeyCard({
           {isEditing ? (
             <div className="space-y-3">
               <input
-                type="password"
+                type={inputType}
                 value={apiKey}
                 onChange={e => onApiKeyChange(e.target.value)}
-                placeholder={provider.hasKey ? "Enter new API key..." : "Enter API key..."}
+                placeholder={provider.hasKey ? `Enter new ${isUrlBased ? "URL" : "API key"}...` : inputPlaceholder}
                 autoFocus
                 className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
               />
@@ -1360,6 +1428,13 @@ function IntegrationKeyCard({
       </div>
     );
   }
+
+  // Determine input type and placeholder based on provider
+  const isUrlBased = provider.isLocal;
+  const inputType = isUrlBased ? "text" : "password";
+  const inputPlaceholder = isUrlBased
+    ? (provider.id === "cdp" ? "ws://localhost:9222" : "http://localhost:11434")
+    : "Enter API key...";
 
   // Enhanced view with project support
   return (
@@ -1441,13 +1516,23 @@ function IntegrationKeyCard({
         {isEditing ? (
           <div className="space-y-3">
             <input
-              type="password"
+              type={inputType}
               value={apiKey}
               onChange={e => onApiKeyChange(e.target.value)}
-              placeholder="Enter API key..."
+              placeholder={inputPlaceholder}
               autoFocus
               className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
             />
+
+            {isBrowserbase && (
+              <input
+                type="text"
+                value={bbProjectId}
+                onChange={e => setBbProjectId(e.target.value)}
+                placeholder="Browserbase Project ID (optional)"
+                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] text-sm"
+              />
+            )}
 
             <Select
               value={selectedProjectId}

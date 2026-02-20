@@ -3,7 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync } from "fs";
 import { agentProcesses, agentsStarting, getBinaryPathForAgent, getBinaryStatus, BIN_DIR, telemetryBroadcaster, isShuttingDown, type TelemetryEvent } from "../../server";
-import { AgentDB, McpServerDB, SkillDB, TelemetryDB, generateId, getMultiAgentConfig, getOperatorConfig, type Agent, type Project } from "../../db";
+import { AgentDB, McpServerDB, SkillDB, SubscriptionDB, TelemetryDB, generateId, getMultiAgentConfig, getOperatorConfig, type Agent, type Project } from "../../db";
 import { ProviderKeys, PROVIDERS, type ProviderId } from "../../providers";
 import { binaryExists } from "../../binary";
 
@@ -93,32 +93,29 @@ function buildOperatorConfig(features: Agent["features"], projectId: string | nu
   if (!opConfig.enabled) {
     return {
       enabled: false,
-      virtual_browser: "http://localhost:8098",
       display_width: 1024,
       display_height: 768,
       max_actions_per_turn: 5,
     };
   }
 
-  const browserProvider = opConfig.browser_provider || "";
+  const browserProvider = opConfig.browser_provider || "browserengine";
   const displayWidth = opConfig.display_width || 1024;
   const displayHeight = opConfig.display_height || 768;
   const maxActions = opConfig.max_actions_per_turn || 5;
 
-  // Map browser provider IDs to agent binary config
   const operatorResult: Record<string, unknown> = {
     enabled: true,
+    browser_provider: browserProvider,
     display_width: displayWidth,
     display_height: displayHeight,
     max_actions_per_turn: maxActions,
   };
 
+  // Only include the active provider's config
   if (browserProvider === "browserbase") {
     const raw = ProviderKeys.getDecryptedForProject("browserbase", projectId);
-    operatorResult.browser_provider = "browserbase";
-    operatorResult.virtual_browser = "http://localhost:8098"; // fallback
     if (raw) {
-      // Parse JSON object {api_key, project_id} or plain string (backwards compat)
       try {
         const parsed = JSON.parse(raw);
         operatorResult.browserbase = { api_key: parsed.api_key || raw, project_id: parsed.project_id || "" };
@@ -128,26 +125,21 @@ function buildOperatorConfig(features: Agent["features"], projectId: string | nu
     }
   } else if (browserProvider === "steel") {
     const apiKey = ProviderKeys.getDecryptedForProject("steel", projectId);
-    operatorResult.browser_provider = "steel";
-    operatorResult.virtual_browser = "http://localhost:8098"; // fallback
     if (apiKey) {
       operatorResult.steel = { api_key: apiKey, base_url: "https://api.steel.dev" };
     }
-  } else if (browserProvider === "chrome") {
-    const debugUrl = ProviderKeys.getDecryptedForProject("chrome", projectId);
-    operatorResult.browser_provider = "chrome";
-    operatorResult.virtual_browser = "http://localhost:8098"; // fallback
-    if (debugUrl) {
-      operatorResult.chrome = { debug_url: debugUrl };
+  } else if (browserProvider === "cdp") {
+    // CDP uses a URL, not an API key — stored as the provider key value
+    const cdpUrl = ProviderKeys.getDecryptedForProject("cdp", projectId);
+    if (cdpUrl) {
+      operatorResult.cdp = { url: cdpUrl };
     }
-  } else if (browserProvider === "browserengine") {
-    const url = ProviderKeys.getDecryptedForProject("browserengine", projectId);
-    operatorResult.browser_provider = "self";
-    operatorResult.virtual_browser = url || "http://localhost:8098";
   } else {
-    // Default: auto-select first configured browser provider, or fall back to self
-    operatorResult.browser_provider = "self";
-    operatorResult.virtual_browser = ProviderKeys.getDecryptedForProject("browserengine", projectId) || "http://localhost:8098";
+    // Default: browserengine
+    const apiKey = ProviderKeys.getDecryptedForProject("browserengine", projectId);
+    if (apiKey) {
+      operatorResult.browserengine = { api_key: apiKey, base_url: "https://api.browserengine.co" };
+    }
   }
 
   return operatorResult;
@@ -173,8 +165,12 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
     enabled: boolean;
   }> = [];
 
+  // Batch load skills and MCP servers (2 queries instead of N+M)
+  const skillMap = SkillDB.findByIds(agent.skills || []);
+  const mcpMap = McpServerDB.findByIds(agent.mcp_servers || []);
+
   for (const skillId of agent.skills || []) {
-    const skill = SkillDB.findById(skillId);
+    const skill = skillMap.get(skillId);
     if (!skill || !skill.enabled) continue;
 
     skillDefinitions.push({
@@ -190,7 +186,7 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
   }
 
   for (const id of agent.mcp_servers || []) {
-    const server = McpServerDB.findById(id);
+    const server = mcpMap.get(id);
     if (!server) continue;
 
     if (server.type === "local" && server.status === "running") {
@@ -387,9 +383,8 @@ export async function pushSkillsToAgent(agentId: string, port: number, skills: A
   }
 
   try {
-    // Push each skill - try PUT first (update), then POST (create) if not found
-    for (const skill of skills) {
-      // First try PUT to update existing skill
+    // Push all skills in parallel - try PUT first (update), then POST (create) if not found
+    await Promise.allSettled(skills.map(async (skill) => {
       let res = await agentFetch(agentId, port, "/skills", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -397,7 +392,6 @@ export async function pushSkillsToAgent(agentId: string, port: number, skills: A
         signal: AbortSignal.timeout(5000),
       });
 
-      // If skill doesn't exist (404), create it with POST
       if (res.status === 404) {
         res = await agentFetch(agentId, port, "/skills", {
           method: "POST",
@@ -411,7 +405,7 @@ export async function pushSkillsToAgent(agentId: string, port: number, skills: A
         const data = await res.json().catch(() => ({}));
         console.error(`[pushSkillsToAgent] Failed to push skill ${skill.name}:`, data.error || res.status);
       }
-    }
+    }));
 
     // Enable skills globally via POST /skills/status
     const statusRes = await agentFetch(agentId, port, "/skills/status", {
@@ -575,40 +569,9 @@ export async function startAgentProcess(
     const proc = spawn({
       cmd: [binaryPath],
       env,
-      stdout: "pipe",
-      stderr: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
     });
-
-    // Log agent stdout/stderr for debugging
-    const agentLabel = `[agent:${agent.name}]`;
-    if (proc.stdout) {
-      const reader = proc.stdout.getReader();
-      const decoder = new TextDecoder();
-      (async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const text = decoder.decode(value, { stream: true }).trimEnd();
-            if (text) console.log(`${agentLabel} ${text}`);
-          }
-        } catch {}
-      })();
-    }
-    if (proc.stderr) {
-      const reader = proc.stderr.getReader();
-      const decoder = new TextDecoder();
-      (async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const text = decoder.decode(value, { stream: true }).trimEnd();
-            if (text) console.error(`${agentLabel} ${text}`);
-          }
-        } catch {}
-      })();
-    }
 
     // Store process with port for tracking
     agentProcesses.set(agent.id, { proc, port });
@@ -642,6 +605,7 @@ export async function startAgentProcess(
       console.log(`  Pushing configuration...`);
     }
     const config = buildAgentConfig(agent, providerKey);
+    console.log(`[DEBUG] operator config being pushed:`, JSON.stringify(config.operator, null, 2));
     const configResult = await pushConfigToAgent(agent.id, port, config);
     if (!configResult.success) {
       if (!silent) {
@@ -681,24 +645,27 @@ export async function startAgentProcess(
 }
 
 // Transform DB agent to API response format (camelCase for frontend compatibility)
+// Uses batch queries + light MCP loading (no decryption) for performance
 export function toApiAgent(agent: Agent) {
-  // Look up MCP server details
+  // Batch load MCP servers (light = no decryption) and skills in 2 queries
+  const mcpMap = McpServerDB.findByIdsLight(agent.mcp_servers || []);
+  const skillMap = SkillDB.findByIds(agent.skills || []);
+
   const mcpServerDetails = (agent.mcp_servers || [])
-    .map(id => McpServerDB.findById(id))
-    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .map(id => mcpMap.get(id))
+    .filter((s): s is NonNullable<typeof s> => !!s)
     .map(s => ({
       id: s.id,
       name: s.name,
       type: s.type,
       status: s.status,
       port: s.port,
-      url: s.url, // Include URL for HTTP servers
+      url: s.url,
     }));
 
-  // Look up skill details
   const skillDetails = (agent.skills || [])
-    .map(id => SkillDB.findById(id))
-    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .map(id => skillMap.get(id))
+    .filter((s): s is NonNullable<typeof s> => !!s)
     .map(s => ({
       id: s.id,
       name: s.name,
@@ -706,6 +673,11 @@ export function toApiAgent(agent: Agent) {
       version: s.version,
       enabled: s.enabled,
     }));
+
+  // Look up subscriptions
+  const subscriptions = SubscriptionDB.findByAgentId(agent.id).map(s => ({
+    id: s.id, trigger_slug: s.trigger_slug, enabled: s.enabled,
+  }));
 
   return {
     id: agent.id,
@@ -716,29 +688,33 @@ export function toApiAgent(agent: Agent) {
     status: agent.status,
     port: agent.port,
     features: agent.features,
-    mcpServers: agent.mcp_servers, // Keep IDs for backwards compatibility
-    mcpServerDetails, // Include full details
-    skills: agent.skills, // Skill IDs
-    skillDetails, // Include full details
+    mcpServers: agent.mcp_servers,
+    mcpServerDetails,
+    skills: agent.skills,
+    skillDetails,
+    subscriptions,
     projectId: agent.project_id,
     createdAt: agent.created_at,
     updatedAt: agent.updated_at,
   };
 }
 
-// Batch transform: fetch all MCP servers + skills in 2 queries instead of N per agent
+// Batch transform: fetch all MCP servers + skills + subscriptions in 3 queries instead of N per agent
 export function toApiAgentsBatch(agents: Agent[]) {
   // Collect all unique IDs
   const allMcpIds = new Set<string>();
   const allSkillIds = new Set<string>();
+  const allAgentIds: string[] = [];
   for (const agent of agents) {
+    allAgentIds.push(agent.id);
     for (const id of agent.mcp_servers || []) allMcpIds.add(id);
     for (const id of agent.skills || []) allSkillIds.add(id);
   }
 
-  // Batch load in 2 queries
-  const mcpMap = McpServerDB.findByIds([...allMcpIds]);
+  // Batch load in 3 queries (Light = no decryption for MCP servers)
+  const mcpMap = McpServerDB.findByIdsLight([...allMcpIds]);
   const skillMap = SkillDB.findByIds([...allSkillIds]);
+  const subsMap = SubscriptionDB.findByAgentIds(allAgentIds);
 
   return agents.map(agent => {
     const mcpServerDetails = (agent.mcp_servers || [])
@@ -751,11 +727,15 @@ export function toApiAgentsBatch(agents: Agent[]) {
       .filter((s): s is NonNullable<typeof s> => !!s)
       .map(s => ({ id: s.id, name: s.name, description: s.description, version: s.version, enabled: s.enabled }));
 
+    const subscriptions = (subsMap.get(agent.id) || []).map(s => ({
+      id: s.id, trigger_slug: s.trigger_slug, enabled: s.enabled,
+    }));
+
     return {
       id: agent.id, name: agent.name, model: agent.model, provider: agent.provider,
       systemPrompt: agent.system_prompt, status: agent.status, port: agent.port,
       features: agent.features, mcpServers: agent.mcp_servers, mcpServerDetails,
-      skills: agent.skills, skillDetails, projectId: agent.project_id,
+      skills: agent.skills, skillDetails, subscriptions, projectId: agent.project_id,
       createdAt: agent.created_at, updatedAt: agent.updated_at,
     };
   });
@@ -773,11 +753,12 @@ export function toApiProject(project: Project) {
   };
 }
 
-// Helper to fetch from a running agent (with authentication)
-export async function fetchFromAgent(agentId: string, port: number, endpoint: string): Promise<any> {
+// Helper to fetch from a running agent (with authentication + timeout)
+export async function fetchFromAgent(agentId: string, port: number, endpoint: string, timeoutMs = 3000): Promise<any> {
   try {
     const response = await agentFetch(agentId, port, endpoint, {
       headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (response.ok) {
       return await response.json();

@@ -15,7 +15,7 @@ export interface AgentBuiltinTools {
 
 export interface OperatorConfig {
   enabled: boolean;
-  browser_provider?: string; // "browserbase" | "steel" | "browserengine" | "chrome"
+  browser_provider?: string; // "browserengine" | "browserbase" | "steel" | "cdp"
   display_width?: number;
   display_height?: number;
   max_actions_per_turn?: number;
@@ -100,6 +100,7 @@ export interface Agent {
   mcpServerDetails?: McpServerSummary[]; // Full details included from API
   skills: string[]; // Array of Skill IDs
   skillDetails?: SkillSummary[]; // Full details included from API
+  subscriptions?: { id: string; trigger_slug: string; enabled: boolean }[];
   projectId: string | null; // Optional project grouping
   createdAt: string;
 }
@@ -152,7 +153,7 @@ export interface Provider {
   keyHint: string | null;
   isValid: boolean | null;
   configured?: boolean; // for backwards compatibility
-  isLocal?: boolean; // Uses URL instead of API key (ollama, browserengine, chrome)
+  isLocal?: boolean; // Uses URL instead of API key (ollama)
 }
 
 export interface OnboardingStatus {
@@ -161,7 +162,7 @@ export interface OnboardingStatus {
   has_any_keys: boolean;
 }
 
-export type Route = "dashboard" | "activity" | "agents" | "tasks" | "connections" | "mcp" | "skills" | "tests" | "telemetry" | "settings" | "api";
+export type Route = "dashboard" | "threads" | "agents" | "tasks" | "connections" | "mcp" | "skills" | "tests" | "telemetry" | "settings" | "api";
 
 // Tool use content block in trajectory
 export interface ToolUseBlock {
