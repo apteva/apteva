@@ -16,13 +16,13 @@ export const AgentDojoTriggerProvider: TriggerProvider = {
   name: "AgentDojo",
 
   async listTriggerTypes(apiKey: string, toolkitSlugs?: string[]): Promise<TriggerType[]> {
-    const params = new URLSearchParams({ is_active: "true", limit: "200" });
+    const params = new URLSearchParams({ is_active: "true", limit: "500" });
     if (toolkitSlugs?.length) {
       // Filter by toolkit name(s) — API supports one at a time, so fetch each
       const allItems: any[] = [];
       for (const slug of toolkitSlugs) {
         const res = await fetch(
-          `${AGENTDOJO_API_BASE}/triggers?${new URLSearchParams({ toolkit_name: slug, is_active: "true", limit: "200" })}`,
+          `${AGENTDOJO_API_BASE}/triggers?${new URLSearchParams({ toolkit_name: slug, is_active: "true", limit: "500" })}`,
           { headers: headers(apiKey) },
         );
         if (res.ok) {

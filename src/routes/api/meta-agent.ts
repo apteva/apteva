@@ -56,6 +56,9 @@ WHAT YOU CAN DO:
 - **Skills**: List, enable/disable, and assign skills to agents
 - **Providers**: Check which LLM providers have API keys configured
 - **Communication**: Send messages to running agents
+- **Integrations**: Connect third-party apps (GitHub, Slack, etc.) via API key, create MCP servers from them, and add them locally
+- **Tests**: Create and run automated tests for agent workflows
+- **Triggers**: Subscribe agents to external events (webhooks)
 
 WORKFLOW FOR CREATING AGENTS:
 1. Use list_providers to check which providers have API keys
@@ -63,12 +66,23 @@ WORKFLOW FOR CREATING AGENTS:
 3. Optionally assign MCP servers (for tools) and skills (for behavior)
 4. Use start_agent to run it
 
+WORKFLOW FOR ADDING INTEGRATIONS:
+1. Use list_integration_providers to see available providers (agentdojo, composio)
+2. Use list_integration_apps to browse available apps/toolkits
+3. Use connect_integration_app to authenticate with an API key (for OAuth, direct user to Browse Toolkits UI)
+4. Use create_integration_config to create an MCP server from the connected app
+5. Use add_integration_config_locally to add it as a local MCP server
+6. Use assign_mcp_server_to_agent to give an agent access
+
 AGENT FEATURES (enable when creating/updating):
 - **memory**: Persistent memory across conversations (needs OpenAI key for embeddings)
 - **tasks**: Scheduling and task tracking
 - **vision**: Image and PDF understanding
 - **mcp**: Required if assigning MCP servers — gives the agent tool-use capability
 - **files**: File read/write in agent workspace
+
+CRITICAL — PROJECT CONTEXT:
+Your chat context tells you the current project (name and id). **You MUST pass this project_id to EVERY tool call that accepts a project_id parameter.** API keys, integrations, MCP servers, and agents are scoped per project — calls without project_id will fail to find them. Extract the id from your context and always include it.
 
 ALWAYS use your tools proactively. When a user says "create an agent", don't explain how — just do it. Confirm what you did after.
 Be concise. Use markdown formatting.`,
@@ -81,6 +95,10 @@ Be concise. Use markdown formatting.`,
           realtime: false,
           files: false,
           agents: false,
+          builtinTools: {
+            webSearch: providerId === "anthropic",
+            webFetch: providerId === "anthropic",
+          },
         },
         mcp_servers: [],
         skills: [],
@@ -118,8 +136,24 @@ Be concise. Use markdown formatting.`,
       return json({ agent: toApiAgent(metaAgent), message: "Already running" });
     }
 
+    // Ensure builtinTools are enabled for anthropic provider
+    if (metaAgent.provider === "anthropic" && !metaAgent.features?.builtinTools?.webSearch) {
+      const updatedFeatures = {
+        ...metaAgent.features,
+        builtinTools: { webSearch: true, webFetch: true },
+      };
+      AgentDB.update(META_AGENT_ID, { features: updatedFeatures });
+      console.log(`[meta-agent] Enabled builtinTools for anthropic provider`);
+    }
+    // Always re-read to get latest features
+    const freshAgent = AgentDB.findById(META_AGENT_ID);
+    if (!freshAgent) {
+      return json({ error: "Meta agent not found after update" }, 500);
+    }
+    console.log(`[meta-agent] Starting with builtinTools:`, JSON.stringify(freshAgent.features?.builtinTools));
+
     // Start the agent using existing startAgentProcess function
-    const result = await startAgentProcess(metaAgent, { silent: true });
+    const result = await startAgentProcess(freshAgent, { silent: true });
     if (!result.success) {
       return json({ error: result.error || "Failed to start meta agent" }, 500);
     }

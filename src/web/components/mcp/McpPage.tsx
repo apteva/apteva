@@ -251,7 +251,16 @@ export function McpPage() {
                         onStart={() => startServer(server.id)}
                         onStop={() => stopServer(server.id)}
                         onDelete={() => deleteServer(server.id)}
-                        onEdit={() => setEditingServer(server)}
+                        onEdit={async () => {
+                          // Fetch full server details (with decrypted env/headers) for editing
+                          try {
+                            const res = await authFetch(`/api/mcp/servers/${server.id}`);
+                            const data = await res.json();
+                            setEditingServer(data.server || server);
+                          } catch {
+                            setEditingServer(server);
+                          }
+                        }}
                       />
                     );
                   })}

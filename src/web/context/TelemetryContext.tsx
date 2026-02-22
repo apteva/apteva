@@ -23,6 +23,7 @@ interface TelemetryContextValue {
   taskChangeCounter: number;
   notificationCounter: number;
   clearEvents: () => void;
+  triggerRefresh: () => void;
 }
 
 const TelemetryContext = createContext<TelemetryContextValue | null>(null);
@@ -175,8 +176,17 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     setEvents([]);
   }, []);
 
+  const triggerRefresh = useCallback(() => {
+    setStatusChangeCounter(c => c + 1);
+    setTaskChangeCounter(c => c + 1);
+  }, []);
+
+  const value = React.useMemo(() => ({
+    connected, events, lastActivityByAgent, activeAgents, statusChangeCounter, taskChangeCounter, notificationCounter, clearEvents, triggerRefresh,
+  }), [connected, events, lastActivityByAgent, activeAgents, statusChangeCounter, taskChangeCounter, notificationCounter, clearEvents, triggerRefresh]);
+
   return (
-    <TelemetryContext.Provider value={{ connected, events, lastActivityByAgent, activeAgents, statusChangeCounter, taskChangeCounter, notificationCounter, clearEvents }}>
+    <TelemetryContext.Provider value={value}>
       {children}
     </TelemetryContext.Provider>
   );
@@ -251,11 +261,13 @@ export function useAgentActivity(agentId: string) {
   const { activeAgents } = useTelemetryContext();
   const activity = activeAgents[agentId];
 
-  return {
-    isActive: !!activity,
-    type: activity?.type,
-    label: activity ? getActivityLabel(activity.type) : undefined,
-  };
+  const isActive = !!activity;
+  const type = activity?.type;
+  return React.useMemo(() => ({
+    isActive,
+    type,
+    label: isActive ? getActivityLabel(type!) : undefined,
+  }), [isActive, type]);
 }
 
 // Hook to trigger agent list refetch on status changes (started/stopped/crashed)
@@ -274,4 +286,10 @@ export function useTaskChange(): number {
 export function useNotificationChange(): number {
   const { notificationCounter } = useTelemetryContext();
   return notificationCounter;
+}
+
+// Hook to manually trigger data refresh (e.g. after meta agent tool calls)
+export function useTriggerRefresh(): () => void {
+  const { triggerRefresh } = useTelemetryContext();
+  return triggerRefresh;
 }

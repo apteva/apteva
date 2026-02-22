@@ -11,9 +11,10 @@ interface SelectProps {
   options: SelectOption[];
   onChange: (value: string) => void;
   placeholder?: string;
+  compact?: boolean;
 }
 
-export function Select({ value, options, onChange, placeholder = "Select..." }: SelectProps) {
+export function Select({ value, options, onChange, placeholder = "Select...", compact }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -34,7 +35,7 @@ export function Select({ value, options, onChange, placeholder = "Select..." }: 
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 text-left flex items-center justify-between focus:outline-none focus:border-[#f97316] text-[#e0e0e0] hover:border-[#333] transition"
+        className={`w-full bg-[#0a0a0a] border border-[#222] rounded ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between focus:outline-none focus:border-[#f97316] text-[#e0e0e0] hover:border-[#333] transition`}
       >
         <span className={selectedOption ? "text-[#e0e0e0]" : "text-[#666]"}>
           {selectedOption ? (
@@ -59,7 +60,7 @@ export function Select({ value, options, onChange, placeholder = "Select..." }: 
                 onChange(option.value);
                 setIsOpen(false);
               }}
-              className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-[#1a1a1a] transition ${
+              className={`w-full ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between hover:bg-[#1a1a1a] transition ${
                 option.value === value ? "bg-[#1a1a1a] text-[#f97316]" : "text-[#e0e0e0]"
               }`}
             >

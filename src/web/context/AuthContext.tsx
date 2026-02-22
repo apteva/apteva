@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 
 interface User {
   id: string;
@@ -216,7 +216,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => clearInterval(refreshInterval);
   }, [accessToken, refreshTokenInternal]);
 
-  const value: AuthContextValue = {
+  const value = useMemo<AuthContextValue>(() => ({
     user,
     isAuthenticated: !!user,
     isLoading,
@@ -230,7 +230,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     refreshToken,
     checkAuth,
     authFetch,
-  };
+  }), [user, isLoading, hasUsers, isDev, accessToken, onboardingComplete, setOnboardingComplete, login, logout, refreshToken, checkAuth, authFetch]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

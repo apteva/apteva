@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo, createContext, useContext, type ReactNode } from "react";
+import React, { useState, useEffect, useMemo, useCallback, createContext, useContext, type ReactNode } from "react";
 import { Chat } from "@apteva/apteva-kit";
-import { useAuth, useProjects } from "../../context";
+import { useAuth, useProjects, useTriggerRefresh } from "../../context";
 
 interface MetaAgentStatus {
   enabled: boolean;
@@ -130,6 +130,7 @@ export function MetaAgentButton() {
 export function MetaAgentPanel() {
   const ctx = useMetaAgent();
   const { currentProjectId, currentProject } = useProjects();
+  const triggerRefresh = useTriggerRefresh();
   if (!ctx?.isAvailable || !ctx.isOpen) return null;
 
   const { agent, isRunning, error, isStarting, startAgent, close } = ctx;
@@ -181,6 +182,7 @@ export function MetaAgentPanel() {
               variant="terminal"
               showHeader={false}
               context={chatContext}
+              onToolResult={triggerRefresh}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">

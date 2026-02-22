@@ -40,14 +40,30 @@ html, body {
   display: none;
 }
 
-/* Telemetry event slide-in animation */
+/* Activity timeline slide-in animation */
 @keyframes slideIn {
-  from {
+  0% {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(-12px);
+    max-height: 0;
   }
-  to {
+  40% {
+    opacity: 0.6;
+    max-height: 100px;
+  }
+  100% {
     opacity: 1;
     transform: translateY(0);
+    max-height: 100px;
   }
+}
+
+@keyframes highlightFade {
+  0% { background-color: rgba(249, 115, 22, 0.08); }
+  100% { background-color: transparent; }
+}
+
+.animate-slideIn {
+  animation: slideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1), highlightFade 2s 0.5s ease-out;
+  overflow: hidden;
 }

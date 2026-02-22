@@ -12,7 +12,7 @@ export { OnboardingWizard } from "./onboarding";
 export { SettingsPage } from "./settings";
 export { AgentCard, CreateAgentModal, AgentPanel, AgentsView } from "./agents";
 export { Dashboard } from "./dashboard";
-export { ActivityPage } from "./activity";
+export { ThreadsPage } from "./threads/ThreadsPage";
 export { TasksPage } from "./tasks";
 export { McpPage } from "./mcp";
 export { SkillsPage } from "./skills/SkillsPage";

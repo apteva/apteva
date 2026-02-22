@@ -1,9 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { useAgentActivity, useAuth, useProjects, useTelemetryContext } from "../../context";
-import { useTelemetry } from "../../context/TelemetryContext";
+import { useAuth, useProjects, useTelemetryContext } from "../../context";
 import type { TelemetryEvent } from "../../context";
-import type { Agent, Task, Route } from "../../types";
-import { RecurringIcon, ScheduledIcon, TaskOnceIcon } from "../common/Icons";
+import type { Agent, Route } from "../../types";
+import { Select } from "../common/Select";
 
 interface ActivityPageProps {
   agents: Agent[];
@@ -11,31 +10,103 @@ interface ActivityPageProps {
   onNavigate?: (route: Route) => void;
 }
 
+// Event types we show in the timeline (skip noisy internal ones)
+const VISIBLE_TYPES = new Set([
+  "thread_activity",
+  "agent_started",
+  "agent_stopped",
+  "agent_error",
+  "task_created",
+  "task_updated",
+  "task_deleted",
+  "task_executed",
+  "llm_request",
+  "tool_invocation",
+  "mcp_request",
+  "mcp_tool_execution",
+]);
+
+// Category colors for the timeline dot
+const CATEGORY_COLORS: Record<string, string> = {
+  CHAT: "bg-green-400",
+  LLM: "bg-purple-400",
+  TOOL: "bg-blue-400",
+  TASK: "bg-yellow-400",
+  MEMORY: "bg-cyan-400",
+  MCP: "bg-orange-400",
+  SYSTEM: "bg-gray-400",
+  ERROR: "bg-red-400",
+};
+
+function describeEvent(evt: TelemetryEvent, agentName: string): string {
+  const data = evt.data || {};
+  switch (evt.type) {
+    case "thread_activity":
+      return (data.activity as string) || "Working...";
+    case "agent_started":
+      return "Agent started";
+    case "agent_stopped":
+      return data.reason ? `Agent stopped (${data.reason})` : "Agent stopped";
+    case "agent_error":
+      return evt.error || "Agent error";
+    case "llm_request":
+      return "Thinking...";
+    case "tool_invocation": {
+      const toolRaw = (data.tool_name || "") as string;
+      if (!toolRaw) return "Using tools";
+      const toolFormatted = toolRaw.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      return `Tool: ${toolFormatted}`;
+    }
+    case "task_created":
+      return data.title ? `Task created: ${data.title}` : "Task created";
+    case "task_updated": {
+      const status = data.status as string | undefined;
+      const title = data.title as string | undefined;
+      const statusLabel = status ? status.charAt(0).toUpperCase() + status.slice(1) : null;
+      if (title && statusLabel) return `Task ${statusLabel}: ${title}`;
+      if (statusLabel) return `Task ${statusLabel}`;
+      if (title) return `Task updated: ${title}`;
+      return "Task updated";
+    }
+    case "task_deleted":
+      return "Task deleted";
+    case "task_executed": {
+      const title = data.title as string | undefined;
+      return title ? `Task started: ${title}` : "Task started";
+    }
+    case "memory_stored":
+      return "Memory stored";
+    case "memory_retrieved":
+      return "Memory retrieved";
+    case "mcp_request":
+      return data.server ? `MCP request to ${data.server}` : "MCP request";
+    case "mcp_tool_execution": {
+      const rawName = (data.tool_name || data.tool || "") as string;
+      if (!rawName) return "MCP tool call";
+      // "Server__tool-name-here" -> take part after __, format dashes/underscores to spaces, title case
+      const toolPart = rawName.includes("__") ? rawName.split("__").slice(1).join("__") : rawName;
+      const formatted = toolPart.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      return `MCP: ${formatted}`;
+    }
+    default:
+      return evt.type.replace(/_/g, " ");
+  }
+}
+
 export function ActivityPage({ agents, loading, onNavigate }: ActivityPageProps) {
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
   const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [historicalActivities, setHistoricalActivities] = useState<TelemetryEvent[]>([]);
-  const lastProcessedTaskEventRef = useRef<string | null>(null);
-  const { events: taskTelemetryEvents } = useTelemetry({ category: "TASK" });
+  const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
+  const [filterAgentId, setFilterAgentId] = useState<string>("");
+  const [seenIds] = useState(() => new Set<string>());
+  const hasLoadedHistory = useRef(false);
 
   const filteredAgents = useMemo(() => {
     if (currentProjectId === null) return agents;
     if (currentProjectId === "unassigned") return agents.filter(a => !a.projectId);
     return agents.filter(a => a.projectId === currentProjectId);
   }, [agents, currentProjectId]);
-
-  const sortedAgents = useMemo(() => {
-    return [...filteredAgents].sort((a, b) => {
-      if (a.status === "running" && b.status !== "running") return -1;
-      if (b.status === "running" && a.status !== "running") return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [filteredAgents]);
-
-  const runningCount = useMemo(() => filteredAgents.filter(a => a.status === "running").length, [filteredAgents]);
 
   const agentIds = useMemo(() => new Set(filteredAgents.map(a => a.id)), [filteredAgents]);
   const agentNameMap = useMemo(() => {
@@ -44,408 +115,190 @@ export function ActivityPage({ agents, loading, onNavigate }: ActivityPageProps)
     return map;
   }, [filteredAgents]);
 
-  // Fetch tasks + historical activity
-  const fetchData = useCallback(async () => {
+  // Fetch historical events
+  const fetchHistory = useCallback(async () => {
     const projectParam = currentProjectId ? `&project_id=${encodeURIComponent(currentProjectId)}` : "";
-    const [tasksRes, activityRes] = await Promise.all([
-      authFetch(`/api/tasks?status=all${projectParam}`).catch(() => null),
-      authFetch(`/api/telemetry/events?type=thread_activity&limit=50${projectParam}`).catch(() => null),
-    ]);
-    if (tasksRes?.ok) {
-      const data = await tasksRes.json();
-      const list: Task[] = data.tasks || [];
-      list.sort((a, b) => {
-        const aPri = a.status === "running" ? 0 : a.status === "pending" ? 1 : a.status === "completed" ? 2 : 3;
-        const bPri = b.status === "running" ? 0 : b.status === "pending" ? 1 : b.status === "completed" ? 2 : 3;
-        if (aPri !== bPri) return aPri - bPri;
-        if (aPri <= 1) {
-          const aTs = (a.next_run || a.execute_at) ? new Date(a.next_run || a.execute_at!).getTime() : Infinity;
-          const bTs = (b.next_run || b.execute_at) ? new Date(b.next_run || b.execute_at!).getTime() : Infinity;
-          return aTs - bTs;
-        }
-        const aDate = a.completed_at || a.executed_at || a.created_at;
-        const bDate = b.completed_at || b.executed_at || b.created_at;
-        return new Date(bDate).getTime() - new Date(aDate).getTime();
-      });
-      setTasks(list);
-    }
-    if (activityRes?.ok) {
-      const data = await activityRes.json();
-      setHistoricalActivities(data.events || []);
-    }
+    try {
+      const res = await authFetch(`/api/telemetry/events?limit=200${projectParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setHistoricalEvents(data.events || []);
+      }
+    } catch {}
   }, [authFetch, currentProjectId]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData, statusChangeCounter]);
+    fetchHistory();
+  }, [fetchHistory, statusChangeCounter]);
 
-  // Real-time task updates from telemetry (same pattern as TasksPage)
+  // Mark historical events as seen so they don't animate
   useEffect(() => {
-    if (!taskTelemetryEvents.length) return;
-    const latestEvent = taskTelemetryEvents[0];
-    if (!latestEvent || latestEvent.id === lastProcessedTaskEventRef.current) return;
-    const eventType = latestEvent.type;
-    if (eventType === "task_created" || eventType === "task_updated" || eventType === "task_deleted") {
-      lastProcessedTaskEventRef.current = latestEvent.id;
-      fetchData();
+    if (historicalEvents.length > 0 && !hasLoadedHistory.current) {
+      for (const evt of historicalEvents) {
+        seenIds.add(evt.id);
+      }
+      // Also mark any realtime events already present at mount
+      for (const evt of realtimeEvents) {
+        seenIds.add(evt.id);
+      }
+      hasLoadedHistory.current = true;
     }
-  }, [taskTelemetryEvents, fetchData]);
+  }, [historicalEvents, realtimeEvents, seenIds]);
 
-  // Merge realtime + historical thread_activity
-  const activities = useMemo(() => {
-    const realtimeThreadEvents = realtimeEvents.filter(e => e.type === "thread_activity");
-    const seen = new Set(realtimeThreadEvents.map(e => e.id));
-    const merged = [...realtimeThreadEvents];
-    for (const evt of historicalActivities) {
-      if (!seen.has(evt.id)) {
+  // Merge realtime + historical, filter, sort
+  const timeline = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: TelemetryEvent[] = [];
+
+    const shouldShow = (evt: TelemetryEvent) => {
+      if (!VISIBLE_TYPES.has(evt.type) || !agentIds.has(evt.agent_id) || evt.data?.parent_id) return false;
+      // MCP tool: only show completed calls (with duration), skip the start event
+      if (evt.type === "mcp_tool_execution" && !evt.duration_ms) return false;
+      return true;
+    };
+
+    for (const evt of realtimeEvents) {
+      if (!seen.has(evt.id) && shouldShow(evt)) {
         merged.push(evt);
         seen.add(evt.id);
       }
     }
-    let filtered = merged.filter(e => agentIds.has(e.agent_id));
+    for (const evt of historicalEvents) {
+      if (!seen.has(evt.id) && shouldShow(evt)) {
+        merged.push(evt);
+        seen.add(evt.id);
+      }
+    }
+
+    let filtered = merged;
+    if (filterAgentId) {
+      filtered = filtered.filter(e => e.agent_id === filterAgentId);
+    }
+
     filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return filtered.slice(0, 50);
-  }, [realtimeEvents, historicalActivities, agentIds]);
+    return filtered.slice(0, 200);
+  }, [realtimeEvents, historicalEvents, agentIds, filterAgentId]);
+
+  // Group by date for section headers
+  const groupedTimeline = useMemo(() => {
+    const groups: { label: string; events: TelemetryEvent[] }[] = [];
+    let currentLabel = "";
+    const today = new Date().toDateString();
+    const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+    for (const evt of timeline) {
+      const dateStr = new Date(evt.timestamp).toDateString();
+      const label = dateStr === today ? "Today" : dateStr === yesterday ? "Yesterday" : dateStr;
+      if (label !== currentLabel) {
+        currentLabel = label;
+        groups.push({ label, events: [] });
+      }
+      groups[groups.length - 1].events.push(evt);
+    }
+    return groups;
+  }, [timeline]);
 
   if (loading) {
     return <div className="flex-1 flex items-center justify-center text-[#666]">Loading...</div>;
   }
 
+  const runningCount = filteredAgents.filter(a => a.status === "running").length;
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-6 pt-6 pb-4 shrink-0">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Activity</h1>
-          <span className="text-sm text-[#666]">
-            {runningCount} of {filteredAgents.length} agents running
-          </span>
-        </div>
-      </div>
-
-      {/* Three-column layout: 1/4 | 3/8 | 3/8 */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left: Agents (1/4) */}
-        <div className="flex-[2] flex flex-col overflow-hidden border-r border-[#1a1a1a]">
-          <div className="px-4 py-2.5 border-b border-[#1a1a1a] shrink-0">
-            <h3 className="text-xs font-semibold text-[#666] uppercase tracking-wider">Agents</h3>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold">Activity</h1>
+            <p className="text-sm text-[#666] mt-0.5">
+              {runningCount} of {filteredAgents.length} agents running
+            </p>
           </div>
-          <div className="flex-1 overflow-auto px-3 py-2">
-            {sortedAgents.length === 0 ? (
-              <p className="text-sm text-[#555] px-2 py-4 text-center">No agents found</p>
-            ) : (
-              <div className="space-y-1">
-                {sortedAgents.map(agent => (
-                  <AgentRow
-                    key={agent.id}
-                    agent={agent}
-                    selected={selectedAgentId === agent.id}
-                    onSelect={() => setSelectedAgentId(selectedAgentId === agent.id ? null : agent.id)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {selectedAgentId && (
-              <InlineCommand
-                agent={filteredAgents.find(a => a.id === selectedAgentId) || null}
-              />
-            )}
-          </div>
-        </div>
-
-        {/* Center: Activity Feed (3/8) */}
-        <div className="flex-[3] flex flex-col min-h-0 overflow-hidden border-r border-[#1a1a1a]">
-          <div className="px-4 py-2.5 border-b border-[#1a1a1a] flex items-center justify-between shrink-0">
-            <h3 className="text-xs font-semibold text-[#666] uppercase tracking-wider">Activity Feed</h3>
-            <span className="text-xs text-[#555]">{activities.length}</span>
-          </div>
-          <div className="flex-1 overflow-auto">
-            {activities.length === 0 ? (
-              <div className="p-6 text-center text-[#555] text-sm">
-                No activity yet. Agent activity will appear here in real-time.
-              </div>
-            ) : (
-              <div className="divide-y divide-[#1a1a1a]">
-                {activities.map(evt => (
-                  <div key={evt.id} className="px-4 py-2.5 hover:bg-[#111]/50 transition">
-                    <p className="text-sm truncate">{(evt.data?.activity as string) || "Working..."}</p>
-                    <div className="flex items-center gap-2 text-[10px] text-[#555] mt-0.5">
-                      <span className="text-[#666]">{agentNameMap.get(evt.agent_id) || evt.agent_id}</span>
-                      <span className="text-[#444]">&middot;</span>
-                      <span>{timeAgo(evt.timestamp)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right: Tasks (3/8) */}
-        <div className="flex-[3] flex flex-col overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-[#1a1a1a] flex items-center justify-between shrink-0">
-            <h3 className="text-xs font-semibold text-[#666] uppercase tracking-wider">Tasks</h3>
-            {onNavigate && (
-              <button onClick={() => onNavigate("tasks")} className="text-xs text-[#3b82f6] hover:text-[#60a5fa]">
-                View All
-              </button>
-            )}
-          </div>
-          <div className="flex-1 overflow-auto px-3 py-3">
-            {tasks.length === 0 ? (
-              <p className="text-sm text-[#555] px-2 py-4 text-center">No tasks yet</p>
-            ) : (
-              <div className="space-y-2.5">
-                {tasks.map(task => (
-                  <TaskCard key={`${task.agentId}-${task.id}`} task={task} />
-                ))}
-              </div>
-            )}
+          <div className="w-48">
+            <Select
+              value={filterAgentId}
+              onChange={setFilterAgentId}
+              placeholder="All agents"
+              options={[
+                { value: "", label: "All agents" },
+                ...filteredAgents.map(a => ({ value: a.id, label: a.name })),
+              ]}
+            />
           </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-// --- Agent Row ---
-
-function AgentRow({ agent, selected, onSelect }: {
-  agent: Agent;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const { isActive, label } = useAgentActivity(agent.id);
-  const isRunning = agent.status === "running";
-
-  return (
-    <button
-      onClick={onSelect}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition ${
-        selected
-          ? "bg-[#f97316]/10 border border-[#f97316]/30"
-          : "hover:bg-[#1a1a1a] border border-transparent"
-      }`}
-    >
-      <span
-        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-          isRunning && isActive
-            ? "bg-green-400 animate-pulse"
-            : isRunning
-              ? "bg-[#3b82f6]"
-              : "bg-[#444]"
-        }`}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className={`text-sm font-medium truncate ${isRunning ? "" : "text-[#666]"}`}>
-            {agent.name}
-          </span>
-          <span className="text-[10px] text-[#555] shrink-0">{agent.provider}</span>
-        </div>
-        {isActive && label ? (
-          <p className="text-[11px] text-green-400 truncate">{label}</p>
+      {/* Timeline */}
+      <div className="flex-1 overflow-auto px-6 pb-6">
+        {timeline.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-[#555]">
+            <p className="text-lg mb-2">No activity yet</p>
+            <p className="text-sm">Agent activity will appear here in real-time.</p>
+          </div>
         ) : (
-          <p className={`text-[11px] ${isRunning ? "text-[#555]" : "text-[#444]"}`}>
-            {isRunning ? "idle" : "stopped"}
-          </p>
-        )}
-      </div>
-    </button>
-  );
-}
+          <div className="max-w-2xl">
+            {groupedTimeline.map(group => (
+              <div key={group.label}>
+                {/* Date header */}
+                <div className="sticky top-0 z-10 bg-[#0a0a0a]/95 backdrop-blur-sm py-2 mb-1">
+                  <span className="text-xs font-semibold text-[#666] uppercase tracking-wider">
+                    {group.label}
+                  </span>
+                </div>
 
-// --- Inline Command ---
+                {/* Events */}
+                <div className="relative ml-3 border-l border-[#1a1a1a]">
+                  {group.events.map(evt => {
+                    const isNew = !seenIds.has(evt.id);
+                    if (isNew) seenIds.add(evt.id); // mark seen after first render
+                    const agentName = agentNameMap.get(evt.agent_id) || evt.agent_id.slice(0, 8);
+                    const dotColor = evt.level === "error"
+                      ? "bg-red-400"
+                      : CATEGORY_COLORS[evt.category] || "bg-[#555]";
 
-function InlineCommand({ agent }: { agent: Agent | null }) {
-  const { authFetch } = useAuth();
-  const [command, setCommand] = useState("");
-  const [sending, setSending] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+                    return (
+                      <div
+                        key={evt.id}
+                        className={`relative pl-6 pr-3 py-2.5 hover:bg-[#111]/50 transition-colors ${
+                          isNew ? "animate-slideIn" : ""
+                        }`}
+                      >
+                        {/* Timeline dot */}
+                        <span className={`absolute left-[-4.5px] top-[14px] w-[9px] h-[9px] rounded-full ${dotColor} ring-2 ring-[#0a0a0a]`} />
 
-  useEffect(() => {
-    setCommand("");
-    setToast(null);
-  }, [agent?.id]);
-
-  if (!agent) return null;
-
-  const isRunning = agent.status === "running";
-
-  const handleSend = async () => {
-    if (!command.trim() || sending) return;
-    if (!isRunning) {
-      setToast("Agent is not running");
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    setSending(true);
-    try {
-      const res = await authFetch(`/api/agents/${agent.id}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: command, agent_id: agent.id }),
-      });
-      if (res.ok) {
-        setToast("Sent");
-        setCommand("");
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setToast(data.error || "Failed");
-      }
-    } catch {
-      setToast("Failed to send");
-    } finally {
-      setSending(false);
-      setTimeout(() => setToast(null), 3000);
-    }
-  };
-
-  return (
-    <div className="mt-2 bg-[#0a0a0a] border border-[#1a1a1a] rounded-lg p-2.5">
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[10px] text-[#666]">
-          Send to <span className="text-[#888]">{agent.name}</span>
-        </span>
-        {toast && (
-          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-            toast === "Sent" ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
-          }`}>{toast}</span>
-        )}
-      </div>
-      <div className="flex gap-1.5">
-        <input
-          type="text"
-          value={command}
-          onChange={e => setCommand(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && handleSend()}
-          placeholder={isRunning ? "Command..." : "Not running"}
-          disabled={sending || !isRunning}
-          autoFocus
-          className="flex-1 bg-[#111] border border-[#1a1a1a] rounded px-2 py-1.5 text-xs focus:outline-none focus:border-[#f97316] placeholder-[#444] disabled:opacity-50"
-        />
-        <button
-          onClick={handleSend}
-          disabled={sending || !command.trim() || !isRunning}
-          className="px-2.5 py-1.5 bg-[#f97316]/20 text-[#f97316] rounded text-xs font-medium hover:bg-[#f97316]/30 transition disabled:opacity-30"
-        >
-          {sending ? "..." : "Send"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// --- Task Card (matches TasksPage style) ---
-
-const taskStatusColors: Record<string, string> = {
-  pending: "bg-yellow-500/20 text-yellow-400",
-  running: "bg-blue-500/20 text-blue-400",
-  completed: "bg-green-500/20 text-green-400",
-  failed: "bg-red-500/20 text-red-400",
-  cancelled: "bg-gray-500/20 text-gray-400",
-};
-
-const TASK_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-function TaskCard({ task }: { task: Task }) {
-  return (
-    <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 hover:border-[#333] transition">
-      <div className="flex items-start justify-between mb-1.5">
-        <div className="flex-1 min-w-0">
-          <h4 className="text-sm font-medium truncate">{task.title}</h4>
-          <p className="text-xs text-[#666]">{task.agentName}</p>
-        </div>
-        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ml-2 ${taskStatusColors[task.status] || taskStatusColors.pending}`}>
-          {task.status}
-        </span>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#555]">
-        <span className="flex items-center gap-1">
-          {task.type === "recurring"
-            ? <RecurringIcon className="w-3 h-3" />
-            : task.execute_at
-              ? <ScheduledIcon className="w-3 h-3" />
-              : <TaskOnceIcon className="w-3 h-3" />
-          }
-          {task.type === "recurring" && task.recurrence ? formatCronShort(task.recurrence) : task.type}
-        </span>
-        {task.next_run && (
-          <span className="text-[#f97316]">{formatTaskRelative(task.next_run)}</span>
-        )}
-        {!task.next_run && task.execute_at && (
-          <span className="text-[#f97316]">{formatTaskRelative(task.execute_at)}</span>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-sm ${evt.level === "error" ? "text-red-400" : ""}`}>
+                              {describeEvent(evt, agentName)}
+                            </p>
+                            <div className="flex items-center gap-2 text-[11px] text-[#555] mt-0.5">
+                              <span className="text-[#888] font-medium">{agentName}</span>
+                              <span className="text-[#333]">&middot;</span>
+                              <span className="text-[#555]">{evt.category}</span>
+                              {evt.duration_ms != null && evt.duration_ms > 0 && (
+                                <>
+                                  <span className="text-[#333]">&middot;</span>
+                                  <span>{evt.duration_ms < 1000 ? `${evt.duration_ms}ms` : `${(evt.duration_ms / 1000).toFixed(1)}s`}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          <span className="text-[11px] text-[#555] shrink-0 pt-0.5">
+                            {timeAgo(evt.timestamp)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
   );
-}
-
-// --- Helpers ---
-
-function formatCronShort(cron: string): string {
-  try {
-    const parts = cron.trim().split(/\s+/);
-    if (parts.length !== 5) return cron;
-    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-
-    if (minute.startsWith("*/") && hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
-      const n = parseInt(minute.slice(2));
-      return n === 1 ? "Every min" : `Every ${n}min`;
-    }
-    if (minute !== "*" && !minute.includes("/") && hour === "*" && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
-      return "Hourly";
-    }
-    if (hour.startsWith("*/") && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
-      const n = parseInt(hour.slice(2));
-      return n === 1 ? "Hourly" : `Every ${n}h`;
-    }
-
-    const formatTime = (h: string, m: string): string => {
-      const hr = parseInt(h);
-      const mn = parseInt(m);
-      if (isNaN(hr)) return "";
-      const ampm = hr >= 12 ? "PM" : "AM";
-      const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-      return `${h12}:${mn.toString().padStart(2, "0")} ${ampm}`;
-    };
-
-    if (hour !== "*" && !hour.includes("/") && dayOfMonth === "*" && month === "*") {
-      const timeStr = formatTime(hour, minute);
-      if (dayOfWeek === "*") return `Daily ${timeStr}`;
-      const days = dayOfWeek.split(",").map(d => TASK_DAY_NAMES[parseInt(d.trim())] || d);
-      if (days.length === 1) return `${days[0]} ${timeStr}`;
-      return `${days.join(", ")} ${timeStr}`;
-    }
-    return cron;
-  } catch {
-    return cron;
-  }
-}
-
-function formatTaskRelative(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = date.getTime() - now.getTime();
-  const isFuture = diffMs > 0;
-  const absDiffMs = Math.abs(diffMs);
-  const minutes = Math.floor(absDiffMs / 60000);
-  const hours = Math.floor(absDiffMs / 3600000);
-  const timeStr = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const isToday = date.toDateString() === now.toDateString();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const isTomorrow = date.toDateString() === tomorrow.toDateString();
-
-  if (isToday) {
-    if (minutes < 1) return "now";
-    if (minutes < 60) return isFuture ? `in ${minutes}m` : `${minutes}m ago`;
-    return isFuture ? `in ${hours}h (${timeStr})` : `${hours}h ago`;
-  }
-  if (isTomorrow) return `Tomorrow ${timeStr}`;
-  return `${TASK_DAY_NAMES[date.getDay()]} ${timeStr}`;
 }
 
 function timeAgo(timestamp: string): string {

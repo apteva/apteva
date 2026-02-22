@@ -499,13 +499,12 @@ export async function handleSkillRoutes(
       const agentsWithSkill = AgentDB.findBySkill(skillMatch[1]);
       const runningAgents = agentsWithSkill.filter(a => a.status === "running" && a.port);
 
-      for (const agent of runningAgents) {
+      await Promise.allSettled(runningAgents.map(async (agent) => {
         try {
           const providerKey = ProviderKeys.getDecrypted(agent.provider);
           if (providerKey) {
             const config = buildAgentConfig(agent, providerKey);
             await pushConfigToAgent(agent.id, agent.port!, config);
-            // Push skills via /skills endpoint
             if (config.skills?.definitions?.length > 0) {
               await pushSkillsToAgent(agent.id, agent.port!, config.skills.definitions);
             }
@@ -514,7 +513,7 @@ export async function handleSkillRoutes(
         } catch (err) {
           console.error(`Failed to push skill update to agent ${agent.name}:`, err);
         }
-      }
+      }));
 
       return json({ skill: updated, agents_updated: runningAgents.length });
     } catch (err) {

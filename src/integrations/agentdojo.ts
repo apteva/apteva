@@ -56,18 +56,30 @@ export const AgentDojoProvider: IntegrationProvider = {
       console.error("AgentDojo listApps providers error:", providersRes.status);
     }
 
-    // Index providers by name for quick lookup
+    // Index providers by id and name for quick lookup
+    const providerById = new Map<number, any>();
     const providerByName = new Map<string, any>();
     for (const p of providers) {
+      if (p.id) providerById.set(p.id, p);
       providerByName.set(p.name, p);
       if (p.display_name) providerByName.set(p.display_name.toLowerCase(), p);
     }
 
-    // Map toolkits to apps, enriching auth info from providers
+    // Map toolkits to apps, enriching auth info from providers.
+    // Use auth_provider_id from the toolkit to find the parent provider —
+    // one provider can serve many toolkits (e.g. provider "omnikit" id=49
+    // serves "omnikit-messaging", "omnikit-cms", "omnikit-billing", etc.)
     const apps: IntegrationApp[] = toolkits.map((toolkit: any) => {
       const name = toolkit.name || toolkit.slug;
-      // Try to find matching provider for this toolkit
-      const provider = providerByName.get(name) || providerByName.get(name?.toLowerCase());
+
+      // Primary: match via auth_provider_id (reliable link from API)
+      let provider = toolkit.auth_provider_id
+        ? providerById.get(toolkit.auth_provider_id)
+        : null;
+      // Fallback: match by name
+      if (!provider) {
+        provider = providerByName.get(name) || providerByName.get(name?.toLowerCase());
+      }
 
       let authSchemes: string[];
       if (provider) {
@@ -78,6 +90,19 @@ export const AgentDojoProvider: IntegrationProvider = {
         authSchemes = ["NONE"];
       }
 
+      // Build credential fields from provider auth_config
+      let credentialFields: IntegrationApp["credentialFields"] | undefined;
+      if (provider?.auth_config?.required_fields) {
+        const descriptions = provider.auth_config.field_descriptions || {};
+        const required = new Set(provider.auth_config.required_fields || []);
+        const allFields = [...(provider.auth_config.required_fields || []), ...(provider.auth_config.optional_fields || [])];
+        credentialFields = allFields.map((f: string) => ({
+          name: f,
+          description: descriptions[f] || undefined,
+          required: required.has(f),
+        }));
+      }
+
       return {
         id: String(toolkit.id),
         name: toolkit.display_name || toolkit.name,
@@ -86,13 +111,27 @@ export const AgentDojoProvider: IntegrationProvider = {
         logo: provider?.favicon || toolkit.icon_url || null,
         categories: [],
         authSchemes,
+        providerSlug: provider?.name || undefined,
+        credentialFields,
       };
     });
 
     // Also add any providers that don't match a toolkit (standalone OAuth providers)
     const toolkitNames = new Set(toolkits.map((t: any) => t.name));
+    const toolkitProviderIds = new Set(toolkits.map((t: any) => t.auth_provider_id).filter(Boolean));
     for (const p of providers) {
-      if (!toolkitNames.has(p.name)) {
+      if (!toolkitNames.has(p.name) && !toolkitProviderIds.has(p.id)) {
+        let credentialFields: IntegrationApp["credentialFields"] | undefined;
+        if (p.auth_config?.required_fields) {
+          const descriptions = p.auth_config.field_descriptions || {};
+          const required = new Set(p.auth_config.required_fields || []);
+          const allFields = [...(p.auth_config.required_fields || []), ...(p.auth_config.optional_fields || [])];
+          credentialFields = allFields.map((f: string) => ({
+            name: f,
+            description: descriptions[f] || undefined,
+            required: required.has(f),
+          }));
+        }
         apps.push({
           id: String(p.id),
           name: p.display_name || p.name,
@@ -101,6 +140,7 @@ export const AgentDojoProvider: IntegrationProvider = {
           logo: p.favicon || p.icon_url || null,
           categories: [],
           authSchemes: mapAuthSchemes(p.provider_type),
+          credentialFields,
         });
       }
     }
@@ -146,8 +186,9 @@ export const AgentDojoProvider: IntegrationProvider = {
     redirectUrl: string,
     credentials?: ConnectionCredentials
   ): Promise<ConnectionRequest> {
-    // OAuth flow: no credentials provided, or explicit OAUTH2 scheme
-    if (!credentials?.apiKey) {
+    // OAuth flow: no credentials provided (neither apiKey nor multi-field)
+    const hasCredentials = credentials?.apiKey || (credentials?.fields && Object.keys(credentials.fields).length > 0);
+    if (!hasCredentials) {
       // Init OAuth via MCP API
       const res = await fetch(`${AGENTDOJO_API_BASE}/oauth/init`, {
         method: "POST",
@@ -181,17 +222,58 @@ export const AgentDojoProvider: IntegrationProvider = {
     }
 
     // API key flow: store credential directly
+    // Support arbitrary credential fields via credentials.fields, fall back to single api_key
+    const credentialData = credentials.fields && Object.keys(credentials.fields).length > 0
+      ? credentials.fields
+      : { api_key: credentials.apiKey };
+
+    // Resolve toolkit slug to actual provider name/id — the credential API
+    // needs the provider (e.g. "pushover" id=26), not the toolkit slug
+    // (e.g. "pushover-notifications"). Fetch the toolkit to get auth_provider_id.
+    let providerName = appSlug;
+    let providerId: string | number = appSlug;
+    try {
+      const tkRes = await fetch(`${AGENTDOJO_API_BASE}/toolkits?include_tools=false`, {
+        headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+      });
+      if (tkRes.ok) {
+        const tkData = await tkRes.json();
+        const toolkits = tkData.toolkits || tkData.data || [];
+        const toolkit = toolkits.find((t: any) => t.name === appSlug || t.slug === appSlug);
+        if (toolkit?.auth_provider_id) {
+          // Fetch provider details
+          const provRes = await fetch(`${AGENTDOJO_API_BASE}/providers?is_active=true`, {
+            headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+          });
+          if (provRes.ok) {
+            const provData = await provRes.json();
+            const providers = provData.providers || provData.data || [];
+            const prov = providers.find((p: any) => p.id === toolkit.auth_provider_id);
+            if (prov) {
+              providerName = prov.name;
+              providerId = prov.id;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[AgentDojo] Failed to resolve provider for toolkit:", appSlug, e);
+    }
+
+    const credBody: Record<string, unknown> = {
+      name: providerName,
+      provider_id: providerId,
+      provider_name: providerName,
+      credential_data: credentialData,
+    };
+    console.log("[AgentDojo] Creating credential:", JSON.stringify(credBody));
     const res = await fetch(`${AGENTDOJO_API_BASE}/credentials`, {
       method: "POST",
       headers: {
         "X-API-Key": apiKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        provider_id: appSlug,
-        provider_name: appSlug,
-        credential_data: { api_key: credentials.apiKey },
-      }),
+      body: JSON.stringify(credBody),
     });
 
     if (!res.ok) {

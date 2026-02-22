@@ -1,4 +1,14 @@
+import { existsSync } from "fs";
 import { json, debug } from "./helpers";
+
+// Detect if running inside a Docker container
+async function isRunningInDocker(): Promise<boolean> {
+  try {
+    return existsSync("/.dockerenv") || existsSync("/run/.containerenv");
+  } catch {
+    return false;
+  }
+}
 import { startAgentProcess, setAgentStatus } from "./agent-utils";
 import { AgentDB, UserDB } from "../../db";
 import { ProviderKeys, Onboarding, getProvidersWithStatus, PROVIDERS, type ProviderId } from "../../providers";
@@ -55,6 +65,7 @@ export async function handleProviderRoutes(
   // GET /api/providers/ollama/status - Check if Ollama is running
   if (path === "/api/providers/ollama/status" && method === "GET") {
     const ollamaUrl = ProviderKeys.getDecrypted("ollama") || "http://localhost:11434";
+    const isDocker = await isRunningInDocker();
 
     try {
       const response = await fetch(`${ollamaUrl}/api/tags`, {
@@ -68,11 +79,96 @@ export async function handleProviderRoutes(
           connected: true,
           url: ollamaUrl,
           modelCount: data.models?.length || 0,
+          isDocker,
         });
       }
-      return json({ connected: false, url: ollamaUrl, error: "Ollama not responding" });
+      return json({ connected: false, url: ollamaUrl, error: "Ollama not responding", isDocker });
     } catch {
-      return json({ connected: false, url: ollamaUrl, error: "Ollama not reachable" });
+      return json({ connected: false, url: ollamaUrl, error: "Ollama not reachable", isDocker });
+    }
+  }
+
+  // POST /api/providers/ollama/install - Install Ollama automatically
+  if (path === "/api/providers/ollama/install" && method === "POST") {
+    // Don't allow install inside Docker containers
+    if (await isRunningInDocker()) {
+      return json({ success: false, error: "Cannot install Ollama inside a Docker container. Configure an external Ollama URL instead." }, 400);
+    }
+
+    // Only supported on Linux/macOS
+    const platform = process.platform;
+    if (platform !== "linux" && platform !== "darwin") {
+      return json({ success: false, error: "Auto-install is only supported on Linux and macOS. Please download from https://ollama.com/download" }, 400);
+    }
+
+    // Check if already installed
+    try {
+      const which = Bun.spawnSync(["which", "ollama"]);
+      if (which.exitCode === 0) {
+        // Already installed, just make sure it's running
+        Bun.spawn(["ollama", "serve"], { stdout: "ignore", stderr: "ignore" });
+        // Wait a moment for it to start
+        await new Promise(r => setTimeout(r, 2000));
+        return json({ success: true, message: "Ollama is already installed", alreadyInstalled: true });
+      }
+    } catch { /* not installed */ }
+
+    // Install Ollama using official install script
+    try {
+      const proc = Bun.spawnSync(["bash", "-c", "curl -fsSL https://ollama.com/install.sh | sh"], {
+        timeout: 120_000, // 2 minute timeout
+        stderr: "pipe",
+        stdout: "pipe",
+      });
+
+      if (proc.exitCode !== 0) {
+        const stderr = proc.stderr.toString().trim();
+        return json({ success: false, error: `Installation failed: ${stderr || "Unknown error"}` }, 500);
+      }
+
+      // Start Ollama serve in background
+      Bun.spawn(["ollama", "serve"], { stdout: "ignore", stderr: "ignore" });
+
+      // Wait for it to come up
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Verify it's running
+      try {
+        const check = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) });
+        if (check.ok) {
+          return json({ success: true, message: "Ollama installed and running" });
+        }
+      } catch { /* may still be starting */ }
+
+      return json({ success: true, message: "Ollama installed. It may take a moment to start." });
+    } catch (err: any) {
+      return json({ success: false, error: `Installation failed: ${err.message}` }, 500);
+    }
+  }
+
+  // POST /api/providers/ollama/pull - Pull a model
+  if (path === "/api/providers/ollama/pull" && method === "POST") {
+    const body = await req.json() as { model?: string };
+    const model = body.model;
+    if (!model) {
+      return json({ error: "Model name required" }, 400);
+    }
+
+    try {
+      const ollamaUrl = ProviderKeys.getDecrypted("ollama") || "http://localhost:11434";
+      const response = await fetch(`${ollamaUrl}/api/pull`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: model }),
+      });
+
+      if (!response.ok) {
+        return json({ success: false, error: "Failed to start model pull" }, 500);
+      }
+
+      return json({ success: true, message: `Pulling ${model}...` });
+    } catch (err: any) {
+      return json({ success: false, error: `Failed to pull model: ${err.message}` }, 500);
     }
   }
 
@@ -216,37 +312,32 @@ export async function handleProviderRoutes(
         a => a.status === "running" && a.provider === providerId
       );
 
-      const restartResults: Array<{ id: string; name: string; success: boolean; error?: string }> = [];
+      // Stop all agents first
       for (const agent of runningAgents) {
-        try {
-          // Stop the agent
-          const agentProc = agentProcesses.get(agent.id);
-          if (agentProc) {
-            agentProc.proc.kill();
-            agentProcesses.delete(agent.id);
-          }
-          setAgentStatus(agent.id, "stopped", "provider_restart");
-
-          // Wait a moment for port to be released
-          await new Promise(r => setTimeout(r, 500));
-
-          // Restart the agent with new key
-          const startResult = await startAgentProcess(agent, { silent: true });
-          restartResults.push({
-            id: agent.id,
-            name: agent.name,
-            success: startResult.success,
-            error: startResult.error,
-          });
-        } catch (e) {
-          restartResults.push({
-            id: agent.id,
-            name: agent.name,
-            success: false,
-            error: String(e),
-          });
+        const agentProc = agentProcesses.get(agent.id);
+        if (agentProc) {
+          agentProc.proc.kill();
+          agentProcesses.delete(agent.id);
         }
+        setAgentStatus(agent.id, "stopped", "provider_restart");
       }
+
+      // Wait once for ports to be released
+      if (runningAgents.length > 0) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      // Restart all agents in parallel
+      const restartResults = await Promise.all(
+        runningAgents.map(async (agent) => {
+          try {
+            const startResult = await startAgentProcess(agent, { silent: true });
+            return { id: agent.id, name: agent.name, success: startResult.success, error: startResult.error };
+          } catch (e) {
+            return { id: agent.id, name: agent.name, success: false, error: String(e) };
+          }
+        })
+      );
 
       return json({
         success: true,

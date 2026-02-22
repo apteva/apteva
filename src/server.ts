@@ -5,7 +5,7 @@ import { serveStatic } from "./routes/static";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
-import { initDatabase, AgentDB, ProviderKeysDB, McpServerDB, ChannelDB, type McpServer, type Agent } from "./db";
+import { initDatabase, AgentDB, ProviderKeysDB, McpServerDB, ChannelDB, TelemetryDB, type McpServer, type Agent } from "./db";
 import { authMiddleware, type AuthContext } from "./auth/middleware";
 import { startMcpProcess } from "./mcp-client";
 import {
@@ -103,6 +103,12 @@ if (await envFile.exists()) {
 // Initialize database (silently)
 initDatabase(DATA_DIR);
 
+// Clean up old telemetry events (keep last 30 days)
+try {
+  const deleted = TelemetryDB.deleteOlderThan(30);
+  if (deleted > 0) console.log(`[db] Cleaned up ${deleted} telemetry events older than 30 days`);
+} catch { /* ignore */ }
+
 // Initialize version tracking
 initVersionTracking(DATA_DIR);
 
@@ -127,37 +133,31 @@ async function cleanupOrphanedProcesses(): Promise<void> {
 
   if (assignedPorts.length === 0) return;
 
-  let cleaned = 0;
-  for (const port of assignedPorts) {
+  // Check all ports in parallel
+  const results = await Promise.allSettled(assignedPorts.map(async (port) => {
     try {
       const res = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(200) });
-      if (res.ok) {
-        // Orphaned process on this port - shut it down gracefully first
-        try {
-          await fetch(`http://localhost:${port}/shutdown`, { method: "POST", signal: AbortSignal.timeout(500) });
-          await new Promise(r => setTimeout(r, 500)); // Wait for graceful shutdown
-        } catch {
-          // Graceful shutdown failed
+      if (!res.ok) return false;
+      // Orphaned process - shut it down gracefully
+      try {
+        await fetch(`http://localhost:${port}/shutdown`, { method: "POST", signal: AbortSignal.timeout(500) });
+        await new Promise(r => setTimeout(r, 500));
+      } catch {}
+      // Force kill if still running
+      try {
+        const check = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(200) });
+        if (check.ok) {
+          const { execSync } = await import("child_process");
+          execSync(`lsof -ti :${port} | xargs -r kill -9 2>/dev/null || true`, { stdio: "ignore" });
         }
-
-        // Check if still running and force kill if needed
-        try {
-          const check = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(200) });
-          if (check.ok) {
-            // Still running - force kill via lsof
-            const { execSync } = await import("child_process");
-            execSync(`lsof -ti :${port} | xargs -r kill -9 2>/dev/null || true`, { stdio: "ignore" });
-          }
-        } catch {
-          // Not responding anymore - good
-        }
-        cleaned++;
-      }
+      } catch {}
+      return true;
     } catch {
-      // Port not in use - good
+      return false;
     }
-  }
+  }));
 
+  const cleaned = results.filter(r => r.status === "fulfilled" && r.value).length;
   if (cleaned > 0) {
     console.log(`  [cleanup] Stopped ${cleaned} orphaned agent process(es)`);
   }
@@ -490,14 +490,13 @@ if (hasRestarts) {
       }
     }
 
-    // Then restart agents
+    // Then restart agents - in parallel
     if (agentsToRestart.length > 0) {
       console.log(`  ${c.darkGray}Agents${c.reset}    ${c.gray}Restarting ${agentsToRestart.length} agent(s)...${c.reset}`);
 
-      for (const agent of agentsToRestart) {
+      await Promise.allSettled(agentsToRestart.map(async (agent) => {
         try {
           const result = await startAgentProcess(agent, { silent: true });
-
           if (result.success) {
             console.log(`  ${c.gray}  ✓ ${agent.name} on :${result.port}${c.reset}`);
           } else {
@@ -506,7 +505,7 @@ if (hasRestarts) {
         } catch (err) {
           console.log(`  ${c.gray}  ✗ ${agent.name}: ${err}${c.reset}`);
         }
-      }
+      }));
     }
 
     // Restart channels (after agents, since channels depend on running agents)
@@ -514,7 +513,7 @@ if (hasRestarts) {
       const { startChannel } = await import("./channels");
       console.log(`  ${c.darkGray}Channels${c.reset}  ${c.gray}Restarting ${channelsToRestart.length} channel(s)...${c.reset}`);
 
-      for (const channel of channelsToRestart) {
+      await Promise.allSettled(channelsToRestart.map(async (channel) => {
         try {
           const result = await startChannel(channel.id);
           if (result.success) {
@@ -525,7 +524,7 @@ if (hasRestarts) {
         } catch (err) {
           console.log(`  ${c.gray}  ✗ ${channel.name}: ${err}${c.reset}`);
         }
-      }
+      }));
     }
   })();
 }

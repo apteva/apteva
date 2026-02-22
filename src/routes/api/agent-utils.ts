@@ -606,6 +606,7 @@ export async function startAgentProcess(
     }
     const config = buildAgentConfig(agent, providerKey);
     console.log(`[DEBUG] operator config being pushed:`, JSON.stringify(config.operator, null, 2));
+    console.log(`[DEBUG] builtin_tools:`, JSON.stringify(config.operator?.builtin_tools));
     const configResult = await pushConfigToAgent(agent.id, port, config);
     if (!configResult.success) {
       if (!silent) {

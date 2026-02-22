@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Select } from "../common/Select";
 import { useTelemetryContext, useProjects, useAuth, type TelemetryEvent } from "../../context";
+import {
+  AreaChart, Area, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from "recharts";
 
 interface TelemetryStats {
   total_events: number;
@@ -13,6 +17,15 @@ interface TelemetryStats {
 
 interface UsageByAgent {
   agent_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  llm_calls: number;
+  tool_calls: number;
+  errors: number;
+}
+
+interface DailyUsage {
+  date: string;
   input_tokens: number;
   output_tokens: number;
   llm_calls: number;
@@ -50,6 +63,7 @@ export function TelemetryPage() {
   const [fetchedStats, setFetchedStats] = useState<TelemetryStats | null>(null);
   const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
   const [fetchedUsage, setFetchedUsage] = useState<UsageByAgent[]>([]);
+  const [dailyUsage, setDailyUsage] = useState<DailyUsage[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({
     level: "",
@@ -127,6 +141,18 @@ export function TelemetryPage() {
       const usageRes = await authFetch(`/api/telemetry/usage?${usageParams}`);
       const usageData = await usageRes.json();
       setFetchedUsage(usageData.usage || []);
+
+      // Fetch daily usage for charts
+      const dailyParams = new URLSearchParams();
+      dailyParams.set("group_by", "day");
+      if (projectParam) dailyParams.set("project_id", projectParam);
+      const dailyRes = await authFetch(`/api/telemetry/usage?${dailyParams}`);
+      const dailyData = await dailyRes.json();
+      // Sort by date ascending for charts
+      const sorted = (dailyData.usage || []).sort((a: DailyUsage, b: DailyUsage) =>
+        a.date.localeCompare(b.date)
+      );
+      setDailyUsage(sorted);
     } catch (e) {
       console.error("Failed to fetch telemetry:", e);
     }
@@ -370,6 +396,164 @@ export function TelemetryPage() {
             <StatCard label="Output Tokens" value={formatNumber(stats.total_output_tokens)} />
           </div>
         )}
+
+        {/* Charts */}
+        {(() => {
+          // Use daily data if we have multiple days, otherwise aggregate events by hour
+          const useDaily = dailyUsage.length > 1;
+          const chartData = useDaily ? dailyUsage : (() => {
+            // Aggregate all visible events by hour
+            const buckets = new Map<string, { date: string; llm_calls: number; tool_calls: number; errors: number; input_tokens: number; output_tokens: number }>();
+            for (const event of allEvents) {
+              const d = new Date(event.timestamp);
+              const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:00`;
+              if (!buckets.has(key)) {
+                buckets.set(key, { date: key, llm_calls: 0, tool_calls: 0, errors: 0, input_tokens: 0, output_tokens: 0 });
+              }
+              const b = buckets.get(key)!;
+              const s = extractEventStats(event);
+              b.llm_calls += s.llm_calls;
+              b.tool_calls += s.tool_calls;
+              b.errors += s.errors;
+              b.input_tokens += s.input_tokens;
+              b.output_tokens += s.output_tokens;
+            }
+            return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
+          })();
+          const chartLabel = useDaily ? "Daily" : "Hourly";
+
+          if (chartData.length === 0) return null;
+
+          return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+            {/* Activity Chart */}
+            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+              <h3 className="text-sm font-medium text-[#888] mb-4">{chartLabel} Activity</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
+                  <XAxis
+                    dataKey="date"
+                    stroke="#444"
+                    tick={{ fill: "#666", fontSize: 11 }}
+                    tickFormatter={(v) => {
+                      if (!useDaily && v.includes(" ")) {
+                        return v.split(" ")[1];
+                      }
+                      const d = new Date(v + "T00:00:00");
+                      return `${d.getMonth() + 1}/${d.getDate()}`;
+                    }}
+                  />
+                  <YAxis stroke="#444" tick={{ fill: "#666", fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#111",
+                      border: "1px solid #333",
+                      borderRadius: "8px",
+                      fontSize: 12,
+                    }}
+                    labelStyle={{ color: "#888" }}
+                    cursor={{ stroke: "rgba(255,255,255,0.1)" }}
+                    labelFormatter={(v) => useDaily ? new Date(v + "T00:00:00").toLocaleDateString() : v}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 11 }}
+                    iconType="circle"
+                    iconSize={8}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="llm_calls"
+                    name="LLM Calls"
+                    stroke="#f97316"
+                    fill="#f97316"
+                    fillOpacity={0.15}
+                    strokeWidth={1.5}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="tool_calls"
+                    name="Tool Calls"
+                    stroke="#fb923c"
+                    fill="#fb923c"
+                    fillOpacity={0.08}
+                    strokeWidth={1.5}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="errors"
+                    name="Errors"
+                    stroke="#ef4444"
+                    fill="#ef4444"
+                    fillOpacity={0.1}
+                    strokeWidth={1.5}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Token Usage Chart */}
+            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+              <h3 className="text-sm font-medium text-[#888] mb-4">{chartLabel} Token Usage</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
+                  <XAxis
+                    dataKey="date"
+                    stroke="#444"
+                    tick={{ fill: "#666", fontSize: 11 }}
+                    tickFormatter={(v) => {
+                      if (!useDaily && v.includes(" ")) {
+                        return v.split(" ")[1];
+                      }
+                      const d = new Date(v + "T00:00:00");
+                      return `${d.getMonth() + 1}/${d.getDate()}`;
+                    }}
+                  />
+                  <YAxis
+                    stroke="#444"
+                    tick={{ fill: "#666", fontSize: 11 }}
+                    tickFormatter={(v) => {
+                      if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
+                      if (v >= 1000) return `${(v / 1000).toFixed(0)}K`;
+                      return v;
+                    }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#111",
+                      border: "1px solid #333",
+                      borderRadius: "8px",
+                      fontSize: 12,
+                    }}
+                    labelStyle={{ color: "#888" }}
+                    cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                    labelFormatter={(v) => useDaily ? new Date(v + "T00:00:00").toLocaleDateString() : v}
+                    formatter={(value: number) => [value.toLocaleString(), undefined]}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 11 }}
+                    iconType="circle"
+                    iconSize={8}
+                  />
+                  <Bar
+                    dataKey="input_tokens"
+                    name="Input Tokens"
+                    fill="#f97316"
+                    radius={[2, 2, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="output_tokens"
+                    name="Output Tokens"
+                    fill="#ea580c"
+                    radius={[2, 2, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          );
+        })()}
 
         {/* Usage by Agent */}
         {usage.length > 0 && (

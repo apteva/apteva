@@ -99,21 +99,16 @@ export async function handleSystemRoutes(
       return json({ success: false, error: result.error }, 500);
     }
 
-    // Restart agents that were running
-    const restartResults: { id: string; name: string; success: boolean; error?: string }[] = [];
-    for (const agentId of agentsToRestart) {
-      const agent = AgentDB.findById(agentId);
-      if (agent) {
+    // Restart agents that were running - in parallel
+    const restartResults = await Promise.all(
+      agentsToRestart.map(async (agentId) => {
+        const agent = AgentDB.findById(agentId);
+        if (!agent) return null;
         console.log(`Restarting agent ${agent.name} after update...`);
         const startResult = await startAgentProcess(agent);
-        restartResults.push({
-          id: agent.id,
-          name: agent.name,
-          success: startResult.success,
-          error: startResult.error,
-        });
-      }
-    }
+        return { id: agent.id, name: agent.name, success: startResult.success, error: startResult.error };
+      })
+    ).then(r => r.filter(Boolean));
 
     return json({
       success: true,

@@ -10,9 +10,21 @@ import { agentProcesses } from "./server";
 import { getTriggerProvider, getTriggerProviderIds, registerTriggerProvider } from "./triggers";
 import { ComposioTriggerProvider } from "./triggers/composio";
 import { AgentDojoTriggerProvider } from "./triggers/agentdojo";
-import { getProvider, registerProvider } from "./integrations";
+import { getProvider, getProviderIds, registerProvider } from "./integrations";
 import { ComposioProvider } from "./integrations/composio";
-import { AgentDojoProvider } from "./integrations/agentdojo";
+import {
+  AgentDojoProvider,
+  listServers as listAgentDojoServers,
+  createServer as createAgentDojoServer,
+  getServer as getAgentDojoServer,
+} from "./integrations/agentdojo";
+import {
+  listMcpServers as listComposioServers,
+  createMcpServer as createComposioServer,
+  getAuthConfigForToolkit as getComposioAuthConfig,
+  getUserIdForAuthConfig as getComposioUserForAuth,
+  createMcpServerInstance as createComposioInstance,
+} from "./integrations/composio";
 
 // Register trigger + integration providers on module load
 registerTriggerProvider(ComposioTriggerProvider);
@@ -29,6 +41,7 @@ interface JsonRpcRequest {
   method: string;
   params?: any;
 }
+
 
 interface JsonRpcResponse {
   jsonrpc: "2.0";
@@ -65,7 +78,7 @@ const PLATFORM_TOOLS = [
     description: `Create a new AI agent. The provider must have an API key configured — use list_providers first to check.
 
 PROVIDERS & MODELS (use list_providers to see which have keys):
-- anthropic: claude-sonnet-4-5 (recommended), claude-haiku-4-5 (fast/cheap)
+- anthropic: claude-sonnet-4-6 (recommended), claude-sonnet-4-5, claude-haiku-4-5 (fast/cheap)
 - openai: gpt-4o (recommended), gpt-4o-mini (fast/cheap)
 - groq: llama-3.3-70b-versatile (recommended), llama-3.1-8b-instant (fast)
 - gemini: gemini-3-pro-preview (recommended), gemini-3-flash-preview (fast)
@@ -111,7 +124,14 @@ TIPS:
   },
   {
     name: "update_agent",
-    description: "Update an existing agent's configuration. Only provide fields you want to change. If the agent is running, restart it after updating for changes to take effect.",
+    description: `Update an existing agent's configuration. Only provide fields you want to change. If the agent is running, restart it after updating for changes to take effect.
+
+SKILLS & MCP SERVERS:
+- Pass skill_ids or mcp_server_ids to SET the full list (replaces existing).
+- Use add_skills / remove_skills to add/remove individual skills without replacing the whole list.
+- Use add_mcp_servers / remove_mcp_servers to add/remove individual MCP servers.
+- Adding MCP servers automatically enables the mcp feature.
+- Use list_skills and list_mcp_servers to find IDs.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -132,6 +152,12 @@ TIPS:
             files: { type: "boolean" },
           },
         },
+        skill_ids: { type: "array", items: { type: "string" }, description: "Set the full list of skill IDs (replaces existing)" },
+        add_skills: { type: "array", items: { type: "string" }, description: "Skill IDs to add (keeps existing)" },
+        remove_skills: { type: "array", items: { type: "string" }, description: "Skill IDs to remove" },
+        mcp_server_ids: { type: "array", items: { type: "string" }, description: "Set the full list of MCP server IDs (replaces existing)" },
+        add_mcp_servers: { type: "array", items: { type: "string" }, description: "MCP server IDs to add (keeps existing)" },
+        remove_mcp_servers: { type: "array", items: { type: "string" }, description: "MCP server IDs to remove" },
       },
       required: ["agent_id"],
     },
@@ -257,30 +283,6 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
     },
   },
   {
-    name: "assign_mcp_server_to_agent",
-    description: "Assign an MCP server to an agent so the agent can use its tools. This automatically enables the MCP feature on the agent. If the agent is running, restart it for changes to take effect.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        agent_id: { type: "string", description: "The agent ID" },
-        server_id: { type: "string", description: "The MCP server ID to assign" },
-      },
-      required: ["agent_id", "server_id"],
-    },
-  },
-  {
-    name: "unassign_mcp_server_from_agent",
-    description: "Remove an MCP server from an agent.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        agent_id: { type: "string", description: "The agent ID" },
-        server_id: { type: "string", description: "The MCP server ID to remove" },
-      },
-      required: ["agent_id", "server_id"],
-    },
-  },
-  {
     name: "get_dashboard_stats",
     description: "Get platform overview stats: agent counts, task counts, provider counts.",
     inputSchema: {
@@ -332,30 +334,6 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
         enabled: { type: "boolean", description: "Whether to enable (true) or disable (false) the skill" },
       },
       required: ["skill_id", "enabled"],
-    },
-  },
-  {
-    name: "assign_skill_to_agent",
-    description: "Assign a skill to an agent. The skill's instructions and tool permissions will be pushed to the agent on next start/restart.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        agent_id: { type: "string", description: "The agent ID" },
-        skill_id: { type: "string", description: "The skill ID to assign" },
-      },
-      required: ["agent_id", "skill_id"],
-    },
-  },
-  {
-    name: "unassign_skill_from_agent",
-    description: "Remove a skill from an agent.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        agent_id: { type: "string", description: "The agent ID" },
-        skill_id: { type: "string", description: "The skill ID to remove" },
-      },
-      required: ["agent_id", "skill_id"],
     },
   },
   {
@@ -581,7 +559,158 @@ IMPORTANT: Some triggers require extra config fields (e.g. GitHub triggers need 
       required: ["subscription_id"],
     },
   },
+  // Integration management tools
+  {
+    name: "list_integration_providers",
+    description: "List available integration providers (e.g. agentdojo, composio) and whether they have API keys configured. Integration providers give access to third-party apps, OAuth connections, and MCP server creation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+    },
+  },
+  {
+    name: "list_integration_apps",
+    description: `List available apps/toolkits from an integration provider. Each app represents a service (e.g. GitHub, Slack, Stripe) that can be connected via OAuth or API key.
+
+Returns apps with their auth schemes (OAUTH2, API_KEY), connection status, and categories.
+Use this to browse what's available before connecting an app.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: agentdojo or composio" },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+        search: { type: "string", description: "Optional search filter for app name/slug" },
+      },
+      required: ["provider"],
+    },
+  },
+  {
+    name: "connect_integration_app",
+    description: `Connect/authenticate an app by storing credentials on the integration provider. This enables the app's tools to be used in MCP servers.
+
+NOTE: Only API_KEY auth is supported from the assistant. For OAuth apps, direct the user to the Browse Toolkits UI.
+
+Some apps require multiple credential fields (e.g. Pushover needs appToken + userKey). Use list_integration_apps to see credentialFields for each app — if present, pass all required fields in the "credentials" object. If the app has no credentialFields, pass a single "api_key".
+
+WORKFLOW:
+1. list_integration_apps to find the app and its credentialFields
+2. connect_integration_app with the app slug and credentials
+3. create_integration_config to create an MCP server from the connected app
+4. add_integration_config_locally to add it as a local MCP server`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: agentdojo or composio" },
+        app_slug: { type: "string", description: "App slug (from list_integration_apps)" },
+        api_key: { type: "string", description: "Single API key (for apps with no credentialFields)" },
+        credentials: {
+          type: "object",
+          description: "Credential fields as key-value pairs (e.g. { appToken: '...', userKey: '...' }). Use this for apps with multiple credentialFields. Takes priority over api_key.",
+        },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+      required: ["provider", "app_slug"],
+    },
+  },
+  {
+    name: "list_integration_connections",
+    description: "List connected accounts (credentials) for an integration provider. Shows which apps have been authenticated and their status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: agentdojo or composio" },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+      required: ["provider"],
+    },
+  },
+  {
+    name: "disconnect_integration_app",
+    description: "Disconnect/revoke a connected account (credential) from an integration provider.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: agentdojo or composio" },
+        connection_id: { type: "string", description: "Connection/credential ID (from list_integration_connections)" },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+      required: ["provider", "connection_id"],
+    },
+  },
+  {
+    name: "list_integration_configs",
+    description: "List MCP server configs on an integration provider. These are remote MCP servers hosted by the provider that can be added locally.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: agentdojo or composio" },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+      required: ["provider"],
+    },
+  },
+  {
+    name: "create_integration_config",
+    description: `Create an MCP server config on an integration provider from a connected app/toolkit. This creates a remote MCP server on the provider that bundles the app's tools.
+
+After creation, use add_integration_config_locally to add it as a local MCP server.
+
+WORKFLOW:
+1. list_integration_apps → find the app slug
+2. Ensure app is connected (list_integration_connections or connect_integration_app)
+3. create_integration_config → creates remote MCP server
+4. add_integration_config_locally → adds it locally so agents can use it`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: agentdojo or composio" },
+        name: { type: "string", description: "Name for the MCP config (e.g. 'GitHub MCP', 'Slack Tools')" },
+        toolkit_slug: { type: "string", description: "Toolkit/app slug to create the config from" },
+        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
+      },
+      required: ["provider", "name", "toolkit_slug"],
+    },
+  },
+  {
+    name: "add_integration_config_locally",
+    description: `Add a remote integration MCP config as a local MCP server. This creates a local MCP server entry that connects to the provider's hosted MCP endpoint, making its tools available to agents.
+
+After adding, use assign_mcp_server_to_agent to give an agent access to these tools.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "Integration provider ID: agentdojo or composio" },
+        config_id: { type: "string", description: "Config/server ID on the provider (from list_integration_configs or create_integration_config)" },
+        project_id: { type: "string", description: "Project ID to scope the local server to (optional)" },
+      },
+      required: ["provider", "config_id"],
+    },
+  },
 ];
+
+// Build tools list — when PROJECTS_ENABLED, add project_id to required for all tools that accept it
+function getPlatformTools() {
+  const projectsEnabled = process.env.PROJECTS_ENABLED === "true";
+  if (!projectsEnabled) return PLATFORM_TOOLS;
+
+  return PLATFORM_TOOLS.map(tool => {
+    const props = tool.inputSchema.properties as Record<string, unknown> | undefined;
+    if (!props || !("project_id" in props)) return tool;
+
+    const existing = (tool.inputSchema as any).required || [];
+    if (existing.includes("project_id")) return tool;
+
+    return {
+      ...tool,
+      inputSchema: {
+        ...tool.inputSchema,
+        required: [...existing, "project_id"],
+      },
+    };
+  });
+}
 
 // Tool execution handlers
 async function executeTool(name: string, args: Record<string, any>): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
@@ -662,8 +791,46 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           updates.features = { ...agent.features, ...args.features };
         }
 
+        // Skills: set, add, or remove
+        let skills = agent.skills || [];
+        if (args.skill_ids !== undefined) {
+          skills = args.skill_ids;
+        }
+        if (args.add_skills) {
+          for (const sid of args.add_skills) {
+            if (!skills.includes(sid)) skills.push(sid);
+          }
+        }
+        if (args.remove_skills) {
+          skills = skills.filter((id: string) => !args.remove_skills.includes(id));
+        }
+        if (args.skill_ids !== undefined || args.add_skills || args.remove_skills) {
+          updates.skills = skills;
+        }
+
+        // MCP servers: set, add, or remove
+        let mcpServers = agent.mcp_servers || [];
+        if (args.mcp_server_ids !== undefined) {
+          mcpServers = args.mcp_server_ids;
+        }
+        if (args.add_mcp_servers) {
+          for (const sid of args.add_mcp_servers) {
+            if (!mcpServers.includes(sid)) mcpServers.push(sid);
+          }
+        }
+        if (args.remove_mcp_servers) {
+          mcpServers = mcpServers.filter((id: string) => !args.remove_mcp_servers.includes(id));
+        }
+        if (args.mcp_server_ids !== undefined || args.add_mcp_servers || args.remove_mcp_servers) {
+          updates.mcp_servers = mcpServers;
+          // Auto-enable MCP feature if servers are being added
+          if (mcpServers.length > 0 && !agent.features.mcp) {
+            updates.features = { ...(updates.features || agent.features), mcp: true };
+          }
+        }
+
         const updated = AgentDB.update(args.agent_id, updates);
-        return { content: [{ type: "text", text: `Agent updated: ${JSON.stringify({ id: updated?.id, name: updated?.name }, null, 2)}` }] };
+        return { content: [{ type: "text", text: `Agent updated: ${JSON.stringify({ id: updated?.id, name: updated?.name, skills: updates.skills !== undefined ? updates.skills.length + " skills" : "unchanged", mcp_servers: updates.mcp_servers !== undefined ? updates.mcp_servers.length + " servers" : "unchanged" }, null, 2)}` }] };
       }
 
       case "delete_agent": {
@@ -754,8 +921,8 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
 
       case "list_mcp_servers": {
         const servers = args.project_id
-          ? McpServerDB.findByProject(args.project_id)
-          : McpServerDB.findAll();
+          ? McpServerDB.findByProjectLight(args.project_id)
+          : McpServerDB.findAllLight();
         const result = servers.map(s => ({
           id: s.id,
           name: s.name,
@@ -819,47 +986,13 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `MCP server deleted: ${server.name} (${server.id})` }] };
       }
 
-      case "assign_mcp_server_to_agent": {
-        const agent = AgentDB.findById(args.agent_id);
-        if (!agent) {
-          return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
-        }
-        const server = McpServerDB.findById(args.server_id);
-        if (!server) {
-          return { content: [{ type: "text", text: `MCP server not found: ${args.server_id}` }], isError: true };
-        }
-        const mcpServers = agent.mcp_servers || [];
-        if (mcpServers.includes(args.server_id)) {
-          return { content: [{ type: "text", text: `Server ${server.name} is already assigned to ${agent.name}` }] };
-        }
-        AgentDB.update(args.agent_id, { mcp_servers: [...mcpServers, args.server_id] });
-        // Enable MCP feature if not already
-        if (!agent.features.mcp) {
-          AgentDB.update(args.agent_id, { features: { ...agent.features, mcp: true } });
-        }
-        return { content: [{ type: "text", text: `Assigned MCP server "${server.name}" to agent "${agent.name}". Restart the agent for changes to take effect.` }] };
-      }
-
-      case "unassign_mcp_server_from_agent": {
-        const agent = AgentDB.findById(args.agent_id);
-        if (!agent) {
-          return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
-        }
-        const mcpServers = agent.mcp_servers || [];
-        if (!mcpServers.includes(args.server_id)) {
-          return { content: [{ type: "text", text: `Server is not assigned to this agent` }] };
-        }
-        AgentDB.update(args.agent_id, { mcp_servers: mcpServers.filter((id: string) => id !== args.server_id) });
-        return { content: [{ type: "text", text: `Removed MCP server from agent "${agent.name}". Restart the agent for changes to take effect.` }] };
-      }
-
       case "get_dashboard_stats": {
         const agentCount = AgentDB.count();
         const runningCount = AgentDB.countRunning();
         const projectCount = ProjectDB.count();
         const providers = getProvidersWithStatus().filter(p => p.type === "llm");
         const configuredProviders = providers.filter(p => p.hasKey).length;
-        const mcpServerCount = McpServerDB.findAll().length;
+        const mcpServerCount = McpServerDB.count();
         const skillCount = SkillDB.count();
 
         return {
@@ -945,36 +1078,6 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         }
         SkillDB.setEnabled(args.skill_id, args.enabled);
         return { content: [{ type: "text", text: `Skill "${skill.name}" ${args.enabled ? "enabled" : "disabled"}` }] };
-      }
-
-      case "assign_skill_to_agent": {
-        const agent = AgentDB.findById(args.agent_id);
-        if (!agent) {
-          return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
-        }
-        const skill = SkillDB.findById(args.skill_id);
-        if (!skill) {
-          return { content: [{ type: "text", text: `Skill not found: ${args.skill_id}` }], isError: true };
-        }
-        const skills = agent.skills || [];
-        if (skills.includes(args.skill_id)) {
-          return { content: [{ type: "text", text: `Skill "${skill.name}" is already assigned to "${agent.name}"` }] };
-        }
-        AgentDB.update(args.agent_id, { skills: [...skills, args.skill_id] });
-        return { content: [{ type: "text", text: `Assigned skill "${skill.name}" to agent "${agent.name}". Restart the agent for changes to take effect.` }] };
-      }
-
-      case "unassign_skill_from_agent": {
-        const agent = AgentDB.findById(args.agent_id);
-        if (!agent) {
-          return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
-        }
-        const skills = agent.skills || [];
-        if (!skills.includes(args.skill_id)) {
-          return { content: [{ type: "text", text: `Skill is not assigned to this agent` }] };
-        }
-        AgentDB.update(args.agent_id, { skills: skills.filter((id: string) => id !== args.skill_id) });
-        return { content: [{ type: "text", text: `Removed skill from agent "${agent.name}". Restart the agent for changes to take effect.` }] };
       }
 
       case "create_skill": {
@@ -1313,6 +1416,272 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `Subscription "${sub.trigger_slug}" deleted` }] };
       }
 
+      // Integration management tools
+      case "list_integration_providers": {
+
+        const providerIds = getProviderIds();
+        const projectId = args.project_id || null;
+        const result = providerIds.map(id => {
+          const provider = getProvider(id);
+          const hasKey = !!ProviderKeys.getDecryptedForProject(id, projectId);
+          return { id, name: provider?.name || id, hasKey };
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "list_integration_apps": {
+
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const provider = getProvider(providerId);
+        if (!provider) {
+          return { content: [{ type: "text", text: `Unknown integration provider: ${providerId}. Available: ${getProviderIds().join(", ")}` }], isError: true };
+        }
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${provider.name} API key not configured` }], isError: true };
+        }
+        let apps = await provider.listApps(apiKey);
+        if (args.search) {
+          const s = args.search.toLowerCase();
+          apps = apps.filter(a =>
+            a.name.toLowerCase().includes(s) ||
+            a.slug.toLowerCase().includes(s) ||
+            a.description?.toLowerCase().includes(s)
+          );
+        }
+        // Also check which are connected
+        let connectedIds = new Set<string>();
+        try {
+          const accounts = await provider.listConnectedAccounts(apiKey, "platform-agent");
+          connectedIds = new Set(accounts.filter(a => a.status === "active").map(a => a.appId));
+        } catch {}
+        const result = apps.slice(0, 50).map(a => ({
+          slug: a.slug,
+          name: a.name,
+          description: a.description,
+          authSchemes: a.authSchemes,
+          categories: a.categories,
+          connected: connectedIds.has(a.slug) || (a.providerSlug ? connectedIds.has(a.providerSlug) : false),
+          credentialFields: a.credentialFields || undefined,
+        }));
+        return { content: [{ type: "text", text: `Found ${apps.length} apps (showing ${result.length}):\n${JSON.stringify(result, null, 2)}` }] };
+      }
+
+      case "connect_integration_app": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const provider = getProvider(providerId);
+        if (!provider) {
+          return { content: [{ type: "text", text: `Unknown integration provider: ${providerId}` }], isError: true };
+        }
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${provider.name} API key not configured` }], isError: true };
+        }
+        if (!args.api_key && !args.credentials) {
+          return { content: [{ type: "text", text: `Either api_key or credentials is required` }], isError: true };
+        }
+        // Build credential object — prefer multi-field credentials over single api_key
+        const creds: any = { authScheme: "API_KEY" as const };
+        if (args.credentials && Object.keys(args.credentials).length > 0) {
+          creds.fields = args.credentials;
+        } else {
+          creds.apiKey = args.api_key;
+        }
+        const connectionResult = await provider.initiateConnection(apiKey, "platform-agent", args.app_slug, "", creds);
+        if (connectionResult.status === "active") {
+          return { content: [{ type: "text", text: `Successfully connected "${args.app_slug}". Connection ID: ${connectionResult.connectionId || "N/A"}` }] };
+        }
+        return { content: [{ type: "text", text: `Connection initiated but status is ${connectionResult.status}. This may require OAuth — direct the user to the Browse Toolkits UI.` }] };
+      }
+
+      case "list_integration_connections": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const provider = getProvider(providerId);
+        if (!provider) {
+          return { content: [{ type: "text", text: `Unknown integration provider: ${providerId}` }], isError: true };
+        }
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${provider.name} API key not configured` }], isError: true };
+        }
+        const accounts = await provider.listConnectedAccounts(apiKey, "platform-agent");
+        const result = accounts.map(a => ({
+          id: a.id,
+          appName: a.appName,
+          appId: a.appId,
+          status: a.status,
+          createdAt: a.createdAt,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "disconnect_integration_app": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const provider = getProvider(providerId);
+        if (!provider) {
+          return { content: [{ type: "text", text: `Unknown integration provider: ${providerId}` }], isError: true };
+        }
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${provider.name} API key not configured` }], isError: true };
+        }
+        const success = await provider.disconnect(apiKey, args.connection_id);
+        return { content: [{ type: "text", text: success ? `Disconnected successfully` : `Failed to disconnect` }], isError: !success };
+      }
+
+      case "list_integration_configs": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${providerId} API key not configured` }], isError: true };
+        }
+
+        if (providerId === "agentdojo") {
+          const servers = await listAgentDojoServers(apiKey, true);
+          const result = servers.map(s => ({
+            id: s.id,
+            name: s.name,
+            slug: s.slug,
+            url: s.url,
+            toolsCount: s.tools?.length || 0,
+          }));
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        } else if (providerId === "composio") {
+          const servers = await listComposioServers(apiKey);
+          const result = servers.map(s => ({
+            id: s.id,
+            name: s.name,
+            url: s.mcpUrl,
+            toolkits: s.toolkits,
+          }));
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        return { content: [{ type: "text", text: `Config listing not supported for provider: ${providerId}` }], isError: true };
+      }
+
+      case "create_integration_config": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${providerId} API key not configured` }], isError: true };
+        }
+
+        if (providerId === "agentdojo") {
+          const server = await createAgentDojoServer(apiKey, args.name, [args.toolkit_slug]);
+          if (!server) {
+            return { content: [{ type: "text", text: "Failed to create MCP config on AgentDojo" }], isError: true };
+          }
+          return { content: [{ type: "text", text: `MCP config created on AgentDojo:\n${JSON.stringify({ id: server.id, name: server.name, slug: server.slug, url: server.url }, null, 2)}\n\nUse add_integration_config_locally to add it as a local MCP server.` }] };
+        } else if (providerId === "composio") {
+          // For Composio, we need the authConfigId for the toolkit
+          const authConfigId = await getComposioAuthConfig(apiKey, args.toolkit_slug);
+          if (!authConfigId) {
+            return { content: [{ type: "text", text: `No auth config found for toolkit "${args.toolkit_slug}". Make sure the app is connected first.` }], isError: true };
+          }
+          const server = await createComposioServer(apiKey, args.name, [authConfigId]);
+          if (!server) {
+            return { content: [{ type: "text", text: "Failed to create MCP config on Composio" }], isError: true };
+          }
+          // Create server instance for the user
+          const userId = await getComposioUserForAuth(apiKey, authConfigId);
+          if (userId) {
+            await createComposioInstance(apiKey, server.id, userId);
+          }
+          return { content: [{ type: "text", text: `MCP config created on Composio:\n${JSON.stringify({ id: server.id, name: server.name, url: server.mcpUrl }, null, 2)}\n\nUse add_integration_config_locally to add it as a local MCP server.` }] };
+        }
+        return { content: [{ type: "text", text: `Config creation not supported for provider: ${providerId}` }], isError: true };
+      }
+
+      case "add_integration_config_locally": {
+        const providerId = args.provider;
+        const projectId = args.project_id || null;
+        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+        if (!apiKey) {
+          return { content: [{ type: "text", text: `${providerId} API key not configured` }], isError: true };
+        }
+
+        const effectiveProjectId = projectId && projectId !== "unassigned" ? projectId : null;
+
+        if (providerId === "agentdojo") {
+          const server = await getAgentDojoServer(apiKey, args.config_id);
+          if (!server) {
+            return { content: [{ type: "text", text: `Config not found on AgentDojo: ${args.config_id}` }], isError: true };
+          }
+          // Check if already exists locally
+          const existing = McpServerDB.findAllLight().find(
+            s => s.source === "agentdojo" && s.project_id === effectiveProjectId && s.url?.endsWith(`/${server.slug}`)
+          );
+          if (existing) {
+            return { content: [{ type: "text", text: `Server "${server.name}" already exists locally (ID: ${existing.id})` }] };
+          }
+          const localServer = McpServerDB.create({
+            id: generateId(),
+            name: server.name,
+            type: "http",
+            package: null,
+            command: null,
+            args: null,
+            pip_module: null,
+            env: {},
+            url: server.url,
+            headers: { "X-API-Key": apiKey },
+            source: "agentdojo",
+            project_id: effectiveProjectId,
+          });
+          return { content: [{ type: "text", text: `Server "${server.name}" added locally (ID: ${localServer.id}). Use assign_mcp_server_to_agent to give agents access.` }] };
+        } else if (providerId === "composio") {
+          // Fetch config details from Composio
+          const res = await fetch(`https://backend.composio.dev/api/v3/mcp/${args.config_id}`, {
+            headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
+          });
+          if (!res.ok) {
+            return { content: [{ type: "text", text: `Config not found on Composio: ${args.config_id}` }], isError: true };
+          }
+          const data = await res.json();
+          const configName = data.name || `composio-${args.config_id.slice(0, 8)}`;
+          const mcpUrl = data.mcp_url;
+          if (!mcpUrl) {
+            return { content: [{ type: "text", text: "Config does not have an MCP URL" }], isError: true };
+          }
+          // Check if already exists locally
+          const existing = McpServerDB.findAllLight().find(
+            s => s.source === "composio" && s.url?.includes(args.config_id)
+          );
+          if (existing) {
+            return { content: [{ type: "text", text: `Server "${configName}" already exists locally (ID: ${existing.id})` }] };
+          }
+          // Get user_id for URL auth
+          const authConfigIds = data.auth_config_ids || [];
+          let userId: string | null = null;
+          if (authConfigIds.length > 0) {
+            userId = await getComposioUserForAuth(apiKey, authConfigIds[0]);
+          }
+          const mcpUrlWithUser = userId ? `${mcpUrl}?user_id=${encodeURIComponent(userId)}` : mcpUrl;
+          const localServer = McpServerDB.create({
+            id: generateId(),
+            name: configName,
+            type: "http",
+            package: null,
+            command: null,
+            args: null,
+            pip_module: null,
+            env: {},
+            url: mcpUrlWithUser,
+            headers: { "x-api-key": apiKey },
+            source: "composio",
+            project_id: effectiveProjectId,
+          });
+          return { content: [{ type: "text", text: `Server "${configName}" added locally (ID: ${localServer.id}). Use assign_mcp_server_to_agent to give agents access.` }] };
+        }
+        return { content: [{ type: "text", text: `Local add not supported for provider: ${providerId}` }], isError: true };
+      }
+
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -1370,8 +1739,12 @@ You can manage:
 - PROVIDERS: View which LLM providers have API keys configured.
 - TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Use list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
 - SUBSCRIPTIONS & TRIGGERS: Subscribe agents to external events (webhooks). Supports multiple providers (composio, agentdojo). Use list_trigger_providers → list_trigger_types → list_connected_accounts → create_subscription. Manage with enable_subscription, disable_subscription, delete_subscription, list_subscriptions.
+- INTEGRATIONS: Connect third-party apps and create MCP servers from them. Supports agentdojo and composio providers. Use list_integration_providers → list_integration_apps → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → assign_mcp_server_to_agent. For OAuth apps, direct the user to the Browse Toolkits UI.
+
+CRITICAL: ALWAYS pass project_id to every tool call that accepts it. API keys and resources are scoped per project — calls without project_id will fail. The chat context tells you the current project id.
 
 Typical workflow: list_providers → create_agent → assign MCP servers/skills → start_agent.
+Integration workflow: list_integration_providers → list_integration_apps (browse) → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → assign_mcp_server_to_agent.
 Subscription workflow: list_trigger_providers → list_trigger_types (pick trigger) → list_connected_accounts (pick account) → create_subscription (link trigger to agent).
 Test workflow: create_test (set agent, message, eval criteria) → run_test → check results.
 Always use list_providers first to check which providers have API keys before creating agents.`,
@@ -1386,7 +1759,7 @@ Always use list_providers first to check which providers have API keys before cr
     }
 
     case "tools/list": {
-      result = { tools: PLATFORM_TOOLS };
+      result = { tools: getPlatformTools() };
       break;
     }
 

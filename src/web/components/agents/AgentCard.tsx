@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, SkillsIcon, ActivityIcon } from "../common/Icons";
-import { useAgentActivity, useProjects, useAuth } from "../../context";
+import { useAgentActivity, useProjects } from "../../context";
 import type { Agent, AgentFeatures } from "../../types";
 
 interface AgentCardProps {
@@ -22,22 +22,14 @@ const FEATURE_ICONS: { key: keyof AgentFeatures; icon: React.ComponentType<{ cla
   { key: "agents", icon: MultiAgentIcon, label: "Multi-Agent" },
 ];
 
-export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: AgentCardProps) {
+export const AgentCard = React.memo(function AgentCard({ agent, selected, onSelect, onToggle, showProject }: AgentCardProps) {
   const enabledFeatures = FEATURE_ICONS.filter(f => agent.features?.[f.key]);
   const mcpServers = agent.mcpServerDetails || [];
   const skills = agent.skillDetails || [];
   const { isActive, label: activityLabel } = useAgentActivity(agent.id);
   const { projects } = useProjects();
-  const { authFetch } = useAuth();
   const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
-  const [subscriptions, setSubscriptions] = useState<{ id: string; trigger_slug: string; enabled: boolean }[]>([]);
-
-  useEffect(() => {
-    authFetch(`/api/subscriptions?agent_id=${agent.id}`)
-      .then(res => res.ok ? res.json() : { subscriptions: [] })
-      .then(data => setSubscriptions(data.subscriptions || []))
-      .catch(() => {});
-  }, [agent.id, authFetch]);
+  const subscriptions = agent.subscriptions || [];
 
   return (
     <div
@@ -163,7 +155,7 @@ export function AgentCard({ agent, selected, onSelect, onToggle, showProject }: 
       </button>
     </div>
   );
-}
+});
 
 function StatusBadge({ status, isActive, activityLabel }: { status: Agent["status"]; isActive?: boolean; activityLabel?: string }) {
   if (status === "running" && isActive && activityLabel) {

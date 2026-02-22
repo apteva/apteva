@@ -162,7 +162,7 @@ export interface OnboardingStatus {
   has_any_keys: boolean;
 }
 
-export type Route = "dashboard" | "threads" | "agents" | "tasks" | "connections" | "mcp" | "skills" | "tests" | "telemetry" | "settings" | "api";
+export type Route = "dashboard" | "threads" | "agents" | "activity" | "tasks" | "connections" | "mcp" | "skills" | "tests" | "telemetry" | "settings" | "api";
 
 // Tool use content block in trajectory
 export interface ToolUseBlock {

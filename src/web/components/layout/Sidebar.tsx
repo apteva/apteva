@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { DashboardIcon, ActivityIcon, AgentsIcon, TasksIcon, ConnectionsIcon, McpIcon, SkillsIcon, TestsIcon, TelemetryIcon, ApiIcon, SettingsIcon, CloseIcon } from "../common/Icons";
+import { DashboardIcon, ThreadsIcon, AgentsIcon, ActivityIcon, TasksIcon, ConnectionsIcon, McpIcon, SkillsIcon, TestsIcon, TelemetryIcon, ApiIcon, SettingsIcon, CloseIcon } from "../common/Icons";
 import { useAuth } from "../../context";
 import type { Route } from "../../types";
 
@@ -71,6 +71,12 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
             active={route === "agents"}
             onClick={() => handleNavigate("agents")}
             badge={agentCount > 0 ? String(agentCount) : undefined}
+          />
+          <NavButton
+            icon={<ThreadsIcon />}
+            label="Threads"
+            active={route === "threads"}
+            onClick={() => handleNavigate("threads")}
           />
           <NavButton
             icon={<ActivityIcon />}

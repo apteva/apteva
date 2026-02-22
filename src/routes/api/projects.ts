@@ -88,9 +88,9 @@ export async function handleProjectRoutes(
       return json({ error: "Project not found" }, 404);
     }
 
-    // Stop any running agents in this project first
+    // Stop any running agents in this project first - in parallel
     const projectAgents = AgentDB.findByProject(projectMatch[1]);
-    for (const agent of projectAgents) {
+    await Promise.allSettled(projectAgents.map(async (agent) => {
       if (agent.status === "running") {
         const entry = agentProcesses.get(agent.id);
         if (entry) {
@@ -102,7 +102,7 @@ export async function handleProjectRoutes(
         }
         setAgentStatus(agent.id, "stopped", "project_deleted");
       }
-    }
+    }));
 
     ProjectDB.delete(projectMatch[1]);
     return json({ success: true });

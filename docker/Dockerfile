@@ -7,8 +7,9 @@ FROM oven/bun:1-debian AS builder
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files and postinstall script
 COPY package.json bun.lock* ./
+COPY scripts/postinstall.mjs ./scripts/
 
 # Install ALL dependencies (including devDependencies for build)
 RUN bun install
@@ -42,8 +43,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy package files (no lockfile - always get latest agent binary)
+# Copy package files and postinstall script (no lockfile - always get latest agent binary)
 COPY package.json ./
+COPY scripts/postinstall.mjs ./scripts/
 
 # Install production dependencies only (includes agent binary via optionalDependencies)
 # Remove any cached lockfile to ensure latest versions

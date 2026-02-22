@@ -28,16 +28,17 @@ export async function handleMcpRoutes(
     let queryMode: string;
     if (forAgent !== null) {
       // Get servers available for an agent (global + agent's project)
-      servers = McpServerDB.findForAgent(forAgent || null);
+      // Use Light variant: skips expensive decryption of env/headers
+      servers = McpServerDB.findForAgentLight(forAgent || null);
       queryMode = `forAgent=${forAgent}`;
     } else if (projectFilter === "global") {
-      servers = McpServerDB.findGlobal();
+      servers = McpServerDB.findGlobalLight();
       queryMode = "global";
     } else if (projectFilter && projectFilter !== "all") {
-      servers = McpServerDB.findByProject(projectFilter);
+      servers = McpServerDB.findByProjectLight(projectFilter);
       queryMode = `project=${projectFilter}`;
     } else {
-      servers = McpServerDB.findAll();
+      servers = McpServerDB.findAllLight();
       queryMode = "all";
     }
     const agentdojoCount = servers.filter(s => s.source === "agentdojo").length;

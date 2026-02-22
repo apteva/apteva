@@ -62,7 +62,7 @@ export async function handleAgentRoutes(
       const agent = AgentDB.create({
         id: generateId(),
         name,
-        model: model || "claude-sonnet-4-5",
+        model: model || "claude-sonnet-4-6",
         provider: provider || "anthropic",
         system_prompt: systemPrompt || "You are a helpful assistant.",
         features: features || DEFAULT_FEATURES,
@@ -358,6 +358,7 @@ export async function handleAgentRoutes(
     try {
       const body = await req.json();
 
+
       // Proxy to the agent's /chat endpoint with authentication
       const response = await agentFetch(agent.id, agent.port, "/chat", {
         method: "POST",
@@ -450,6 +451,56 @@ export async function handleAgentRoutes(
   }
 
   // ==================== THREAD & MESSAGE PROXY ====================
+
+  // GET /api/threads - Consolidated threads from all running agents
+  if (path === "/api/threads" && method === "GET") {
+    const url = new URL(req.url);
+    const projectId = url.searchParams.get("project_id");
+
+    let agents;
+    if (projectId === "unassigned") {
+      agents = AgentDB.findByProject(null);
+    } else if (projectId) {
+      agents = AgentDB.findByProject(projectId);
+    } else {
+      agents = AgentDB.findAll();
+    }
+
+    // Only query running agents (excluding meta agent)
+    const runningAgents = agents.filter(a => a.id !== META_AGENT_ID && a.status === "running" && a.port);
+
+    const results = await Promise.allSettled(
+      runningAgents.map(async (agent) => {
+        const response = await agentFetch(agent.id, agent.port!, "/threads", {
+          method: "GET",
+          headers: { "Accept": "application/json" },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!response.ok) return [];
+        const data = await response.json() as any;
+        const threads = Array.isArray(data) ? data : (data.threads ?? []);
+        return threads.map((t: any) => ({
+          ...t,
+          agent_id: agent.id,
+          agent_name: agent.name,
+        }));
+      })
+    );
+
+    const allThreads = results
+      .filter((r): r is PromiseFulfilledResult<any[]> => r.status === "fulfilled")
+      .flatMap(r => r.value)
+      .filter((t: any) => !t.parent_id);
+
+    // Sort by most recent first
+    allThreads.sort((a, b) => {
+      const ta = a.updated_at || a.created_at || "";
+      const tb = b.updated_at || b.created_at || "";
+      return tb.localeCompare(ta);
+    });
+
+    return json({ threads: allThreads });
+  }
 
   // GET/POST /api/agents/:id/threads
   const threadsListMatch = path.match(/^\/api\/agents\/([^/]+)\/threads$/);

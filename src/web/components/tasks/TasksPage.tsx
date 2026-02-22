@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { TasksIcon, CloseIcon, RecurringIcon, ScheduledIcon, TaskOnceIcon } from "../common/Icons";
+import { Select } from "../common/Select";
 import { useAuth, useProjects } from "../../context";
 import { useTelemetry } from "../../context/TelemetryContext";
 import type { Task, TaskTrajectoryStep, ToolUseBlock, ToolResultBlock } from "../../types";
@@ -14,6 +15,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
+  const [agentFilter, setAgentFilter] = useState<string>("all");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [loadingTask, setLoadingTask] = useState(false);
   const lastProcessedEventRef = useRef<string | null>(null);
@@ -87,9 +89,23 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
     }
   }, [authFetch]);
 
+  // Extract unique agents from tasks for the agent filter
+  const uniqueAgents = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const t of tasks) {
+      const id = t.agentId || (t as any).agent_id;
+      const name = t.agentName || (t as any).agent_name;
+      if (id && name && !map.has(id)) {
+        map.set(id, name);
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [tasks]);
+
   // Sort tasks: running first, then pending by next execution (soonest first), then completed/failed by date
   const sortedTasks = useMemo(() => {
-    return [...tasks].sort((a, b) => {
+    const filtered = agentFilter === "all" ? tasks : tasks.filter(t => (t.agentId || (t as any).agent_id) === agentFilter);
+    return [...filtered].sort((a, b) => {
       // Running tasks first
       if (a.status === "running" && b.status !== "running") return -1;
       if (b.status === "running" && a.status !== "running") return 1;
@@ -111,7 +127,7 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
       const bDate = b.completed_at || b.executed_at || b.created_at;
       return new Date(bDate).getTime() - new Date(aDate).getTime();
     });
-  }, [tasks]);
+  }, [tasks, agentFilter]);
 
   const statusColors: Record<string, string> = {
     pending: "bg-yellow-500/20 text-yellow-400",
@@ -141,20 +157,36 @@ export function TasksPage({ onSelectAgent }: TasksPageProps) {
                 View tasks from all running agents
               </p>
             </div>
-            <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-              {filterOptions.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => setFilter(opt.value)}
-                  className={`px-3 py-1.5 rounded text-sm transition whitespace-nowrap ${
-                    filter === opt.value
-                      ? "bg-[#f97316] text-black"
-                      : "bg-[#1a1a1a] hover:bg-[#222]"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-3 flex-wrap pb-1">
+              <div className="flex gap-2 overflow-x-auto scrollbar-hide">
+                {filterOptions.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setFilter(opt.value)}
+                    className={`px-3 py-1.5 rounded text-sm transition whitespace-nowrap ${
+                      filter === opt.value
+                        ? "bg-[#f97316] text-black"
+                        : "bg-[#1a1a1a] hover:bg-[#222]"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {uniqueAgents.length > 0 && (
+                <div className="w-48">
+                  <Select
+                    value={agentFilter}
+                    onChange={setAgentFilter}
+                    placeholder="All agents"
+                    compact
+                    options={[
+                      { value: "all", label: "All agents" },
+                      ...uniqueAgents.map(([id, name]) => ({ value: id, label: name })),
+                    ]}
+                  />
+                </div>
+              )}
             </div>
           </div>
 

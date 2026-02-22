@@ -111,8 +111,11 @@ export async function handleIntegrationRoutes(
 
     try {
       const body = await req.json();
-      const { appSlug, redirectUrl, credentials, project_id } = body;
-      const apiKey = ProviderKeys.getDecryptedForProject(providerId, project_id || null);
+      const { appSlug, redirectUrl, credentials } = body;
+      // Read project_id from query param (frontend sends it there), fall back to body
+      const url = new URL(req.url);
+      const projectId = url.searchParams.get("project_id") || body.project_id || null;
+      const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
       if (!apiKey) {
         return json({ error: `${provider.name} API key not configured` }, 401);
       }
@@ -127,7 +130,8 @@ export async function handleIntegrationRoutes(
       }
 
       // Default redirect URL back to our integrations page
-      const callbackUrl = redirectUrl || `http://localhost:${process.env.PORT || 4280}/mcp?tab=hosted&connected=${appSlug}`;
+      const origin = req.headers.get("origin") || process.env.INSTANCE_URL || `http://localhost:${process.env.PORT || 4280}`;
+      const callbackUrl = redirectUrl || `${origin}/mcp?tab=hosted&connected=${appSlug}`;
 
       const result = await provider.initiateConnection(apiKey, user.id, appSlug, callbackUrl, credentials);
       return json(result);
@@ -329,7 +333,8 @@ export async function handleIntegrationRoutes(
         : mcpUrl;
 
       // Check if already exists (match by config ID in URL)
-      const existing = McpServerDB.findAll().find(
+      // Use Light variant to skip expensive decryption of env/headers
+      const existing = McpServerDB.findAllLight().find(
         s => s.source === "composio" && s.url?.includes(configId)
       );
       if (existing) {
@@ -527,8 +532,9 @@ export async function handleIntegrationRoutes(
       console.log(`[agentdojo:add] fetched server: slug=${server.slug} name=${server.name} url=${server.url?.substring(0, 80)}`);
 
       // Check if already exists — match by slug in URL, scoped to same project
+      // Use Light variant to skip expensive decryption of env/headers
       const effectiveProjectId = projectId && projectId !== "unassigned" ? projectId : null;
-      const allServers = McpServerDB.findAll();
+      const allServers = McpServerDB.findAllLight();
       const agentdojoServers = allServers.filter(s => s.source === "agentdojo");
       console.log(`[agentdojo:add] total servers=${allServers.length} agentdojo servers=${agentdojoServers.length}`);
       const existing = agentdojoServers.find(

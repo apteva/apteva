@@ -28,13 +28,14 @@ import { MetaAgentProvider, MetaAgentPanel } from "./components/meta-agent/MetaA
 
 // Lazy-loaded page components (only loaded when navigated to)
 const SettingsPage = lazy(() => import("./components/settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
-const ActivityPage = lazy(() => import("./components/activity/ActivityPage").then(m => ({ default: m.ActivityPage })));
 const TasksPage = lazy(() => import("./components/tasks/TasksPage").then(m => ({ default: m.TasksPage })));
 const McpPage = lazy(() => import("./components/mcp/McpPage").then(m => ({ default: m.McpPage })));
 const SkillsPage = lazy(() => import("./components/skills/SkillsPage").then(m => ({ default: m.SkillsPage })));
 const TestsPage = lazy(() => import("./components/tests/TestsPage").then(m => ({ default: m.TestsPage })));
+const ThreadsPage = lazy(() => import("./components/threads/ThreadsPage").then(m => ({ default: m.ThreadsPage })));
 const TelemetryPage = lazy(() => import("./components/telemetry/TelemetryPage").then(m => ({ default: m.TelemetryPage })));
 const ConnectionsPage = lazy(() => import("./components/connections/ConnectionsPage").then(m => ({ default: m.ConnectionsPage })));
+const ActivityPage = lazy(() => import("./components/activity/ActivityPage").then(m => ({ default: m.ActivityPage })));
 const ApiDocsPage = lazy(() => import("./components/api/ApiDocsPage").then(m => ({ default: m.ApiDocsPage })));
 
 function AppContent() {
@@ -111,7 +112,7 @@ function AppContent() {
     };
 
     fetchTaskCount();
-  }, [shouldFetchData, accessToken, currentProjectId, agents, statusChangeCounter, taskChangeCounter]);
+  }, [shouldFetchData, accessToken, currentProjectId, statusChangeCounter, taskChangeCounter]);
 
   // Form state
   const [newAgent, setNewAgent] = useState<NewAgentForm>({
@@ -260,14 +261,6 @@ function AppContent() {
           <Suspense fallback={<LoadingSpinner />}>
           {route === "settings" && <SettingsPage />}
 
-          {route === "activity" && (
-            <ActivityPage
-              agents={agents}
-              loading={loading}
-              onNavigate={setRoute}
-            />
-          )}
-
           {route === "agents" && (
             <AgentsView
               agents={agents}
@@ -292,6 +285,21 @@ function AppContent() {
               configuredProviders={configuredProviders}
               onNavigate={handleNavigate}
               onSelectAgent={handleSelectAgent}
+            />
+          )}
+
+          {route === "threads" && (
+            <ThreadsPage
+              agents={agents}
+              onNavigate={setRoute}
+            />
+          )}
+
+          {route === "activity" && (
+            <ActivityPage
+              agents={agents}
+              loading={loading}
+              onNavigate={handleNavigate}
             />
           )}
 

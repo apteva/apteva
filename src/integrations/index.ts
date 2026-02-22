@@ -9,6 +9,12 @@ export interface IntegrationApp {
   logo: string | null;
   categories: string[];
   authSchemes: string[]; // e.g., ["OAUTH2", "API_KEY"]
+  providerSlug?: string; // The underlying provider name (one provider can serve multiple toolkits)
+  credentialFields?: { // Fields required for API_KEY auth (from provider auth_config)
+    name: string;
+    description?: string;
+    required?: boolean;
+  }[];
 }
 
 export interface ConnectedAccount {
@@ -32,6 +38,7 @@ export interface ConnectionCredentials {
   bearerToken?: string;
   username?: string;
   password?: string;
+  fields?: Record<string, string>; // Arbitrary credential fields (e.g. { appToken: "...", userKey: "..." })
 }
 
 export interface IntegrationProvider {

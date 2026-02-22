@@ -10,6 +10,12 @@ interface IntegrationApp {
   logo: string | null;
   categories: string[];
   authSchemes: string[];
+  providerSlug?: string;
+  credentialFields?: {
+    name: string;
+    description?: string;
+    required?: boolean;
+  }[];
 }
 
 interface ConnectedAccount {
@@ -68,9 +74,10 @@ export function IntegrationsPanel({
   const [error, setError] = useState<string | null>(null);
   // For auth method selection (when app supports both OAuth and API Key)
   const [authMethodModal, setAuthMethodModal] = useState<{ app: IntegrationApp } | null>(null);
-  // For API Key modal
+  // For API Key / credential modal
   const [apiKeyModal, setApiKeyModal] = useState<{ app: IntegrationApp } | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [credentialInputs, setCredentialInputs] = useState<Record<string, string>>({});
   // For MCP config creation modal
   const [mcpConfigModal, setMcpConfigModal] = useState<{ app: IntegrationApp } | null>(null);
   const [mcpConfigName, setMcpConfigName] = useState("");
@@ -153,17 +160,18 @@ export function IntegrationsPanel({
   }, [pendingConnection, authFetch, providerId, projectId, fetchData, onConnectionComplete]);
 
   // Initiate connection
-  const connectApp = async (app: IntegrationApp, apiKey?: string, forceOAuth?: boolean) => {
+  const connectApp = async (app: IntegrationApp, apiKey?: string, forceOAuth?: boolean, fields?: Record<string, string>) => {
     // If app supports multiple auth methods and user hasn't chosen, show choice
-    if (hasMultipleAuthMethods(app) && !apiKey && !forceOAuth) {
+    if (hasMultipleAuthMethods(app) && !apiKey && !fields && !forceOAuth) {
       setAuthMethodModal({ app });
       return;
     }
 
-    // If app supports API key (and user didn't choose OAuth), show API key modal
-    if (supportsApiKey(app) && !apiKey && !forceOAuth) {
+    // If app supports API key (and user didn't choose OAuth), show credential modal
+    if (supportsApiKey(app) && !apiKey && !fields && !forceOAuth) {
       setApiKeyModal({ app });
       setApiKeyInput("");
+      setCredentialInputs({});
       return;
     }
 
@@ -173,7 +181,13 @@ export function IntegrationsPanel({
     try {
       // Build request body
       const body: any = { appSlug: app.slug };
-      if (apiKey) {
+      if (fields && Object.keys(fields).length > 0) {
+        // Multi-field credentials
+        body.credentials = {
+          authScheme: "API_KEY",
+          fields,
+        };
+      } else if (apiKey) {
         body.credentials = {
           authScheme: "API_KEY",
           apiKey,
@@ -231,11 +245,21 @@ export function IntegrationsPanel({
     }
   };
 
-  // Handle API key form submission
+  // Handle API key / credential form submission
   const handleApiKeySubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!apiKeyModal || !apiKeyInput.trim()) return;
-    connectApp(apiKeyModal.app, apiKeyInput.trim());
+    if (!apiKeyModal) return;
+    const hasFields = apiKeyModal.app.credentialFields && apiKeyModal.app.credentialFields.length > 0;
+    if (hasFields) {
+      // Check required fields are filled
+      const requiredFields = apiKeyModal.app.credentialFields!.filter(f => f.required !== false);
+      const allFilled = requiredFields.every(f => credentialInputs[f.name]?.trim());
+      if (!allFilled) return;
+      connectApp(apiKeyModal.app, undefined, false, credentialInputs);
+    } else {
+      if (!apiKeyInput.trim()) return;
+      connectApp(apiKeyModal.app, apiKeyInput.trim());
+    }
   };
 
   // Disconnect (called after confirmation)
@@ -291,6 +315,20 @@ export function IntegrationsPanel({
         return;
       }
 
+      // Auto-add the server locally
+      let autoAdded = false;
+      if (data.config?.id) {
+        try {
+          const addRes = await authFetch(
+            `/api/integrations/${providerId}/configs/${data.config.id}/add${projectParam}`,
+            { method: "POST" }
+          );
+          autoAdded = addRes.ok;
+        } catch {
+          // Non-fatal — server was still created on the provider
+        }
+      }
+
       setMcpConfigSuccess(mcpConfigName);
       onConnectionComplete?.();
     } catch (e) {
@@ -311,17 +349,23 @@ export function IntegrationsPanel({
     });
   };
 
-  // Check if app is connected
-  const isConnected = (appSlug: string) => {
+  // Check if app is connected (also matches via providerSlug for multi-toolkit providers)
+  const isConnected = (app: IntegrationApp) => {
     return connectedAccounts.some(
-      (a) => a.appId === appSlug && a.status === "active"
+      (a) => a.status === "active" && (
+        a.appId === app.slug ||
+        (app.providerSlug && a.appId === app.providerSlug)
+      )
     );
   };
 
-  // Get connection for app (prefer active account)
-  const getConnection = (appSlug: string) => {
-    return connectedAccounts.find((a) => a.appId === appSlug && a.status === "active")
-      || connectedAccounts.find((a) => a.appId === appSlug);
+  // Get connection for app (prefer active account, also matches via providerSlug)
+  const getConnection = (app: IntegrationApp) => {
+    return connectedAccounts.find((a) => a.appId === app.slug && a.status === "active")
+      || (app.providerSlug && connectedAccounts.find((a) => a.appId === app.providerSlug && a.status === "active"))
+      || connectedAccounts.find((a) => a.appId === app.slug)
+      || (app.providerSlug && connectedAccounts.find((a) => a.appId === app.providerSlug))
+      || undefined;
   };
 
   // Filter apps
@@ -337,8 +381,8 @@ export function IntegrationsPanel({
   });
 
   // Group by connected/not connected
-  const connectedApps = filteredApps.filter((app) => isConnected(app.slug));
-  const availableApps = filteredApps.filter((app) => !isConnected(app.slug));
+  const connectedApps = filteredApps.filter((app) => isConnected(app));
+  const availableApps = filteredApps.filter((app) => !isConnected(app));
 
   if (loading) {
     return <div className="text-center py-8 text-[#666]">Loading apps...</div>;
@@ -369,6 +413,7 @@ export function IntegrationsPanel({
                   setAuthMethodModal(null);
                   setApiKeyModal({ app: authMethodModal.app });
                   setApiKeyInput("");
+                  setCredentialInputs({});
                 }}
                 className="w-full text-left p-3 bg-[#0a0a0a] hover:bg-[#1a1a1a] border border-[#333] hover:border-[#f97316] rounded-lg transition"
               >
@@ -400,7 +445,7 @@ export function IntegrationsPanel({
         </div>
       )}
 
-      {/* API Key Modal */}
+      {/* API Key / Credentials Modal */}
       {apiKeyModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-md mx-4">
@@ -414,18 +459,46 @@ export function IntegrationsPanel({
               )}
               <div>
                 <h3 className="font-medium">Connect {apiKeyModal.app.name}</h3>
-                <p className="text-xs text-[#666]">Enter your API key to connect</p>
+                <p className="text-xs text-[#666]">
+                  {apiKeyModal.app.credentialFields?.length
+                    ? "Enter your credentials to connect"
+                    : "Enter your API key to connect"}
+                </p>
               </div>
             </div>
             <form onSubmit={handleApiKeySubmit}>
-              <input
-                type="password"
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                placeholder="Enter API Key..."
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-[#f97316]"
-                autoFocus
-              />
+              {apiKeyModal.app.credentialFields && apiKeyModal.app.credentialFields.length > 0 ? (
+                <div className="space-y-3 mb-4">
+                  {apiKeyModal.app.credentialFields.map((field, idx) => (
+                    <div key={field.name}>
+                      <label className="block text-xs text-[#888] mb-1">
+                        {field.name.replace(/([A-Z])/g, " $1").replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()).trim()}
+                        {field.required !== false && <span className="text-red-400 ml-0.5">*</span>}
+                      </label>
+                      {field.description && (
+                        <p className="text-[10px] text-[#555] mb-1">{field.description}</p>
+                      )}
+                      <input
+                        type="password"
+                        value={credentialInputs[field.name] || ""}
+                        onChange={(e) => setCredentialInputs(prev => ({ ...prev, [field.name]: e.target.value }))}
+                        placeholder={`Enter ${field.name}...`}
+                        className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-4 py-2 focus:outline-none focus:border-[#f97316]"
+                        autoFocus={idx === 0}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <input
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder="Enter API Key..."
+                  className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-[#f97316]"
+                  autoFocus
+                />
+              )}
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -436,7 +509,12 @@ export function IntegrationsPanel({
                 </button>
                 <button
                   type="submit"
-                  disabled={!apiKeyInput.trim() || connecting === apiKeyModal.app.slug}
+                  disabled={
+                    connecting === apiKeyModal.app.slug ||
+                    (apiKeyModal.app.credentialFields?.length
+                      ? !apiKeyModal.app.credentialFields.filter(f => f.required !== false).every(f => credentialInputs[f.name]?.trim())
+                      : !apiKeyInput.trim())
+                  }
                   className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
                 >
                   {connecting === apiKeyModal.app.slug ? "Connecting..." : "Connect"}
@@ -459,10 +537,7 @@ export function IntegrationsPanel({
                   </div>
                   <h3 className="font-medium text-lg">MCP Config Created!</h3>
                   <p className="text-sm text-[#888] mt-2">
-                    "{mcpConfigSuccess}" has been created successfully.
-                  </p>
-                  <p className="text-xs text-[#666] mt-2">
-                    You can now add it to your agents from the MCP Configs tab.
+                    "{mcpConfigSuccess}" has been created and added to your servers.
                   </p>
                 </div>
                 <button
@@ -589,14 +664,19 @@ export function IntegrationsPanel({
               <AppCard
                 key={app.id}
                 app={app}
-                connection={getConnection(app.slug)}
+                connection={getConnection(app)}
                 onConnect={() => connectApp(app)}
                 onDisconnect={() => {
-                  const conn = getConnection(app.slug);
+                  const conn = getConnection(app);
                   if (conn) handleDisconnect(conn);
                 }}
                 onCreateMcpConfig={hideMcpConfig ? undefined : () => openMcpConfigModal(app)}
                 onBrowseTriggers={onBrowseTriggers ? () => onBrowseTriggers(app.slug) : undefined}
+                onUpdateKey={supportsApiKey(app) ? () => {
+                  setApiKeyModal({ app });
+                  setApiKeyInput("");
+                  setCredentialInputs({});
+                } : undefined}
                 connecting={connecting === app.slug}
               />
             ))}
@@ -643,6 +723,7 @@ function AppCard({
   onDisconnect,
   onCreateMcpConfig,
   onBrowseTriggers,
+  onUpdateKey,
   connecting,
 }: {
   app: IntegrationApp;
@@ -651,6 +732,7 @@ function AppCard({
   onDisconnect?: () => void;
   onCreateMcpConfig?: () => void;
   onBrowseTriggers?: () => void;
+  onUpdateKey?: () => void;
   connecting: boolean;
 }) {
   const isConnected = connection?.status === "active";
@@ -737,6 +819,15 @@ function AppCard({
                 className="flex-1 text-xs bg-[#1a1a2a] hover:bg-[#1a1a3a] border border-blue-500/30 hover:border-blue-500/50 text-blue-400 px-3 py-1.5 rounded transition"
               >
                 Browse Triggers
+              </button>
+            )}
+            {onUpdateKey && (
+              <button
+                onClick={onUpdateKey}
+                className="text-xs text-[#666] hover:text-[#f97316] transition px-2"
+                title="Update API Key"
+              >
+                Key
               </button>
             )}
             {onDisconnect && (

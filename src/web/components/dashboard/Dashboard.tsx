@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAgentActivity, useAuth, useProjects, useTelemetryContext } from "../../context";
+import { useTelemetry } from "../../context/TelemetryContext";
 import type { TelemetryEvent } from "../../context";
 import type { Agent, Provider, Route, DashboardStats, Task } from "../../types";
+import { CloseIcon } from "../common/Icons";
 
 interface DashboardProps {
   agents: Agent[];
@@ -23,9 +25,12 @@ export function Dashboard({
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
   const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
+  const { events: taskTelemetryEvents } = useTelemetry({ category: "TASK" });
+  const lastProcessedTaskEventRef = useRef<string | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [historicalActivities, setHistoricalActivities] = useState<TelemetryEvent[]>([]);
+  const [quickMessageAgent, setQuickMessageAgent] = useState<Agent | null>(null);
 
   // Filter agents by current project
   const filteredAgents = useMemo(() => {
@@ -75,6 +80,17 @@ export function Dashboard({
     fetchDashboardData();
   }, [fetchDashboardData, statusChangeCounter]);
 
+  // Real-time task updates from telemetry
+  useEffect(() => {
+    if (!taskTelemetryEvents.length) return;
+    const latestEvent = taskTelemetryEvents[0];
+    if (!latestEvent || latestEvent.id === lastProcessedTaskEventRef.current) return;
+    if (latestEvent.type === "task_created" || latestEvent.type === "task_updated" || latestEvent.type === "task_deleted") {
+      lastProcessedTaskEventRef.current = latestEvent.id;
+      fetchDashboardData();
+    }
+  }, [taskTelemetryEvents, fetchDashboardData]);
+
   // Filter tasks by project agents and sort by next execution (soonest first)
   const filteredTasks = useMemo(() => {
     let list = currentProjectId
@@ -98,11 +114,11 @@ export function Dashboard({
 
   // Merge real-time + historical thread_activity events, deduplicate
   const activities = useMemo(() => {
-    const realtimeActivities = realtimeEvents.filter(e => e.type === "thread_activity");
+    const realtimeActivities = realtimeEvents.filter(e => e.type === "thread_activity" && !e.data?.parent_id);
     const seen = new Set(realtimeActivities.map(e => e.id));
     const merged = [...realtimeActivities];
     for (const evt of historicalActivities) {
-      if (!seen.has(evt.id)) {
+      if (!seen.has(evt.id) && !evt.data?.parent_id) {
         merged.push(evt);
         seen.add(evt.id);
       }
@@ -114,7 +130,7 @@ export function Dashboard({
     }
     // Sort newest first
     filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return filtered.slice(0, 8);
+    return filtered.slice(0, 12);
   }, [realtimeEvents, historicalActivities, currentProjectId, projectAgentIds]);
 
   // Build agent name lookup
@@ -150,7 +166,13 @@ export function Dashboard({
           ) : (
             <div className="divide-y divide-[#1a1a1a]">
               {filteredAgents.slice(0, 5).map((agent) => (
-                <AgentListItem key={agent.id} agent={agent} onSelect={() => onSelectAgent(agent)} showProject={!currentProjectId} />
+                <AgentListItem
+                  key={agent.id}
+                  agent={agent}
+                  onSelect={() => onSelectAgent(agent)}
+                  onMessage={agent.status === "running" ? () => setQuickMessageAgent(agent) : undefined}
+                  showProject={!currentProjectId}
+                />
               ))}
             </div>
           )}
@@ -221,6 +243,14 @@ export function Dashboard({
           )}
         </DashboardCard>
       </div>
+
+      {/* Quick Message Modal */}
+      {quickMessageAgent && (
+        <QuickMessageModal
+          agent={quickMessageAgent}
+          onClose={() => setQuickMessageAgent(null)}
+        />
+      )}
     </div>
   );
 }
@@ -266,40 +296,57 @@ function DashboardCard({ title, actionLabel, onAction, children }: DashboardCard
   );
 }
 
-function AgentListItem({ agent, onSelect, showProject }: { agent: Agent; onSelect: () => void; showProject?: boolean }) {
-  const { isActive } = useAgentActivity(agent.id);
+function AgentListItem({ agent, onSelect, onMessage, showProject }: { agent: Agent; onSelect: () => void; onMessage?: () => void; showProject?: boolean }) {
+  const { isActive, label } = useAgentActivity(agent.id);
   const { projects } = useProjects();
   const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
 
   return (
     <div
       onClick={onSelect}
-      className="px-4 py-3 hover:bg-[#1a1a1a] cursor-pointer flex items-center justify-between"
+      className="px-4 py-3 hover:bg-[#1a1a1a] cursor-pointer flex items-center justify-between group"
     >
-      <div className="flex-1 min-w-0">
-        <p className="font-medium">{agent.name}</p>
-        <div className="flex items-center gap-2 text-sm text-[#666]">
-          <span>{agent.provider}</span>
-          {showProject && project && (
-            <>
-              <span className="text-[#444]">·</span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
-                {project.name}
-              </span>
-            </>
-          )}
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        <span
+          className={`w-2 h-2 rounded-full flex-shrink-0 ${
+            agent.status === "running"
+              ? isActive
+                ? "bg-green-400 animate-pulse"
+                : "bg-[#3b82f6]"
+              : "bg-[#444]"
+          }`}
+        />
+        <div className="flex-1 min-w-0">
+          <p className="font-medium truncate">{agent.name}</p>
+          <div className="flex items-center gap-2 text-sm text-[#666]">
+            {isActive && label ? (
+              <span className="text-green-400 truncate">{label}</span>
+            ) : (
+              <span>{agent.provider} · {agent.status === "running" ? "idle" : "stopped"}</span>
+            )}
+            {showProject && project && (
+              <>
+                <span className="text-[#444]">·</span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
+                  {project.name}
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
-      <span
-        className={`w-2 h-2 rounded-full flex-shrink-0 ${
-          agent.status === "running"
-            ? isActive
-              ? "bg-green-400 animate-pulse"
-              : "bg-[#3b82f6]"
-            : "bg-[#444]"
-        }`}
-      />
+      {onMessage && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onMessage(); }}
+          className="opacity-0 group-hover:opacity-100 transition px-2 py-1 text-xs text-[#f97316] hover:bg-[#f97316]/10 rounded"
+          title="Send message"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -342,6 +389,84 @@ function TaskStatusBadge({ status }: { status: Task["status"] }) {
     <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[status] || colors.pending}`}>
       {status}
     </span>
+  );
+}
+
+// --- Quick Message Modal ---
+
+function QuickMessageModal({ agent, onClose }: { agent: Agent; onClose: () => void }) {
+  const { authFetch } = useAuth();
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSend = async () => {
+    if (!message.trim() || sending) return;
+    setSending(true);
+    try {
+      const res = await authFetch(`/api/agents/${agent.id}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: message.trim(), agent_id: agent.id }),
+      });
+      if (res.ok) {
+        setSent(true);
+        setTimeout(onClose, 1200);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative bg-[#111] border border-[#222] rounded-xl shadow-2xl w-full max-w-md mx-4 p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <span className="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse" />
+            <h3 className="font-medium">{agent.name}</h3>
+          </div>
+          <button onClick={onClose} className="text-[#666] hover:text-[#e0e0e0] transition">
+            <CloseIcon />
+          </button>
+        </div>
+
+        {sent ? (
+          <div className="py-6 text-center">
+            <p className="text-green-400 font-medium">Message sent</p>
+            <p className="text-sm text-[#555] mt-1">The agent will process your message</p>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleSend()}
+              placeholder={`Message ${agent.name}...`}
+              disabled={sending}
+              className="flex-1 bg-[#0a0a0a] border border-[#222] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-[#f97316] placeholder-[#444] disabled:opacity-50"
+            />
+            <button
+              onClick={handleSend}
+              disabled={sending || !message.trim()}
+              className="px-4 py-2.5 bg-[#f97316] text-black rounded-lg text-sm font-medium hover:bg-[#fb923c] transition disabled:opacity-30"
+            >
+              {sending ? "..." : "Send"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { useAuth } from "./AuthContext";
 
 export interface Project {
@@ -189,7 +189,7 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     }
   }, [authLoading, projectsEnabled, refreshProjects]);
 
-  const value: ProjectContextValue = {
+  const value = useMemo<ProjectContextValue>(() => ({
     projects,
     currentProjectId,
     currentProject,
@@ -203,7 +203,7 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     updateProject,
     deleteProject,
     refreshProjects,
-  };
+  }), [projects, currentProjectId, currentProject, isLoading, error, unassignedCount, projectsEnabled, metaAgentEnabled, setCurrentProjectId, createProject, updateProject, deleteProject, refreshProjects]);
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>;
 }
