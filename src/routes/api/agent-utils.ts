@@ -337,7 +337,6 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
       const baseUrl = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 4280}`;
       return {
         enabled: multiAgentConfig.enabled,
-        mode: multiAgentConfig.mode || "worker",
         group: multiAgentConfig.group || agent.project_id || undefined,
         // This agent's reachable URL for peer communication
         url: `http://localhost:${agent.port}`,

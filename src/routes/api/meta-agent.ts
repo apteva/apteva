@@ -117,6 +117,8 @@ Be concise. Use markdown formatting.`,
         port: metaAgent.port,
         provider: metaAgent.provider,
         model: metaAgent.model,
+        features: metaAgent.features,
+        systemPrompt: metaAgent.system_prompt,
       },
     });
   }

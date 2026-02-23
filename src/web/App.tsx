@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
+import { Chat } from "@apteva/apteva-kit";
 import "@apteva/apteva-kit/styles.css";
 
 // Types
@@ -342,8 +343,77 @@ function AppContent() {
   );
 }
 
+// ==================== Share Page (public, no auth) ====================
+function SharePage({ token }: { token: string }) {
+  const [status, setStatus] = useState<"checking" | "online" | "offline">("checking");
+  const [agentName, setAgentName] = useState("Agent");
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch(`/share/${token}/info`);
+        if (res.ok) {
+          const data = await res.json();
+          setAgentName(data.name || "Agent");
+          setStatus(data.status === "running" ? "online" : "offline");
+        } else {
+          setStatus("offline");
+        }
+      } catch {
+        setStatus("offline");
+      }
+    };
+    check();
+    const interval = setInterval(check, 15000);
+    return () => clearInterval(interval);
+  }, [token]);
+
+  if (status === "checking") {
+    return (
+      <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0a]">
+        <div className="text-[#666] text-sm">Connecting...</div>
+      </div>
+    );
+  }
+
+  if (status === "offline") {
+    return (
+      <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0a]">
+        <div className="text-center">
+          <div className="w-2.5 h-2.5 rounded-full bg-[#666] mx-auto mb-3" />
+          <div className="text-base font-semibold text-[#ccc] mb-1.5">{agentName}</div>
+          <div className="text-sm text-[#666]">This agent is currently offline</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0a] p-0 md:p-4">
+      <div className="w-full max-w-[640px] h-[100dvh] md:h-[calc(100dvh-32px)] md:max-h-[800px] md:rounded-xl overflow-hidden md:border md:border-[#1a1a1a] flex flex-col bg-[#0a0a0a]">
+        <Chat
+          agentId="default"
+          apiUrl={`/share/${token}`}
+          placeholder="Type a message..."
+          variant="terminal"
+          headerTitle={agentName}
+          enableMarkdown
+          enableWidgets
+          availableWidgets={["form", "kpi"]}
+        />
+      </div>
+    </div>
+  );
+}
+
 // Wrapper component that provides all contexts
 function App() {
+  // Check if this is a /share/:token URL — render public share page without auth
+  const shareMatch = window.location.pathname.match(/^\/share\/([a-f0-9]{32})$/);
+  if (shareMatch) {
+    return <SharePage token={shareMatch[1]} />;
+  }
+
   return (
     <AuthProvider>
       <ProjectProvider>

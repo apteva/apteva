@@ -270,6 +270,25 @@ export async function handleAgentRoutes(
     });
   }
 
+  // ==================== SHARE LINK ====================
+
+  // GET /api/agents/:id/share-token - Get the share token for this agent
+  const shareTokenMatch = path.match(/^\/api\/agents\/([^/]+)\/share-token$/);
+  if (shareTokenMatch && method === "GET") {
+    const agent = AgentDB.findById(shareTokenMatch[1]);
+    if (!agent) {
+      return json({ error: "Agent not found" }, 404);
+    }
+
+    const { getShareToken } = await import("../share");
+    const token = getShareToken(agent.id);
+    if (!token) {
+      return json({ error: "Could not generate share token" }, 500);
+    }
+
+    return json({ token });
+  }
+
   // ==================== AGENT LIFECYCLE ====================
 
   // POST /api/agents/:id/start - Start an agent
@@ -840,7 +859,6 @@ export async function handleAgentRoutes(
           id: a.id,
           name: a.name,
           url: `http://localhost:${a.port}`,
-          mode: agentConfig.mode || "worker",
           group: agentConfig.group || a.project_id,
         };
       });

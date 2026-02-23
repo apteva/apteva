@@ -164,6 +164,7 @@ export const AgentDojoProvider: IntegrationProvider = {
 
     const data = await res.json();
     const credentials = data.data || data.credentials || [];
+    console.log(`[AgentDojo] listConnectedAccounts: got ${credentials.length} credentials`, JSON.stringify(credentials.map((c: any) => ({ id: c.id, name: c.name, provider_name: c.provider_name, credential_type: c.credential_type }))));
 
     return credentials.map((cred: any) => ({
       id: String(cred.id),

@@ -1,7 +1,7 @@
 // Built-in MCP server that exposes the Apteva platform API as MCP tools
 // This allows the meta agent (Apteva Assistant) to control the platform
 
-import { AgentDB, ProjectDB, McpServerDB, SkillDB, TelemetryDB, SubscriptionDB, SettingsDB, generateId } from "./db";
+import { AgentDB, ProjectDB, McpServerDB, McpServerToolDB, SkillDB, TelemetryDB, SubscriptionDB, SettingsDB, generateId } from "./db";
 import { TestCaseDB, TestRunDB } from "./db-tests";
 import { runTest, runAll } from "./test-runner";
 import { getProvidersWithStatus, PROVIDERS, ProviderKeys } from "./providers";
@@ -250,12 +250,13 @@ SKILLS & MCP SERVERS:
     description: `Create a new MCP server configuration. MCP servers provide tools that agents can use (web search, file access, APIs, etc).
 
 SERVER TYPES:
+- local: Runs inside the apteva server — no external process needed. Add tools with add_tool_to_local_server. Ready to use immediately after adding tools.
 - http: Remote MCP server accessible via URL. Provide url and optional auth headers. Ready to use immediately.
 - npm: Node.js MCP server from npm. Provide package name (e.g. '@modelcontextprotocol/server-filesystem'). Needs to be started.
 - pip: Python MCP server from PyPI. Provide package name. Needs to be started.
 - custom: Custom command. Provide command and args. Needs to be started.
 
-After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers work immediately; npm/pip/custom servers need to be started from the MCP page in the UI.`,
+After creating, assign to agents with assign_mcp_server_to_agent. Local and HTTP servers work immediately; npm/pip/custom servers need to be started from the MCP page in the UI.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -283,6 +284,59 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
     },
   },
   {
+    name: "add_tool_to_local_server",
+    description: `Add a tool to a local MCP server. Only works for servers with type "local".
+
+HANDLER TYPES:
+- mock: Returns a static/templated response. Use mock_response with template variables: {{args.field}}, {{uuid()}}, {{now}}, {{timestamp}}, {{random_int(min,max)}}.
+- http: Makes a real HTTP API call. Provide http_config with method, url, headers, and optional body. Templates work in url/headers/body. Use {{credential.KEY}} to reference server env vars for auth.
+- javascript: Runs custom JavaScript code. The code receives args, credentials, and helper functions (uuid, now, timestamp, random_int, random_float). Return a value or JSON object.
+
+EXAMPLES:
+- Mock: handler_type="mock", mock_response={"greeting": "Hello {{args.name}}!", "id": "{{uuid()}}"}
+- HTTP: handler_type="http", http_config={"method": "GET", "url": "https://api.example.com/users/{{args.user_id}}", "headers": {"Authorization": "Bearer {{credential.API_KEY}}"}}
+- JavaScript: handler_type="javascript", code="return { sum: args.a + args.b, computed_at: now }"`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "The local MCP server ID" },
+        name: { type: "string", description: "Tool name (snake_case, e.g. 'get_weather', 'create_ticket')" },
+        description: { type: "string", description: "What this tool does (shown to the agent)" },
+        input_schema: {
+          type: "object",
+          description: "JSON Schema for tool parameters. Must have type='object' with properties.",
+        },
+        handler_type: { type: "string", description: "How the tool executes: mock, http, or javascript" },
+        mock_response: { type: "object", description: "For mock handler: the response template (supports {{args.field}}, {{uuid()}}, {{now}})" },
+        http_config: {
+          type: "object",
+          description: "For http handler: { method, url, headers?, body? }. Templates supported in all fields.",
+        },
+        code: { type: "string", description: "For javascript handler: JS code to execute. Has access to args, credentials, uuid, now, timestamp, random_int, random_float. Must return a value." },
+      },
+      required: ["server_id", "name", "description", "input_schema", "handler_type"],
+    },
+  },
+  {
+    name: "update_tool_on_local_server",
+    description: `Update an existing tool on a local MCP server. Only provide fields you want to change. Only works for servers with type "local".`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        tool_id: { type: "string", description: "The tool ID to update" },
+        name: { type: "string", description: "New tool name" },
+        description: { type: "string", description: "New description" },
+        input_schema: { type: "object", description: "New JSON Schema for tool parameters" },
+        handler_type: { type: "string", description: "New handler type: mock, http, or javascript" },
+        mock_response: { type: "object", description: "New mock response template" },
+        http_config: { type: "object", description: "New HTTP config: { method, url, headers?, body? }" },
+        code: { type: "string", description: "New JavaScript code" },
+        enabled: { type: "boolean", description: "Enable or disable the tool" },
+      },
+      required: ["tool_id"],
+    },
+  },
+  {
     name: "get_dashboard_stats",
     description: "Get platform overview stats: agent counts, task counts, provider counts.",
     inputSchema: {
@@ -305,11 +359,12 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
   // Skills management
   {
     name: "list_skills",
-    description: "List all installed skills. Skills are reusable instruction sets (like prompt templates with tool permissions) that give agents specialized capabilities. Skills can be installed from the SkillsMP marketplace or created locally.",
+    description: "List all installed skills. Skills are reusable instruction sets (like prompt templates with tool permissions) that give agents specialized capabilities. Skills can be installed from the SkillsMP marketplace or created locally. Pass project_id to only see skills scoped to that project (plus global skills).",
     inputSchema: {
       type: "object",
       properties: {
         enabled_only: { type: "boolean", description: "Only return enabled skills (optional, default false)" },
+        project_id: { type: "string", description: "Filter by project ID — returns skills scoped to this project plus global skills" },
       },
     },
   },
@@ -334,6 +389,25 @@ After creating, assign to agents with assign_mcp_server_to_agent. HTTP servers w
         enabled: { type: "boolean", description: "Whether to enable (true) or disable (false) the skill" },
       },
       required: ["skill_id", "enabled"],
+    },
+  },
+  {
+    name: "update_skill",
+    description: "Update an existing skill. Only provide fields you want to change.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        skill_id: { type: "string", description: "The skill ID to update" },
+        name: { type: "string", description: "New name" },
+        description: { type: "string", description: "New description" },
+        content: { type: "string", description: "New instructions content (markdown)" },
+        allowed_tools: {
+          type: "array",
+          items: { type: "string" },
+          description: "New list of allowed MCP tool names",
+        },
+      },
+      required: ["skill_id"],
     },
   },
   {
@@ -469,18 +543,6 @@ Use this to find trigger slugs before creating a subscription.`,
     },
   },
   {
-    name: "list_connected_accounts",
-    description: "List connected accounts (OAuth connections) for a provider. You need a connected_account_id to create a subscription. Each account represents a user's authenticated connection to a service (e.g. GitHub, Slack, Stripe).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        provider: { type: "string", description: "Integration provider ID: composio or agentdojo" },
-        project_id: { type: "string", description: "Project ID for project-scoped API keys (optional)" },
-      },
-      required: ["provider"],
-    },
-  },
-  {
     name: "list_subscriptions",
     description: "List local trigger subscriptions. Subscriptions route incoming webhook events to agents. Each subscription maps a trigger (e.g. github:push) to a specific agent.",
     inputSchema: {
@@ -493,22 +555,21 @@ Use this to find trigger slugs before creating a subscription.`,
   },
   {
     name: "create_subscription",
-    description: `Create a trigger subscription: registers a webhook with the external service (via the provider) and creates a local subscription to route events to an agent.
+    description: `Create a trigger subscription: registers a webhook with the external service and routes events to an agent. The webhook URL is auto-configured — you do NOT need to provide a callback URL.
 
-WORKFLOW:
-1. Use list_trigger_providers to check which providers have keys
-2. Use list_trigger_types to find the trigger slug you want
-3. Use list_connected_accounts to find the connected_account_id
-4. Use list_agents to find the agent_id to route events to
-5. Call create_subscription with all the above
+Just provide all 4 required fields in a single call:
+- provider: "agentdojo" or "composio"
+- trigger_slug: from list_trigger_types
+- connected_account_id: from list_integration_connections
+- agent_id: from list_agents
 
-IMPORTANT: Some triggers require extra config fields (e.g. GitHub triggers need "owner" and "repo"). Check the trigger type's config_schema and pass required fields in the config object.`,
+Some triggers require extra config fields (e.g. GitHub needs "owner" and "repo") — pass them in the config object.`,
     inputSchema: {
       type: "object",
       properties: {
         provider: { type: "string", description: "Trigger provider ID: composio or agentdojo" },
         trigger_slug: { type: "string", description: "Trigger type slug (e.g. 'github:push', 'GITHUB_PUSH_EVENT'). Use list_trigger_types to find slugs." },
-        connected_account_id: { type: "string", description: "Connected account ID that owns the integration. Use list_connected_accounts to find IDs." },
+        connected_account_id: { type: "string", description: "Connected account ID that owns the integration. Use list_integration_connections to find IDs." },
         agent_id: { type: "string", description: "Agent ID to route trigger events to. Use list_agents to find IDs." },
         project_id: { type: "string", description: "Project ID for scoping (optional)" },
         config: {
@@ -940,7 +1001,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         if (!server) {
           return { content: [{ type: "text", text: `MCP server not found: ${args.server_id}` }], isError: true };
         }
-        return { content: [{ type: "text", text: JSON.stringify({
+        const serverInfo: Record<string, any> = {
           id: server.id,
           name: server.name,
           type: server.type,
@@ -952,7 +1013,23 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           port: server.port,
           source: server.source,
           projectId: server.project_id,
-        }, null, 2) }] };
+        };
+        // Include tools with full details for local servers
+        if (server.type === "local") {
+          const tools = McpServerToolDB.findByServer(server.id);
+          serverInfo.tools = tools.map(t => ({
+            id: t.id,
+            name: t.name,
+            description: t.description,
+            handler_type: t.handler_type,
+            enabled: t.enabled,
+            input_schema: t.input_schema,
+            mock_response: t.mock_response,
+            http_config: t.http_config,
+            code: t.code,
+          }));
+        }
+        return { content: [{ type: "text", text: JSON.stringify(serverInfo, null, 2) }] };
       }
 
       case "create_mcp_server": {
@@ -984,6 +1061,59 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         }
         McpServerDB.delete(args.server_id);
         return { content: [{ type: "text", text: `MCP server deleted: ${server.name} (${server.id})` }] };
+      }
+
+      case "add_tool_to_local_server": {
+        const server = McpServerDB.findById(args.server_id);
+        if (!server) {
+          return { content: [{ type: "text", text: `MCP server not found: ${args.server_id}` }], isError: true };
+        }
+        if (server.type !== "local") {
+          return { content: [{ type: "text", text: `Server "${server.name}" is type "${server.type}" — add_tool_to_local_server only works for local servers.` }], isError: true };
+        }
+        // Check for duplicate tool name
+        const existing = McpServerToolDB.findByServerAndName(args.server_id, args.name);
+        if (existing) {
+          return { content: [{ type: "text", text: `Tool "${args.name}" already exists on this server (ID: ${existing.id}). Use a different name or delete the existing tool first.` }], isError: true };
+        }
+        const tool = McpServerToolDB.create({
+          id: generateId(),
+          server_id: args.server_id,
+          name: args.name,
+          description: args.description,
+          input_schema: args.input_schema || { type: "object", properties: {} },
+          handler_type: args.handler_type || "mock",
+          mock_response: args.mock_response || null,
+          http_config: args.http_config || null,
+          code: args.code || null,
+          enabled: true,
+        });
+        return { content: [{ type: "text", text: `Tool added: ${JSON.stringify({ id: tool.id, name: tool.name, handler_type: tool.handler_type, server: server.name }, null, 2)}` }] };
+      }
+
+      case "update_tool_on_local_server": {
+        const tool = McpServerToolDB.findById(args.tool_id);
+        if (!tool) {
+          return { content: [{ type: "text", text: `Tool not found: ${args.tool_id}` }], isError: true };
+        }
+        const server = McpServerDB.findById(tool.server_id);
+        if (!server || server.type !== "local") {
+          return { content: [{ type: "text", text: `Tool belongs to a non-local server — update_tool_on_local_server only works for local servers.` }], isError: true };
+        }
+        const updates: Record<string, unknown> = {};
+        if (args.name !== undefined) updates.name = args.name;
+        if (args.description !== undefined) updates.description = args.description;
+        if (args.input_schema !== undefined) updates.input_schema = args.input_schema;
+        if (args.handler_type !== undefined) updates.handler_type = args.handler_type;
+        if (args.mock_response !== undefined) updates.mock_response = args.mock_response;
+        if (args.http_config !== undefined) updates.http_config = args.http_config;
+        if (args.code !== undefined) updates.code = args.code;
+        if (args.enabled !== undefined) updates.enabled = args.enabled;
+        const updated = McpServerToolDB.update(args.tool_id, updates);
+        if (!updated) {
+          return { content: [{ type: "text", text: `Failed to update tool ${args.tool_id}` }], isError: true };
+        }
+        return { content: [{ type: "text", text: `Tool updated: ${JSON.stringify({ id: updated.id, name: updated.name, handler_type: updated.handler_type, enabled: updated.enabled, server: server.name }, null, 2)}` }] };
       }
 
       case "get_dashboard_stats": {
@@ -1040,7 +1170,10 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
       }
 
       case "list_skills": {
-        const skills = args.enabled_only ? SkillDB.findEnabled() : SkillDB.findAll();
+        let skills = args.enabled_only ? SkillDB.findEnabled() : SkillDB.findAll();
+        if (args.project_id) {
+          skills = skills.filter(s => !s.project_id || s.project_id === args.project_id);
+        }
         const result = skills.map(s => ({
           id: s.id,
           name: s.name,
@@ -1078,6 +1211,20 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         }
         SkillDB.setEnabled(args.skill_id, args.enabled);
         return { content: [{ type: "text", text: `Skill "${skill.name}" ${args.enabled ? "enabled" : "disabled"}` }] };
+      }
+
+      case "update_skill": {
+        const skill = SkillDB.findById(args.skill_id);
+        if (!skill) {
+          return { content: [{ type: "text", text: `Skill not found: ${args.skill_id}` }], isError: true };
+        }
+        const updates: Record<string, any> = {};
+        if (args.name !== undefined) updates.name = args.name;
+        if (args.description !== undefined) updates.description = args.description;
+        if (args.content !== undefined) updates.content = args.content;
+        if (args.allowed_tools !== undefined) updates.allowed_tools = args.allowed_tools;
+        const updated = SkillDB.update(args.skill_id, updates);
+        return { content: [{ type: "text", text: `Skill "${updated?.name || skill.name}" updated.` }] };
       }
 
       case "create_skill": {
@@ -1241,26 +1388,6 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
-      case "list_connected_accounts": {
-        const providerId = args.provider;
-        const projectId = args.project_id || null;
-        const integrationProvider = getProvider(providerId);
-        if (!integrationProvider) {
-          return { content: [{ type: "text", text: `Unknown integration provider: ${providerId}` }], isError: true };
-        }
-        const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
-        if (!apiKey) {
-          return { content: [{ type: "text", text: `${integrationProvider.name} API key not configured` }], isError: true };
-        }
-        const accounts = await integrationProvider.listConnectedAccounts(apiKey, "platform-agent");
-        const result = accounts.map(a => ({
-          id: a.id,
-          appName: a.appName,
-          status: a.status,
-          createdAt: a.createdAt,
-        }));
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
 
       case "list_subscriptions": {
         let subscriptions;
@@ -1321,9 +1448,11 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           }
         }
 
-        // Create remote trigger on the provider
+        // Create remote trigger on the provider — auto-inject callback_url
+        const webhookUrl = SettingsDB.get(`${providerId}_webhook_url`);
         const config: Record<string, unknown> = {
           agent_id: args.agent_id,
+          ...(webhookUrl ? { callback_url: webhookUrl } : {}),
           ...(args.config || {}),
         };
         const triggerResult = await triggerProvider.createTrigger(apiKey, args.trigger_slug, args.connected_account_id, config);
@@ -1738,14 +1867,14 @@ You can manage:
 - SKILLS: Reusable instruction sets that specialize agent behavior. Use create_skill to create new skills (pass project_id from context to scope to the current project), then assign them to agents. Use list_skills, get_skill, create_skill, toggle_skill, assign_skill_to_agent, unassign_skill_from_agent, delete_skill.
 - PROVIDERS: View which LLM providers have API keys configured.
 - TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Use list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
-- SUBSCRIPTIONS & TRIGGERS: Subscribe agents to external events (webhooks). Supports multiple providers (composio, agentdojo). Use list_trigger_providers → list_trigger_types → list_connected_accounts → create_subscription. Manage with enable_subscription, disable_subscription, delete_subscription, list_subscriptions.
+- SUBSCRIPTIONS & TRIGGERS: Subscribe agents to external events (webhooks). Supports multiple providers (composio, agentdojo). Use list_trigger_providers → list_trigger_types → list_integration_connections → create_subscription. Manage with enable_subscription, disable_subscription, delete_subscription, list_subscriptions.
 - INTEGRATIONS: Connect third-party apps and create MCP servers from them. Supports agentdojo and composio providers. Use list_integration_providers → list_integration_apps → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → assign_mcp_server_to_agent. For OAuth apps, direct the user to the Browse Toolkits UI.
 
 CRITICAL: ALWAYS pass project_id to every tool call that accepts it. API keys and resources are scoped per project — calls without project_id will fail. The chat context tells you the current project id.
 
 Typical workflow: list_providers → create_agent → assign MCP servers/skills → start_agent.
 Integration workflow: list_integration_providers → list_integration_apps (browse) → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → assign_mcp_server_to_agent.
-Subscription workflow: list_trigger_providers → list_trigger_types (pick trigger) → list_connected_accounts (pick account) → create_subscription (link trigger to agent).
+Subscription workflow: list_trigger_providers → list_trigger_types (pick trigger) → list_integration_connections (pick account) → create_subscription (link trigger to agent).
 Test workflow: create_test (set agent, message, eval criteria) → run_test → check results.
 Always use list_providers first to check which providers have API keys before creating agents.`,
       };

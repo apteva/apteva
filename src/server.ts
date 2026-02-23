@@ -1,6 +1,7 @@
 import { type Server, type Subprocess } from "bun";
 import { handleApiRequest } from "./routes/api";
 import { handleAuthRequest } from "./routes/auth";
+import { handleShareRequest } from "./routes/share";
 import { serveStatic } from "./routes/static";
 import { join } from "path";
 import { homedir } from "os";
@@ -419,6 +420,17 @@ const server = Bun.serve({
         response.headers.set(key, value);
       });
       return response;
+    }
+
+    // Share routes (public, token-authenticated)
+    if (path.startsWith("/share/")) {
+      const shareResponse = await handleShareRequest(req, path);
+      if (shareResponse) {
+        Object.entries(corsHeaders).forEach(([key, value]) => {
+          shareResponse.headers.set(key, value);
+        });
+        return shareResponse;
+      }
     }
 
     // Serve static files (React app)

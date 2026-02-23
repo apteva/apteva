@@ -5,11 +5,8 @@ import { encrypt, decrypt, encryptObject, decryptObject } from "./crypto";
 import { randomBytes, createHash } from "crypto";
 
 // Types
-export type AgentMode = "coordinator" | "worker";
-
 export interface MultiAgentConfig {
   enabled: boolean;
-  mode?: AgentMode;
   group?: string; // Defaults to projectId if not specified
 }
 
@@ -67,7 +64,6 @@ export function getMultiAgentConfig(features: AgentFeatures, projectId?: string 
   if (typeof agents === "boolean") {
     return {
       enabled: agents,
-      mode: "worker",
       group: projectId || undefined,
     };
   }

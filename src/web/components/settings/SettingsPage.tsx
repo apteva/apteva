@@ -2355,9 +2355,11 @@ function AssistantSettings() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [starting, setStarting] = useState(false);
+  const [webSearch, setWebSearch] = useState(false);
+  const [webFetch, setWebFetch] = useState(false);
 
   // Original values for change detection
-  const [original, setOriginal] = useState({ provider: "", model: "", systemPrompt: "" });
+  const [original, setOriginal] = useState({ provider: "", model: "", systemPrompt: "", webSearch: false, webFetch: false });
 
   useEffect(() => {
     const fetchData = async () => {
@@ -2376,7 +2378,11 @@ function AssistantSettings() {
           setModel(a.model || "");
           setSystemPrompt(a.systemPrompt || "");
           setStatus(a.status || "stopped");
-          setOriginal({ provider: a.provider || "", model: a.model || "", systemPrompt: a.systemPrompt || "" });
+          const ws = a.features?.builtinTools?.webSearch || false;
+          const wf = a.features?.builtinTools?.webFetch || false;
+          setWebSearch(ws);
+          setWebFetch(wf);
+          setOriginal({ provider: a.provider || "", model: a.model || "", systemPrompt: a.systemPrompt || "", webSearch: ws, webFetch: wf });
         }
       } catch {
         setMessage({ type: "error", text: "Failed to load assistant config" });
@@ -2397,7 +2403,7 @@ function AssistantSettings() {
     setModel(defaultModel);
   };
 
-  const hasChanges = provider !== original.provider || model !== original.model || systemPrompt !== original.systemPrompt;
+  const hasChanges = provider !== original.provider || model !== original.model || systemPrompt !== original.systemPrompt || webSearch !== original.webSearch || webFetch !== original.webFetch;
 
   const handleSave = async () => {
     setSaving(true);
@@ -2406,10 +2412,10 @@ function AssistantSettings() {
       const res = await authFetch("/api/agents/apteva-assistant", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, model, systemPrompt }),
+        body: JSON.stringify({ provider, model, systemPrompt, features: { builtinTools: { webSearch, webFetch } } }),
       });
       if (res.ok) {
-        setOriginal({ provider, model, systemPrompt });
+        setOriginal({ provider, model, systemPrompt, webSearch, webFetch });
         setMessage({ type: "success", text: "Assistant settings saved" });
         setTimeout(() => setMessage(null), 3000);
       } else {
@@ -2501,6 +2507,44 @@ function AssistantSettings() {
           placeholder="Select model..."
         />
       </div>
+
+      {/* Built-in Tools - Anthropic only */}
+      {provider === "anthropic" && (
+        <div className="mb-4">
+          <label className="block text-sm text-[#666] mb-1">Built-in Tools</label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setWebSearch(!webSearch)}
+              className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                webSearch
+                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
+                  : "border-[#222] hover:border-[#333] text-[#888]"
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <span className="text-sm">Web Search</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setWebFetch(!webFetch)}
+              className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                webFetch
+                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
+                  : "border-[#222] hover:border-[#333] text-[#888]"
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+              </svg>
+              <span className="text-sm">Web Fetch</span>
+            </button>
+          </div>
+          <p className="text-xs text-[#555] mt-2">Provider-native tools for real-time web access</p>
+        </div>
+      )}
 
       {/* System Prompt */}
       <div className="mb-6">

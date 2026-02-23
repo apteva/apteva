@@ -6,7 +6,7 @@ import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
 import { useTelemetry } from "../../context";
 import { useAuth } from "../../context";
-import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, AgentMode, MultiAgentConfig, OperatorConfig, Task } from "../../types";
+import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, MultiAgentConfig, OperatorConfig, Task } from "../../types";
 import { getMultiAgentConfig, getOperatorConfig } from "../../types";
 
 type Tab = "chat" | "threads" | "tasks" | "memory" | "files" | "settings";
@@ -1126,6 +1126,8 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const [apiKeyFull, setApiKeyFull] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [subscriptions, setSubscriptions] = useState<{ id: string; trigger_slug: string; enabled: boolean }[]>([]);
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
 
   // Fetch subscriptions for this agent
   useEffect(() => {
@@ -1164,6 +1166,20 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
       }
     };
     fetchApiKey();
+  }, [agent.id, authFetch]);
+
+  // Fetch share token
+  useEffect(() => {
+    const fetchShareToken = async () => {
+      try {
+        const res = await authFetch(`/api/agents/${agent.id}/share-token`);
+        if (res.ok) {
+          const data = await res.json();
+          setShareToken(data.token || null);
+        }
+      } catch {}
+    };
+    fetchShareToken();
   }, [agent.id, authFetch]);
 
   // Fetch available skills
@@ -1229,7 +1245,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             ...prev,
             features: {
               ...prev.features,
-              agents: { enabled: true, mode: "worker" as AgentMode, group: agent.projectId || undefined },
+              agents: { enabled: true, group: agent.projectId || undefined },
             },
           };
         }
@@ -1258,31 +1274,11 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     }
   };
 
-  // Set multi-agent mode
-  const setAgentMode = (mode: AgentMode) => {
-    setForm(prev => {
-      const currentConfig = getMultiAgentConfig(prev.features, agent.projectId);
-      return {
-        ...prev,
-        features: {
-          ...prev.features,
-          agents: { ...currentConfig, enabled: true, mode },
-        },
-      };
-    });
-  };
-
   // Helper to check if agents feature is enabled
   const isAgentsEnabled = () => {
     const agentsVal = form.features.agents;
     if (typeof agentsVal === "boolean") return agentsVal;
     return (agentsVal as MultiAgentConfig)?.enabled ?? false;
-  };
-
-  // Get current agent mode
-  const getAgentMode = (): AgentMode => {
-    const config = getMultiAgentConfig(form.features, agent.projectId);
-    return config.mode || "worker";
   };
 
   // Helper to check if operator feature is enabled
@@ -1418,47 +1414,6 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             })}
           </div>
         </FormField>
-
-        {/* Multi-Agent Mode Selection - shown when agents is enabled */}
-        {isAgentsEnabled() && (
-          <FormField label="Multi-Agent Mode">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setAgentMode("coordinator")}
-                className={`flex-1 p-3 rounded border text-left transition ${
-                  getAgentMode() === "coordinator"
-                    ? "border-[#f97316] bg-[#f97316]/10"
-                    : "border-[#222] hover:border-[#333]"
-                }`}
-              >
-                <div className={`text-sm font-medium ${getAgentMode() === "coordinator" ? "text-[#f97316]" : ""}`}>
-                  Coordinator
-                </div>
-                <div className="text-xs text-[#666]">Orchestrates and delegates to other agents</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setAgentMode("worker")}
-                className={`flex-1 p-3 rounded border text-left transition ${
-                  getAgentMode() === "worker"
-                    ? "border-[#f97316] bg-[#f97316]/10"
-                    : "border-[#222] hover:border-[#333]"
-                }`}
-              >
-                <div className={`text-sm font-medium ${getAgentMode() === "worker" ? "text-[#f97316]" : ""}`}>
-                  Worker
-                </div>
-                <div className="text-xs text-[#666]">Receives tasks from coordinators</div>
-              </button>
-            </div>
-            {agent.projectId && (
-              <p className="text-xs text-[#555] mt-2">
-                Group: Using project as agent group
-              </p>
-            )}
-          </FormField>
-        )}
 
         {/* Operator Browser Provider - shown when operator is enabled */}
         {isOperatorEnabled() && (
@@ -1725,6 +1680,37 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                   </code>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Share Link */}
+        {shareToken && (
+          <div className="mt-8 pt-6 border-t border-[#222]">
+            <p className="text-sm text-[#666] mb-3">Share Link</p>
+            <p className="text-xs text-[#555] mb-3">
+              Anyone with this link can chat with this agent. No login required. Regenerate the API key to invalidate.
+            </p>
+            <div className="flex gap-2">
+              <code className="flex-1 text-xs bg-[#1a1a1a] px-3 py-2 rounded text-[#888] break-all border border-[#222]">
+                {`${window.location.origin}/share/${shareToken}`}
+              </code>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(`${window.location.origin}/share/${shareToken}`);
+                  setShareCopied(true);
+                  setTimeout(() => setShareCopied(false), 2000);
+                }}
+                className="px-3 py-2 text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#222] rounded text-[#888] hover:text-[#e0e0e0] transition flex-shrink-0"
+              >
+                {shareCopied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            <div className="mt-3">
+              <p className="text-xs text-[#555] mb-1">Embed</p>
+              <code className="block text-xs bg-[#1a1a1a] px-3 py-2 rounded text-[#666] break-all border border-[#222]">
+                {`<iframe src="${window.location.origin}/share/${shareToken}" width="400" height="600" style="border:none; border-radius:12px;" />`}
+              </code>
             </div>
           </div>
         )}

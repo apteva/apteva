@@ -3,7 +3,7 @@ import { Modal } from "../common/Modal";
 import { Select } from "../common/Select";
 import { MemoryIcon, TasksIcon, FilesIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, MultiAgentIcon } from "../common/Icons";
 import { useProjects } from "../../context";
-import type { Provider, NewAgentForm, AgentFeatures, AgentMode, MultiAgentConfig } from "../../types";
+import type { Provider, NewAgentForm, AgentFeatures, MultiAgentConfig } from "../../types";
 import { getMultiAgentConfig } from "../../types";
 
 interface CreateAgentModalProps {
@@ -106,7 +106,7 @@ export function CreateAgentModal({
           ...form,
           features: {
             ...form.features,
-            agents: { enabled: true, mode: "worker" as AgentMode, group: form.projectId || undefined },
+            agents: { enabled: true, group: form.projectId || undefined },
           },
         });
       }
@@ -128,23 +128,6 @@ export function CreateAgentModal({
     return (agentsVal as MultiAgentConfig)?.enabled ?? false;
   };
 
-  // Get current agent mode
-  const getAgentMode = (): AgentMode => {
-    const config = getMultiAgentConfig(form.features, form.projectId);
-    return config.mode || "worker";
-  };
-
-  // Set multi-agent mode
-  const setAgentMode = (mode: AgentMode) => {
-    const currentConfig = getMultiAgentConfig(form.features, form.projectId);
-    onFormChange({
-      ...form,
-      features: {
-        ...form.features,
-        agents: { ...currentConfig, enabled: true, mode },
-      },
-    });
-  };
 
   return (
     <Modal>
@@ -237,47 +220,6 @@ export function CreateAgentModal({
                 })}
               </div>
             </FormField>
-
-            {/* Multi-Agent Mode Selection */}
-            {isAgentsEnabled() && (
-              <FormField label="Multi-Agent Mode">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setAgentMode("coordinator")}
-                    className={`flex-1 p-3 rounded border text-left transition ${
-                      getAgentMode() === "coordinator"
-                        ? "border-[#f97316] bg-[#f97316]/10"
-                        : "border-[#222] hover:border-[#333]"
-                    }`}
-                  >
-                    <div className={`text-sm font-medium ${getAgentMode() === "coordinator" ? "text-[#f97316]" : ""}`}>
-                      Coordinator
-                    </div>
-                    <div className="text-xs text-[#666]">Orchestrates and delegates</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAgentMode("worker")}
-                    className={`flex-1 p-3 rounded border text-left transition ${
-                      getAgentMode() === "worker"
-                        ? "border-[#f97316] bg-[#f97316]/10"
-                        : "border-[#222] hover:border-[#333]"
-                    }`}
-                  >
-                    <div className={`text-sm font-medium ${getAgentMode() === "worker" ? "text-[#f97316]" : ""}`}>
-                      Worker
-                    </div>
-                    <div className="text-xs text-[#666]">Receives delegated tasks</div>
-                  </button>
-                </div>
-                {form.projectId && (
-                  <p className="text-xs text-[#555] mt-2">
-                    Group: Using project as agent group
-                  </p>
-                )}
-              </FormField>
-            )}
 
             {/* Agent Built-in Tools - Anthropic only */}
             {form.provider === "anthropic" && (
