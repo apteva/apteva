@@ -5,7 +5,7 @@
     "": {
       "name": "apteva",
       "dependencies": {
-        "@apteva/apteva-kit": "^0.1.112",
+        "@apteva/apteva-kit": "^0.1.127",
         "grammy": "^1.40.0",
         "ink": "^6.7.0",
         "ink-spinner": "^5.0.0",
@@ -50,7 +50,7 @@
 
     "@apteva/agent-win32-x64": ["@apteva/agent-win32-x64@1.33.73", "", { "os": "win32", "cpu": "x64" }, "sha512-taey3aIWZrC3QCcwJ3X+UmJWKy/MlUhyS2nGrfn6Siai600eT1e2LroExfWap+B4BNHq3G4EjKjvjsmsA67Udg=="],
 
-    "@apteva/apteva-kit": ["@apteva/apteva-kit@0.1.112", "", { "dependencies": { "clsx": "^2.1.0", "tailwind-merge": "^2.2.0" }, "peerDependencies": { "react": ">=18", "react-dom": ">=18" } }, "sha512-L+DfGVPRAhJ9vxVOy2TZFMB2lsI2T6LqZ2dbJtSCHXmpA5s1Y0DngOE4xofB7kcCccn1HlHAwi8wp3hR5E8LAw=="],
+    "@apteva/apteva-kit": ["@apteva/apteva-kit@0.1.127", "", { "dependencies": { "clsx": "^2.1.0", "tailwind-merge": "^2.2.0" }, "peerDependencies": { "react": ">=18", "react-dom": ">=18" } }, "sha512-FyxG1DmMPxdnoXmoLdsMTb2cevcIRAj1AE4a9QjjMtjE0+9j+qnH+/XgsxYpJcY8+fjHakzrYbL77KH62uKOAg=="],
 
     "@grammyjs/types": ["@grammyjs/types@3.24.0", "", {}, "sha512-qQIEs4lN5WqUdr4aT8MeU6UFpMbGYAvcvYSW1A4OO1PABGJQHz/KLON6qvpf+5RxaNDQBxiY2k2otIhg/AG7RQ=="],
 

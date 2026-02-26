@@ -13,6 +13,7 @@ interface TelemetryStats {
   total_errors: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  total_cost: number;
 }
 
 interface UsageByAgent {
@@ -22,6 +23,7 @@ interface UsageByAgent {
   llm_calls: number;
   tool_calls: number;
   errors: number;
+  cost: number;
 }
 
 interface DailyUsage {
@@ -58,7 +60,7 @@ function extractEventStats(event: TelemetryEvent): {
 
 export function TelemetryPage() {
   const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
-  const { currentProjectId, currentProject } = useProjects();
+  const { currentProjectId, currentProject, costTrackingEnabled } = useProjects();
   const { authFetch } = useAuth();
   const [fetchedStats, setFetchedStats] = useState<TelemetryStats | null>(null);
   const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
@@ -73,6 +75,20 @@ export function TelemetryPage() {
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set(["DATABASE"]));
   const [agents, setAgents] = useState<Array<{ id: string; name: string; projectId: string | null }>>([]);
   const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
+
+  // Sort state for usage table
+  type SortKey = "agent" | "llm_calls" | "tool_calls" | "input_tokens" | "output_tokens" | "errors" | "cost";
+  const [sortKey, setSortKey] = useState<SortKey>("cost");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
 
   // Track IDs that were in the fetched stats to avoid double-counting
   const countedEventIdsRef = useRef<Set<string>>(new Set());
@@ -194,6 +210,7 @@ export function TelemetryPage() {
       total_errors: fetchedStats.total_errors + deltaErrors,
       total_input_tokens: fetchedStats.total_input_tokens + deltaInputTokens,
       total_output_tokens: fetchedStats.total_output_tokens + deltaOutputTokens,
+      total_cost: fetchedStats.total_cost || 0,
     };
   }, [fetchedStats, realtimeEvents]);
 
@@ -224,6 +241,7 @@ export function TelemetryPage() {
             errors: eventStats.errors,
             input_tokens: eventStats.input_tokens,
             output_tokens: eventStats.output_tokens,
+            cost: 0,
           });
         }
       }
@@ -231,6 +249,22 @@ export function TelemetryPage() {
 
     return Array.from(usageMap.values());
   }, [fetchedUsage, realtimeEvents]);
+
+  // Sorted usage for the table
+  const sortedUsage = useMemo(() => {
+    const sorted = [...usage];
+    sorted.sort((a, b) => {
+      if (sortKey === "agent") {
+        const aName = (agents.find(ag => ag.id === a.agent_id)?.name || a.agent_id).toLowerCase();
+        const bName = (agents.find(ag => ag.id === b.agent_id)?.name || b.agent_id).toLowerCase();
+        return sortDir === "asc" ? (aName < bName ? -1 : 1) : (aName > bName ? -1 : 1);
+      }
+      const aVal = a[sortKey] as number;
+      const bVal = b[sortKey] as number;
+      return sortDir === "asc" ? aVal - bVal : bVal - aVal;
+    });
+    return sorted;
+  }, [usage, sortKey, sortDir, agents]);
 
   // Merge real-time events with historical, filtering and deduping
   const allEvents = React.useMemo(() => {
@@ -315,7 +349,7 @@ export function TelemetryPage() {
   };
 
   const levelColors: Record<string, string> = {
-    debug: "text-[#555]",
+    debug: "text-[var(--color-text-faint)]",
     info: "text-blue-400",
     warn: "text-yellow-400",
     error: "text-red-400",
@@ -380,20 +414,23 @@ export function TelemetryPage() {
                 : `Telemetry - ${currentProject?.name || ""}`}
             </h1>
           </div>
-          <p className="text-[#666]">
+          <p className="text-[var(--color-text-muted)]">
             Monitor agent activity, token usage, and errors.
           </p>
         </div>
 
         {/* Stats Cards */}
         {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+          <div className={`grid grid-cols-2 md:grid-cols-3 ${costTrackingEnabled ? "lg:grid-cols-7" : "lg:grid-cols-6"} gap-4 mb-6`}>
             <StatCard label="Events" value={formatNumber(stats.total_events)} />
             <StatCard label="LLM Calls" value={formatNumber(stats.total_llm_calls)} />
             <StatCard label="Tool Calls" value={formatNumber(stats.total_tool_calls)} />
             <StatCard label="Errors" value={formatNumber(stats.total_errors)} color="red" />
             <StatCard label="Input Tokens" value={formatNumber(stats.total_input_tokens)} />
             <StatCard label="Output Tokens" value={formatNumber(stats.total_output_tokens)} />
+            {costTrackingEnabled && (
+              <StatCard label="Total Cost" value={`$${stats.total_cost.toFixed(4)}`} color="orange" />
+            )}
           </div>
         )}
 
@@ -427,15 +464,15 @@ export function TelemetryPage() {
           return (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
             {/* Activity Chart */}
-            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
-              <h3 className="text-sm font-medium text-[#888] mb-4">{chartLabel} Activity</h3>
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+              <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-4">{chartLabel} Activity</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
                   <XAxis
                     dataKey="date"
-                    stroke="#444"
-                    tick={{ fill: "#666", fontSize: 11 }}
+                    stroke="var(--color-border-light)"
+                    tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
                     tickFormatter={(v) => {
                       if (!useDaily && v.includes(" ")) {
                         return v.split(" ")[1];
@@ -444,15 +481,15 @@ export function TelemetryPage() {
                       return `${d.getMonth() + 1}/${d.getDate()}`;
                     }}
                   />
-                  <YAxis stroke="#444" tick={{ fill: "#666", fontSize: 11 }} allowDecimals={false} />
+                  <YAxis stroke="var(--color-border-light)" tick={{ fill: "var(--color-text-muted)", fontSize: 11 }} allowDecimals={false} />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: "#111",
-                      border: "1px solid #333",
+                      backgroundColor: "var(--color-surface)",
+                      border: "1px solid var(--color-border-light)",
                       borderRadius: "8px",
                       fontSize: 12,
                     }}
-                    labelStyle={{ color: "#888" }}
+                    labelStyle={{ color: "var(--color-text-secondary)" }}
                     cursor={{ stroke: "rgba(255,255,255,0.1)" }}
                     labelFormatter={(v) => useDaily ? new Date(v + "T00:00:00").toLocaleDateString() : v}
                   />
@@ -465,8 +502,8 @@ export function TelemetryPage() {
                     type="monotone"
                     dataKey="llm_calls"
                     name="LLM Calls"
-                    stroke="#f97316"
-                    fill="#f97316"
+                    stroke="var(--color-accent)"
+                    fill="var(--color-accent)"
                     fillOpacity={0.15}
                     strokeWidth={1.5}
                   />
@@ -474,8 +511,8 @@ export function TelemetryPage() {
                     type="monotone"
                     dataKey="tool_calls"
                     name="Tool Calls"
-                    stroke="#fb923c"
-                    fill="#fb923c"
+                    stroke="var(--color-accent-hover)"
+                    fill="var(--color-accent-hover)"
                     fillOpacity={0.08}
                     strokeWidth={1.5}
                   />
@@ -493,15 +530,15 @@ export function TelemetryPage() {
             </div>
 
             {/* Token Usage Chart */}
-            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
-              <h3 className="text-sm font-medium text-[#888] mb-4">{chartLabel} Token Usage</h3>
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+              <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-4">{chartLabel} Token Usage</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
                   <XAxis
                     dataKey="date"
-                    stroke="#444"
-                    tick={{ fill: "#666", fontSize: 11 }}
+                    stroke="var(--color-border-light)"
+                    tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
                     tickFormatter={(v) => {
                       if (!useDaily && v.includes(" ")) {
                         return v.split(" ")[1];
@@ -511,8 +548,8 @@ export function TelemetryPage() {
                     }}
                   />
                   <YAxis
-                    stroke="#444"
-                    tick={{ fill: "#666", fontSize: 11 }}
+                    stroke="var(--color-border-light)"
+                    tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
                     tickFormatter={(v) => {
                       if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
                       if (v >= 1000) return `${(v / 1000).toFixed(0)}K`;
@@ -521,12 +558,12 @@ export function TelemetryPage() {
                   />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: "#111",
-                      border: "1px solid #333",
+                      backgroundColor: "var(--color-surface)",
+                      border: "1px solid var(--color-border-light)",
                       borderRadius: "8px",
                       fontSize: 12,
                     }}
-                    labelStyle={{ color: "#888" }}
+                    labelStyle={{ color: "var(--color-text-secondary)" }}
                     cursor={{ fill: "rgba(255,255,255,0.03)" }}
                     labelFormatter={(v) => useDaily ? new Date(v + "T00:00:00").toLocaleDateString() : v}
                     formatter={(value: number) => [value.toLocaleString(), undefined]}
@@ -539,13 +576,13 @@ export function TelemetryPage() {
                   <Bar
                     dataKey="input_tokens"
                     name="Input Tokens"
-                    fill="#f97316"
+                    fill="var(--color-accent)"
                     radius={[2, 2, 0, 0]}
                   />
                   <Bar
                     dataKey="output_tokens"
                     name="Output Tokens"
-                    fill="#ea580c"
+                    fill="var(--color-accent-hover)"
                     radius={[2, 2, 0, 0]}
                   />
                 </BarChart>
@@ -556,43 +593,77 @@ export function TelemetryPage() {
         })()}
 
         {/* Usage by Agent */}
-        {usage.length > 0 && (
+        {usage.length > 0 && (() => {
+          const maxCost = Math.max(...sortedUsage.map(u => u.cost), 0.0001);
+          const SortHeader = ({ label, field, align = "right" }: { label: string; field: SortKey; align?: string }) => (
+            <th
+              className={`${align === "left" ? "text-left" : "text-right"} p-3 cursor-pointer hover:text-[var(--color-text-secondary)] select-none transition-colors`}
+              onClick={() => handleSort(field)}
+            >
+              <span className="inline-flex items-center gap-1">
+                {align === "right" && sortKey === field && (
+                  <span className="text-orange-400">{sortDir === "asc" ? "\u25b2" : "\u25bc"}</span>
+                )}
+                {label}
+                {align === "left" && sortKey === field && (
+                  <span className="text-orange-400">{sortDir === "asc" ? "\u25b2" : "\u25bc"}</span>
+                )}
+              </span>
+            </th>
+          );
+
+          return (
           <div className="mb-6">
             <h2 className="text-lg font-medium mb-3">Usage by Agent</h2>
-            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg overflow-hidden">
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-[#1a1a1a] text-[#666]">
-                    <th className="text-left p-3">Agent</th>
-                    <th className="text-right p-3">LLM Calls</th>
-                    <th className="text-right p-3">Tool Calls</th>
-                    <th className="text-right p-3">Input Tokens</th>
-                    <th className="text-right p-3">Output Tokens</th>
-                    <th className="text-right p-3">Errors</th>
+                  <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
+                    <SortHeader label="Agent" field="agent" align="left" />
+                    <SortHeader label="LLM Calls" field="llm_calls" />
+                    <SortHeader label="Tool Calls" field="tool_calls" />
+                    <SortHeader label="Input Tokens" field="input_tokens" />
+                    <SortHeader label="Output Tokens" field="output_tokens" />
+                    <SortHeader label="Errors" field="errors" />
+                    {costTrackingEnabled && <SortHeader label="Est. Cost" field="cost" />}
                   </tr>
                 </thead>
                 <tbody>
-                  {usage.map((u) => (
-                    <tr key={u.agent_id} className="border-b border-[#1a1a1a] last:border-0">
+                  {sortedUsage.map((u) => (
+                    <tr key={u.agent_id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg)]">
                       <td className="p-3 font-medium">{getAgentName(u.agent_id)}</td>
-                      <td className="p-3 text-right text-[#888]">{formatNumber(u.llm_calls)}</td>
-                      <td className="p-3 text-right text-[#888]">{formatNumber(u.tool_calls)}</td>
-                      <td className="p-3 text-right text-[#888]">{formatNumber(u.input_tokens)}</td>
-                      <td className="p-3 text-right text-[#888]">{formatNumber(u.output_tokens)}</td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.llm_calls)}</td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.tool_calls)}</td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.input_tokens)}</td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.output_tokens)}</td>
                       <td className="p-3 text-right">
                         {u.errors > 0 ? (
                           <span className="text-red-400">{u.errors}</span>
                         ) : (
-                          <span className="text-[#444]">0</span>
+                          <span className="text-[var(--color-text-faint)]">0</span>
                         )}
                       </td>
+                      {costTrackingEnabled && (
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <div className="w-16 h-1.5 bg-[var(--color-surface-raised)] rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-orange-500 rounded-full"
+                                style={{ width: `${(u.cost / maxCost) * 100}%` }}
+                              />
+                            </div>
+                            <span className="text-[var(--color-text-secondary)] min-w-[60px] text-right">${u.cost.toFixed(4)}</span>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -608,14 +679,14 @@ export function TelemetryPage() {
           <div className="flex flex-wrap items-center gap-1.5 flex-1">
             {allCategories.map((cat) => {
               const isHidden = hiddenCategories.has(cat);
-              const colorClass = categoryColors[cat] || "bg-[#222] text-[#888] border-[#333]";
+              const colorClass = categoryColors[cat] || "bg-[var(--color-surface-raised)] text-[var(--color-text-secondary)] border-[var(--color-border-light)]";
               return (
                 <button
                   key={cat}
                   onClick={() => toggleCategory(cat)}
                   className={`px-2 py-0.5 rounded text-xs border transition-all ${
                     isHidden
-                      ? "bg-[#1a1a1a] text-[#555] border-[#333] opacity-50"
+                      ? "bg-[var(--color-surface-raised)] text-[var(--color-text-faint)] border-[var(--color-border-light)] opacity-50"
                       : colorClass
                   }`}
                 >
@@ -635,7 +706,7 @@ export function TelemetryPage() {
             </div>
             <button
               onClick={fetchData}
-              className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] border border-[#333] rounded text-sm transition"
+              className="px-3 py-2 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] rounded text-sm transition"
             >
               Refresh
             </button>
@@ -643,31 +714,31 @@ export function TelemetryPage() {
         </div>
 
         {/* Events List */}
-        <div className="bg-[#111] border border-[#1a1a1a] rounded-lg">
-          <div className="p-3 border-b border-[#1a1a1a] flex items-center justify-between">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg">
+          <div className="p-3 border-b border-[var(--color-border)] flex items-center justify-between">
             <h2 className="font-medium">Recent Events</h2>
             {realtimeEvents.length > 0 && (
-              <span className="text-xs text-[#666]">
+              <span className="text-xs text-[var(--color-text-muted)]">
                 {realtimeEvents.length} new
               </span>
             )}
           </div>
 
           {loading && allEvents.length === 0 ? (
-            <div className="p-8 text-center text-[#666]">Loading...</div>
+            <div className="p-8 text-center text-[var(--color-text-muted)]">Loading...</div>
           ) : allEvents.length === 0 ? (
-            <div className="p-8 text-center text-[#666]">
+            <div className="p-8 text-center text-[var(--color-text-muted)]">
               No telemetry events yet. Events will appear here in real-time once agents start sending data.
             </div>
           ) : (
-            <div className="divide-y divide-[#1a1a1a]">
+            <div className="divide-y divide-[var(--color-border)]">
               {allEvents.map((event) => {
                 const isNew = newEventIds.has(event.id);
 
                 return (
                   <div
                     key={event.id}
-                    className={`p-3 hover:bg-[#0a0a0a] cursor-pointer transition-all duration-500 ${
+                    className={`p-3 hover:bg-[var(--color-bg)] cursor-pointer transition-all duration-500 ${
                       isNew ? "bg-green-500/5" : ""
                     }`}
                     style={{
@@ -676,17 +747,17 @@ export function TelemetryPage() {
                     onClick={() => setExpandedEvent(expandedEvent === event.id ? null : event.id)}
                   >
                     <div className="flex items-start gap-3">
-                      <span className={`px-2 py-0.5 rounded text-xs border transition-colors duration-300 ${categoryColors[event.category] || "bg-[#222] text-[#888] border-[#333]"}`}>
+                      <span className={`px-2 py-0.5 rounded text-xs border transition-colors duration-300 ${categoryColors[event.category] || "bg-[var(--color-surface-raised)] text-[var(--color-text-secondary)] border-[var(--color-border-light)]"}`}>
                         {event.category}
                       </span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{event.type}</span>
-                          <span className={`text-xs ${levelColors[event.level] || "text-[#666]"}`}>
+                          <span className={`text-xs ${levelColors[event.level] || "text-[var(--color-text-muted)]"}`}>
                             {event.level}
                           </span>
                           {event.duration_ms && (
-                            <span className="text-xs text-[#555]">{event.duration_ms}ms</span>
+                            <span className="text-xs text-[var(--color-text-faint)]">{event.duration_ms}ms</span>
                           )}
                           <span
                             className={`w-1.5 h-1.5 rounded-full bg-green-400 transition-opacity duration-1000 ${
@@ -694,14 +765,14 @@ export function TelemetryPage() {
                             }`}
                           />
                         </div>
-                        <div className="text-xs text-[#555] mt-1">
+                        <div className="text-xs text-[var(--color-text-faint)] mt-1">
                           {getAgentName(event.agent_id)} · {new Date(event.timestamp).toLocaleString()}
                         </div>
                         {event.error && (
                           <div className="text-xs text-red-400 mt-1 font-mono">{event.error}</div>
                         )}
                         {expandedEvent === event.id && event.data && Object.keys(event.data).length > 0 && (
-                          <pre className="text-xs text-[#666] mt-2 p-2 bg-[#0a0a0a] rounded overflow-x-auto">
+                          <pre className="text-xs text-[var(--color-text-muted)] mt-2 p-2 bg-[var(--color-bg)] rounded overflow-x-auto">
                             {JSON.stringify(event.data, null, 2)}
                           </pre>
                         )}
@@ -720,9 +791,9 @@ export function TelemetryPage() {
 
 function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
-      <div className="text-[#666] text-xs mb-1">{label}</div>
-      <div className={`text-2xl font-semibold ${color === "red" ? "text-red-400" : ""}`}>
+    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+      <div className="text-[var(--color-text-muted)] text-xs mb-1">{label}</div>
+      <div className={`text-2xl font-semibold ${color === "red" ? "text-red-400" : color === "orange" ? "text-orange-400" : ""}`}>
         {value}
       </div>
     </div>

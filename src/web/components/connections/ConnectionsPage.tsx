@@ -21,22 +21,22 @@ export function ConnectionsPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold mb-1">Connections</h1>
-            <p className="text-[#666]">
+            <p className="text-[var(--color-text-muted)]">
               Manage external app connections, triggers, and webhooks.
             </p>
           </div>
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-[#111] border border-[#1a1a1a] rounded-lg p-1 w-fit">
+        <div className="flex gap-1 mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-1 w-fit">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`px-4 py-2 rounded text-sm font-medium transition ${
                 activeTab === tab.id
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               {tab.label}

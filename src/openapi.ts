@@ -1006,6 +1006,40 @@ while (true) {
         },
       },
     },
+    "/tasks/{agentId}": {
+      post: {
+        tags: ["Tasks"],
+        summary: "Create a task on an agent",
+        description: "Create a new task on a running agent. The agent must have the tasks feature enabled.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" }, description: "Agent ID to create the task on" },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  title: { type: "string", description: "Task title" },
+                  description: { type: "string", description: "Task description" },
+                  type: { type: "string", enum: ["once", "recurring"], default: "once" },
+                  priority: { type: "integer", minimum: 1, maximum: 10, default: 5 },
+                  execute_at: { type: "string", format: "date-time", description: "Scheduled execution time (for one-time tasks)" },
+                  recurrence: { type: "string", description: "Cron expression (for recurring tasks)" },
+                },
+                required: ["title"],
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "Task created successfully" },
+          "400": { description: "Agent is not running or invalid input" },
+          "404": { description: "Agent not found" },
+        },
+      },
+    },
     "/tasks/{agentId}/{taskId}": {
       get: {
         tags: ["Tasks"],
@@ -1031,6 +1065,68 @@ while (true) {
           },
           "400": { description: "Agent is not running" },
           "404": { description: "Agent not found" },
+        },
+      },
+      put: {
+        tags: ["Tasks"],
+        summary: "Update a task on an agent",
+        description: "Update an existing task on a running agent.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" }, description: "Agent ID" },
+          { name: "taskId", in: "path", required: true, schema: { type: "string" }, description: "Task ID to update" },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  description: { type: "string" },
+                  type: { type: "string", enum: ["once", "recurring"] },
+                  priority: { type: "integer", minimum: 1, maximum: 10 },
+                  execute_at: { type: "string", format: "date-time" },
+                  recurrence: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Task updated" },
+          "400": { description: "Agent is not running or invalid input" },
+          "404": { description: "Agent or task not found" },
+        },
+      },
+      delete: {
+        tags: ["Tasks"],
+        summary: "Delete a task on an agent",
+        description: "Delete a task from a running agent.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" }, description: "Agent ID" },
+          { name: "taskId", in: "path", required: true, schema: { type: "string" }, description: "Task ID to delete" },
+        ],
+        responses: {
+          "200": { description: "Task deleted" },
+          "400": { description: "Agent is not running" },
+          "404": { description: "Agent or task not found" },
+        },
+      },
+    },
+    "/tasks/{agentId}/{taskId}/execute": {
+      post: {
+        tags: ["Tasks"],
+        summary: "Execute a task immediately",
+        description: "Immediately execute a task on a running agent, regardless of its schedule.",
+        parameters: [
+          { name: "agentId", in: "path", required: true, schema: { type: "string" }, description: "Agent ID" },
+          { name: "taskId", in: "path", required: true, schema: { type: "string" }, description: "Task ID to execute" },
+        ],
+        responses: {
+          "200": { description: "Task execution started" },
+          "400": { description: "Agent is not running" },
+          "404": { description: "Agent or task not found" },
         },
       },
     },

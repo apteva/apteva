@@ -8,7 +8,7 @@ import type { Agent, Provider, Route, NewAgentForm } from "./types";
 import { DEFAULT_FEATURES } from "./types";
 
 // Context
-import { TelemetryProvider, AuthProvider, ProjectProvider, useAuth, useProjects, useAgentStatusChange, useTaskChange } from "./context";
+import { TelemetryProvider, AuthProvider, ProjectProvider, ThemeProvider, useTheme, useAuth, useProjects, useAgentStatusChange, useTaskChange } from "./context";
 
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
@@ -241,7 +241,7 @@ function AppContent() {
   }
 
   return (
-    <div className="h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex flex-col overflow-hidden">
+    <div className="h-screen font-mono flex flex-col overflow-hidden" style={{ backgroundColor: "var(--color-bg)", color: "var(--color-text)" }}>
       <Header onMenuClick={() => setMobileMenuOpen(true)} agents={agents} />
 
       {startError && (
@@ -345,6 +345,7 @@ function AppContent() {
 
 // ==================== Share Page (public, no auth) ====================
 function SharePage({ token }: { token: string }) {
+  const { theme } = useTheme();
   const [status, setStatus] = useState<"checking" | "online" | "offline">("checking");
   const [agentName, setAgentName] = useState("Agent");
 
@@ -370,32 +371,33 @@ function SharePage({ token }: { token: string }) {
 
   if (status === "checking") {
     return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0a]">
-        <div className="text-[#666] text-sm">Connecting...</div>
+      <div className="min-h-[100dvh] flex items-center justify-center" style={{ backgroundColor: "var(--color-bg)" }}>
+        <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>Connecting...</div>
       </div>
     );
   }
 
   if (status === "offline") {
     return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0a]">
+      <div className="min-h-[100dvh] flex items-center justify-center" style={{ backgroundColor: "var(--color-bg)" }}>
         <div className="text-center">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#666] mx-auto mb-3" />
-          <div className="text-base font-semibold text-[#ccc] mb-1.5">{agentName}</div>
-          <div className="text-sm text-[#666]">This agent is currently offline</div>
+          <div className="w-2.5 h-2.5 rounded-full mx-auto mb-3" style={{ backgroundColor: "var(--color-text-muted)" }} />
+          <div className="text-base font-semibold mb-1.5" style={{ color: "var(--color-text)" }}>{agentName}</div>
+          <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>This agent is currently offline</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0a] p-0 md:p-4">
-      <div className="w-full max-w-[640px] h-[100dvh] md:h-[calc(100dvh-32px)] md:max-h-[800px] md:rounded-xl overflow-hidden md:border md:border-[#1a1a1a] flex flex-col bg-[#0a0a0a]">
+    <div className="min-h-[100dvh] flex items-center justify-center p-0 md:p-4" style={{ backgroundColor: "var(--color-bg)" }}>
+      <div className="w-full max-w-[640px] h-[100dvh] md:h-[calc(100dvh-32px)] md:max-h-[800px] md:rounded-xl overflow-hidden md:border flex flex-col" style={{ backgroundColor: "var(--color-bg)", borderColor: "var(--color-border)" }}>
         <Chat
           agentId="default"
           apiUrl={`/share/${token}`}
           placeholder="Type a message..."
           variant="terminal"
+          theme={theme.id as "light" | "dark"}
           headerTitle={agentName}
           enableMarkdown
           enableWidgets
@@ -411,19 +413,25 @@ function App() {
   // Check if this is a /share/:token URL — render public share page without auth
   const shareMatch = window.location.pathname.match(/^\/share\/([a-f0-9]{32})$/);
   if (shareMatch) {
-    return <SharePage token={shareMatch[1]} />;
+    return (
+      <ThemeProvider>
+        <SharePage token={shareMatch[1]} />
+      </ThemeProvider>
+    );
   }
 
   return (
-    <AuthProvider>
-      <ProjectProvider>
-        <MetaAgentProvider>
-          <TelemetryProvider>
-            <AppContent />
-          </TelemetryProvider>
-        </MetaAgentProvider>
-      </ProjectProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <ProjectProvider>
+          <MetaAgentProvider>
+            <TelemetryProvider>
+              <AppContent />
+            </TelemetryProvider>
+          </MetaAgentProvider>
+        </ProjectProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 

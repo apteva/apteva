@@ -385,7 +385,7 @@ export function IntegrationsPanel({
   const availableApps = filteredApps.filter((app) => !isConnected(app));
 
   if (loading) {
-    return <div className="text-center py-8 text-[#666]">Loading apps...</div>;
+    return <div className="text-center py-8 text-[var(--color-text-muted)]">Loading apps...</div>;
   }
 
   return (
@@ -393,7 +393,7 @@ export function IntegrationsPanel({
       {/* Auth Method Choice Modal */}
       {authMethodModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-md mx-4">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-md mx-4">
             <div className="flex items-center gap-3 mb-4">
               {authMethodModal.app.logo && (
                 <img
@@ -404,7 +404,7 @@ export function IntegrationsPanel({
               )}
               <div>
                 <h3 className="font-medium">Connect {authMethodModal.app.name}</h3>
-                <p className="text-xs text-[#666]">Choose how to authenticate</p>
+                <p className="text-xs text-[var(--color-text-muted)]">Choose how to authenticate</p>
               </div>
             </div>
             <div className="space-y-3">
@@ -415,10 +415,10 @@ export function IntegrationsPanel({
                   setApiKeyInput("");
                   setCredentialInputs({});
                 }}
-                className="w-full text-left p-3 bg-[#0a0a0a] hover:bg-[#1a1a1a] border border-[#333] hover:border-[#f97316] rounded-lg transition"
+                className="w-full text-left p-3 bg-[var(--color-bg)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] rounded-lg transition"
               >
                 <div className="font-medium text-sm">API Key</div>
-                <div className="text-xs text-[#666] mt-0.5">
+                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
                   Enter your {authMethodModal.app.name} API key directly
                 </div>
               </button>
@@ -427,17 +427,17 @@ export function IntegrationsPanel({
                   setAuthMethodModal(null);
                   connectApp(authMethodModal.app, undefined, true);
                 }}
-                className="w-full text-left p-3 bg-[#0a0a0a] hover:bg-[#1a1a1a] border border-[#333] hover:border-[#f97316] rounded-lg transition"
+                className="w-full text-left p-3 bg-[var(--color-bg)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] rounded-lg transition"
               >
                 <div className="font-medium text-sm">OAuth</div>
-                <div className="text-xs text-[#666] mt-0.5">
+                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
                   Sign in with your {authMethodModal.app.name} account
                 </div>
               </button>
             </div>
             <button
               onClick={() => setAuthMethodModal(null)}
-              className="w-full text-sm text-[#666] hover:text-white mt-4 py-2 transition"
+              className="w-full text-sm text-[var(--color-text-muted)] hover:text-white mt-4 py-2 transition"
             >
               Cancel
             </button>
@@ -448,7 +448,7 @@ export function IntegrationsPanel({
       {/* API Key / Credentials Modal */}
       {apiKeyModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-md mx-4">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-md mx-4">
             <div className="flex items-center gap-3 mb-4">
               {apiKeyModal.app.logo && (
                 <img
@@ -459,7 +459,7 @@ export function IntegrationsPanel({
               )}
               <div>
                 <h3 className="font-medium">Connect {apiKeyModal.app.name}</h3>
-                <p className="text-xs text-[#666]">
+                <p className="text-xs text-[var(--color-text-muted)]">
                   {apiKeyModal.app.credentialFields?.length
                     ? "Enter your credentials to connect"
                     : "Enter your API key to connect"}
@@ -471,19 +471,19 @@ export function IntegrationsPanel({
                 <div className="space-y-3 mb-4">
                   {apiKeyModal.app.credentialFields.map((field, idx) => (
                     <div key={field.name}>
-                      <label className="block text-xs text-[#888] mb-1">
+                      <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
                         {field.name.replace(/([A-Z])/g, " $1").replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()).trim()}
                         {field.required !== false && <span className="text-red-400 ml-0.5">*</span>}
                       </label>
                       {field.description && (
-                        <p className="text-[10px] text-[#555] mb-1">{field.description}</p>
+                        <p className="text-[10px] text-[var(--color-text-faint)] mb-1">{field.description}</p>
                       )}
                       <input
                         type="password"
                         value={credentialInputs[field.name] || ""}
                         onChange={(e) => setCredentialInputs(prev => ({ ...prev, [field.name]: e.target.value }))}
                         placeholder={`Enter ${field.name}...`}
-                        className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-4 py-2 focus:outline-none focus:border-[#f97316]"
+                        className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg px-4 py-2 focus:outline-none focus:border-[var(--color-accent)]"
                         autoFocus={idx === 0}
                       />
                     </div>
@@ -495,7 +495,7 @@ export function IntegrationsPanel({
                   value={apiKeyInput}
                   onChange={(e) => setApiKeyInput(e.target.value)}
                   placeholder="Enter API Key..."
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-[var(--color-accent)]"
                   autoFocus
                 />
               )}
@@ -503,7 +503,7 @@ export function IntegrationsPanel({
                 <button
                   type="button"
                   onClick={() => setApiKeyModal(null)}
-                  className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                  className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
                 >
                   Cancel
                 </button>
@@ -515,7 +515,7 @@ export function IntegrationsPanel({
                       ? !apiKeyModal.app.credentialFields.filter(f => f.required !== false).every(f => credentialInputs[f.name]?.trim())
                       : !apiKeyInput.trim())
                   }
-                  className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
+                  className="flex-1 text-sm bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white px-4 py-2 rounded transition disabled:opacity-50"
                 >
                   {connecting === apiKeyModal.app.slug ? "Connecting..." : "Connect"}
                 </button>
@@ -528,7 +528,7 @@ export function IntegrationsPanel({
       {/* MCP Config Creation Modal */}
       {mcpConfigModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-md mx-4">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-md mx-4">
             {mcpConfigSuccess ? (
               <>
                 <div className="text-center mb-4">
@@ -536,7 +536,7 @@ export function IntegrationsPanel({
                     <span className="text-green-400 text-2xl">✓</span>
                   </div>
                   <h3 className="font-medium text-lg">MCP Config Created!</h3>
-                  <p className="text-sm text-[#888] mt-2">
+                  <p className="text-sm text-[var(--color-text-secondary)] mt-2">
                     "{mcpConfigSuccess}" has been created and added to your servers.
                   </p>
                 </div>
@@ -545,7 +545,7 @@ export function IntegrationsPanel({
                     setMcpConfigModal(null);
                     setMcpConfigSuccess(null);
                   }}
-                  className="w-full text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition"
+                  className="w-full text-sm bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white px-4 py-2 rounded transition"
                 >
                   Done
                 </button>
@@ -562,19 +562,19 @@ export function IntegrationsPanel({
                   )}
                   <div>
                     <h3 className="font-medium">Create MCP Config</h3>
-                    <p className="text-xs text-[#666]">
+                    <p className="text-xs text-[var(--color-text-muted)]">
                       Create an MCP config for {mcpConfigModal.app.name}
                     </p>
                   </div>
                 </div>
                 <form onSubmit={(e) => { e.preventDefault(); createMcpConfig(); }}>
-                  <label className="block text-xs text-[#888] mb-1">Config Name</label>
+                  <label className="block text-xs text-[var(--color-text-secondary)] mb-1">Config Name</label>
                   <input
                     type="text"
                     value={mcpConfigName}
                     onChange={(e) => setMcpConfigName(e.target.value)}
                     placeholder="Enter config name..."
-                    className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-[#f97316]"
+                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg px-4 py-2 mb-4 focus:outline-none focus:border-[var(--color-accent)]"
                     autoFocus
                     maxLength={30}
                   />
@@ -582,14 +582,14 @@ export function IntegrationsPanel({
                     <button
                       type="button"
                       onClick={() => setMcpConfigModal(null)}
-                      className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                      className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={!mcpConfigName.trim() || mcpConfigCreating}
-                      className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
+                      className="flex-1 text-sm bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white px-4 py-2 rounded transition disabled:opacity-50"
                     >
                       {mcpConfigCreating ? "Creating..." : "Create Config"}
                     </button>
@@ -604,12 +604,12 @@ export function IntegrationsPanel({
       {/* Confirmation Modal */}
       {confirmModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-sm mx-4">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-sm mx-4">
             <p className="text-center mb-4">{confirmModal.message}</p>
             <div className="flex gap-2">
               <button
                 onClick={() => setConfirmModal(null)}
-                className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
               >
                 Cancel
               </button>
@@ -649,14 +649,14 @@ export function IntegrationsPanel({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search apps..."
-          className="w-full bg-[#111] border border-[#333] rounded-lg px-4 py-2 focus:outline-none focus:border-[#f97316]"
+          className="w-full bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg px-4 py-2 focus:outline-none focus:border-[var(--color-accent)]"
         />
       </div>
 
       {/* Connected Apps */}
       {connectedApps.length > 0 && (
         <div>
-          <h3 className="text-sm font-medium text-[#888] mb-3">
+          <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">
             Connected ({connectedApps.length})
           </h3>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -686,11 +686,11 @@ export function IntegrationsPanel({
 
       {/* Available Apps */}
       <div>
-        <h3 className="text-sm font-medium text-[#888] mb-3">
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">
           Available Apps ({availableApps.length})
         </h3>
         {availableApps.length === 0 ? (
-          <p className="text-[#666] text-sm">
+          <p className="text-[var(--color-text-muted)] text-sm">
             {search ? "No apps match your search" : "No apps available"}
           </p>
         ) : (
@@ -706,7 +706,7 @@ export function IntegrationsPanel({
           </div>
         )}
         {availableApps.length > 50 && (
-          <p className="text-xs text-[#555] mt-3 text-center">
+          <p className="text-xs text-[var(--color-text-faint)] mt-3 text-center">
             Showing first 50 of {availableApps.length} apps. Use search to find more.
           </p>
         )}
@@ -742,13 +742,13 @@ function AppCard({
 
   return (
     <div
-      className={`bg-[#111] border rounded-lg p-3 transition ${
-        isConnected ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+      className={`bg-[var(--color-surface)] border rounded-lg p-3 transition ${
+        isConnected ? "border-green-500/30" : "border-[var(--color-border)] hover:border-[var(--color-border-light)]"
       }`}
     >
       <div className="flex items-start gap-3">
         {/* Logo */}
-        <div className="w-10 h-10 rounded bg-[#1a1a1a] flex items-center justify-center flex-shrink-0 overflow-hidden">
+        <div className="w-10 h-10 rounded bg-[var(--color-surface-raised)] flex items-center justify-center flex-shrink-0 overflow-hidden">
           {app.logo ? (
             <img
               src={app.logo}
@@ -771,7 +771,7 @@ function AppCard({
               <span className="text-xs text-green-400">✓</span>
             )}
             {!isConnected && hasApiKey && !hasOAuth && (
-              <span className="text-[10px] bg-[#222] text-[#888] px-1.5 py-0.5 rounded" title="Requires API Key">
+              <span className="text-[10px] bg-[var(--color-surface-raised)] text-[var(--color-text-secondary)] px-1.5 py-0.5 rounded" title="Requires API Key">
                 API Key
               </span>
             )}
@@ -782,7 +782,7 @@ function AppCard({
             )}
           </div>
           {app.description && (
-            <p className="text-xs text-[#666] line-clamp-2 mt-0.5">
+            <p className="text-xs text-[var(--color-text-muted)] line-clamp-2 mt-0.5">
               {app.description}
             </p>
           )}
@@ -791,7 +791,7 @@ function AppCard({
               {app.categories.slice(0, 2).map((cat) => (
                 <span
                   key={cat}
-                  className="text-[10px] bg-[#1a1a1a] text-[#555] px-1.5 py-0.5 rounded"
+                  className="text-[10px] bg-[var(--color-surface-raised)] text-[var(--color-text-faint)] px-1.5 py-0.5 rounded"
                 >
                   {cat}
                 </span>
@@ -824,7 +824,7 @@ function AppCard({
             {onUpdateKey && (
               <button
                 onClick={onUpdateKey}
-                className="text-xs text-[#666] hover:text-[#f97316] transition px-2"
+                className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition px-2"
                 title="Update API Key"
               >
                 Key
@@ -833,7 +833,7 @@ function AppCard({
             {onDisconnect && (
               <button
                 onClick={onDisconnect}
-                className="text-xs text-[#666] hover:text-red-400 transition px-2"
+                className="text-xs text-[var(--color-text-muted)] hover:text-red-400 transition px-2"
                 title="Disconnect"
               >
                 ×
@@ -844,7 +844,7 @@ function AppCard({
           <button
             onClick={onConnect}
             disabled={connecting}
-            className="w-full text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition disabled:opacity-50"
+            className="w-full text-xs bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-3 py-1.5 rounded transition disabled:opacity-50"
           >
             {connecting ? "Connecting..." : (hasApiKey && !hasOAuth) ? "Enter API Key" : "Connect"}
           </button>

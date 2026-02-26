@@ -55,7 +55,7 @@ export function OverviewTab() {
   }, [authFetch, currentProjectId]);
 
   if (loading) {
-    return <div className="text-center py-12 text-[#666]">Loading...</div>;
+    return <div className="text-center py-12 text-[var(--color-text-muted)]">Loading...</div>;
   }
 
   const enabledSubs = subscriptions.filter(s => s.enabled);
@@ -73,9 +73,9 @@ export function OverviewTab() {
 
       {/* Subscriptions */}
       <section>
-        <h3 className="text-sm font-medium text-[#888] mb-3">Subscriptions ({subscriptions.length})</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Subscriptions ({subscriptions.length})</h3>
         {subscriptions.length === 0 ? (
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
             No subscriptions yet. Go to the Triggers tab to create one.
           </div>
         ) : (
@@ -83,27 +83,27 @@ export function OverviewTab() {
             {subscriptions.map(sub => {
               const agent = agentMap.get(sub.agent_id);
               return (
-                <div key={sub.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sub.enabled ? "bg-green-400" : "bg-[#555]"}`} />
+                <div key={sub.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sub.enabled ? "bg-green-400" : "bg-[var(--color-text-faint)]"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
                       {sub.trigger_slug.replace(/_/g, " ").replace(/-/g, " ")}
                     </div>
-                    <div className="text-xs text-[#666]">
+                    <div className="text-xs text-[var(--color-text-muted)]">
                       {sub.trigger_instance_id
                         ? `ID: ${sub.trigger_instance_id.slice(0, 12)}...`
                         : "All instances"
                       }
                     </div>
                   </div>
-                  <div className="text-xs text-[#888] flex-shrink-0">
-                    <span className="text-[#555]">&rarr;</span>{" "}
-                    <span className="text-[#f97316]">{agent?.name || "Unknown Agent"}</span>
+                  <div className="text-xs text-[var(--color-text-secondary)] flex-shrink-0">
+                    <span className="text-[var(--color-text-faint)]">&rarr;</span>{" "}
+                    <span className="text-[var(--color-accent)]">{agent?.name || "Unknown Agent"}</span>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded flex-shrink-0 ${
                     sub.enabled
                       ? "bg-green-500/10 text-green-400"
-                      : "bg-[#1a1a1a] text-[#555]"
+                      : "bg-[var(--color-surface-raised)] text-[var(--color-text-faint)]"
                   }`}>
                     {sub.enabled ? "active" : "disabled"}
                   </span>
@@ -127,9 +127,9 @@ function StatCard({
   valueColor?: string;
 }) {
   return (
-    <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
-      <div className="text-xs text-[#666] mb-1">{label}</div>
-      <div className={`text-2xl font-bold ${valueColor || "text-[#e0e0e0]"}`}>
+    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+      <div className="text-xs text-[var(--color-text-muted)] mb-1">{label}</div>
+      <div className={`text-2xl font-bold ${valueColor || "text-[var(--color-text)]"}`}>
         {value}
       </div>
     </div>

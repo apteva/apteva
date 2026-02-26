@@ -149,7 +149,7 @@ export function Dashboard({
         <StatCard label="Agents" value={filteredAgents.length} subValue={`${filteredRunningCount} running`} />
         <StatCard label="Tasks" value={taskStats.total} subValue={`${taskStats.pending} pending`} />
         <StatCard label="Completed" value={taskStats.completed} color="text-green-400" />
-        <StatCard label="Providers" value={configuredProviders.length} color="text-[#f97316]" />
+        <StatCard label="Providers" value={configuredProviders.length} color="text-[var(--color-accent)]" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -160,11 +160,11 @@ export function Dashboard({
           onAction={() => onNavigate("agents")}
         >
           {loading ? (
-            <div className="p-4 text-center text-[#666]">Loading...</div>
+            <div className="p-4 text-center text-[var(--color-text-muted)]">Loading...</div>
           ) : filteredAgents.length === 0 ? (
-            <div className="p-4 text-center text-[#666]">No agents yet</div>
+            <div className="p-4 text-center text-[var(--color-text-muted)]">No agents yet</div>
           ) : (
-            <div className="divide-y divide-[#1a1a1a]">
+            <div className="divide-y divide-[var(--color-border)]">
               {filteredAgents.slice(0, 5).map((agent) => (
                 <AgentListItem
                   key={agent.id}
@@ -185,12 +185,12 @@ export function Dashboard({
           onAction={() => onNavigate("telemetry")}
         >
           {activities.length === 0 ? (
-            <div className="p-4 text-center text-[#666]">
+            <div className="p-4 text-center text-[var(--color-text-muted)]">
               <p>No activity yet</p>
-              <p className="text-sm text-[#444] mt-1">Agent activity will appear here in real-time</p>
+              <p className="text-sm text-[var(--color-text-faint)] mt-1">Agent activity will appear here in real-time</p>
             </div>
           ) : (
-            <div className="divide-y divide-[#1a1a1a]">
+            <div className="divide-y divide-[var(--color-border)]">
               {activities.map((evt) => (
                 <ActivityItem
                   key={evt.id}
@@ -210,12 +210,12 @@ export function Dashboard({
           onAction={() => onNavigate("tasks")}
         >
           {filteredTasks.length === 0 ? (
-            <div className="p-4 text-center text-[#666]">
+            <div className="p-4 text-center text-[var(--color-text-muted)]">
               <p>No tasks yet</p>
-              <p className="text-sm text-[#444] mt-1">Tasks will appear when agents create them</p>
+              <p className="text-sm text-[var(--color-text-faint)] mt-1">Tasks will appear when agents create them</p>
             </div>
           ) : (
-            <div className="divide-y divide-[#1a1a1a]">
+            <div className="divide-y divide-[var(--color-border)]">
               {filteredTasks.slice(0, 5).map((task) => (
                 <div
                   key={`${task.agentId}-${task.id}`}
@@ -223,16 +223,16 @@ export function Dashboard({
                 >
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">{task.title}</p>
-                    <p className="text-sm text-[#666]">
+                    <p className="text-sm text-[var(--color-text-muted)]">
                       {task.agentName}
                       {task.recurrence && (
-                        <span className="ml-1 text-[#555]">· {formatCronShort(task.recurrence)}</span>
+                        <span className="ml-1 text-[var(--color-text-faint)]">· {formatCronShort(task.recurrence)}</span>
                       )}
                       {task.next_run && (
-                        <span className="ml-1 text-[#f97316]">· {formatRelativeShort(task.next_run)}</span>
+                        <span className="ml-1 text-[var(--color-accent)]">· {formatRelativeShort(task.next_run)}</span>
                       )}
                       {!task.next_run && task.execute_at && (
-                        <span className="ml-1 text-[#f97316]">· {formatRelativeShort(task.execute_at)}</span>
+                        <span className="ml-1 text-[var(--color-accent)]">· {formatRelativeShort(task.execute_at)}</span>
                       )}
                     </p>
                   </div>
@@ -264,10 +264,10 @@ interface StatCardProps {
 
 function StatCard({ label, value, subValue, color }: StatCardProps) {
   return (
-    <div className="bg-[#111] rounded p-4 border border-[#1a1a1a]">
-      <p className="text-sm text-[#666] mb-1">{label}</p>
+    <div className="bg-[var(--color-surface)] rounded p-4 border border-[var(--color-border)]">
+      <p className="text-sm text-[var(--color-text-muted)] mb-1">{label}</p>
       <p className={`text-2xl font-semibold ${color || ''}`}>{value}</p>
-      {subValue && <p className="text-xs text-[#555] mt-1">{subValue}</p>}
+      {subValue && <p className="text-xs text-[var(--color-text-faint)] mt-1">{subValue}</p>}
     </div>
   );
 }
@@ -281,8 +281,8 @@ interface DashboardCardProps {
 
 function DashboardCard({ title, actionLabel, onAction, children }: DashboardCardProps) {
   return (
-    <div className="bg-[#111] rounded border border-[#1a1a1a] overflow-hidden">
-      <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center justify-between">
+    <div className="bg-[var(--color-surface)] rounded border border-[var(--color-border)] overflow-hidden">
+      <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
         <h3 className="font-semibold">{title}</h3>
         <button
           onClick={onAction}
@@ -304,7 +304,7 @@ function AgentListItem({ agent, onSelect, onMessage, showProject }: { agent: Age
   return (
     <div
       onClick={onSelect}
-      className="px-4 py-3 hover:bg-[#1a1a1a] cursor-pointer flex items-center justify-between group"
+      className="px-4 py-3 hover:bg-[var(--color-surface-raised)] cursor-pointer flex items-center justify-between group"
     >
       <div className="flex items-center gap-3 flex-1 min-w-0">
         <span
@@ -313,12 +313,12 @@ function AgentListItem({ agent, onSelect, onMessage, showProject }: { agent: Age
               ? isActive
                 ? "bg-green-400 animate-pulse"
                 : "bg-[#3b82f6]"
-              : "bg-[#444]"
+              : "bg-[var(--color-scrollbar)]"
           }`}
         />
         <div className="flex-1 min-w-0">
           <p className="font-medium truncate">{agent.name}</p>
-          <div className="flex items-center gap-2 text-sm text-[#666]">
+          <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
             {isActive && label ? (
               <span className="text-green-400 truncate">{label}</span>
             ) : (
@@ -326,7 +326,7 @@ function AgentListItem({ agent, onSelect, onMessage, showProject }: { agent: Age
             )}
             {showProject && project && (
               <>
-                <span className="text-[#444]">·</span>
+                <span className="text-[var(--color-text-faint)]">·</span>
                 <span className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
                   {project.name}
@@ -339,7 +339,7 @@ function AgentListItem({ agent, onSelect, onMessage, showProject }: { agent: Age
       {onMessage && (
         <button
           onClick={(e) => { e.stopPropagation(); onMessage(); }}
-          className="opacity-0 group-hover:opacity-100 transition px-2 py-1 text-xs text-[#f97316] hover:bg-[#f97316]/10 rounded"
+          className="opacity-0 group-hover:opacity-100 transition px-2 py-1 text-xs text-[var(--color-accent)] hover:bg-[var(--color-accent-10)] rounded"
           title="Send message"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -367,9 +367,9 @@ function ActivityItem({ activity, agentName, timestamp }: { activity: string; ag
   return (
     <div className="px-4 py-3">
       <p className="text-sm truncate">{activity}</p>
-      <div className="flex items-center gap-2 text-xs text-[#555] mt-1">
-        <span className="text-[#666]">{agentName}</span>
-        <span className="text-[#444]">&middot;</span>
+      <div className="flex items-center gap-2 text-xs text-[var(--color-text-faint)] mt-1">
+        <span className="text-[var(--color-text-muted)]">{agentName}</span>
+        <span className="text-[var(--color-text-faint)]">&middot;</span>
         <span>{timeAgo(timestamp)}</span>
       </div>
     </div>
@@ -428,13 +428,13 @@ function QuickMessageModal({ agent, onClose }: { agent: Agent; onClose: () => vo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative bg-[#111] border border-[#222] rounded-xl shadow-2xl w-full max-w-md mx-4 p-5">
+      <div className="relative bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-xl shadow-2xl w-full max-w-md mx-4 p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse" />
             <h3 className="font-medium">{agent.name}</h3>
           </div>
-          <button onClick={onClose} className="text-[#666] hover:text-[#e0e0e0] transition">
+          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition">
             <CloseIcon />
           </button>
         </div>
@@ -442,7 +442,7 @@ function QuickMessageModal({ agent, onClose }: { agent: Agent; onClose: () => vo
         {sent ? (
           <div className="py-6 text-center">
             <p className="text-green-400 font-medium">Message sent</p>
-            <p className="text-sm text-[#555] mt-1">The agent will process your message</p>
+            <p className="text-sm text-[var(--color-text-faint)] mt-1">The agent will process your message</p>
           </div>
         ) : (
           <div className="flex gap-2">
@@ -454,12 +454,12 @@ function QuickMessageModal({ agent, onClose }: { agent: Agent; onClose: () => vo
               onKeyDown={e => e.key === "Enter" && handleSend()}
               placeholder={`Message ${agent.name}...`}
               disabled={sending}
-              className="flex-1 bg-[#0a0a0a] border border-[#222] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-[#f97316] placeholder-[#444] disabled:opacity-50"
+              className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--color-accent)] placeholder-[#444] disabled:opacity-50"
             />
             <button
               onClick={handleSend}
               disabled={sending || !message.trim()}
-              className="px-4 py-2.5 bg-[#f97316] text-black rounded-lg text-sm font-medium hover:bg-[#fb923c] transition disabled:opacity-30"
+              className="px-4 py-2.5 bg-[var(--color-accent)] text-black rounded-lg text-sm font-medium hover:bg-[var(--color-accent-hover)] transition disabled:opacity-30"
             >
               {sending ? "..." : "Send"}
             </button>

@@ -1,5 +1,5 @@
 import { json } from "./helpers";
-import { META_AGENT_ENABLED, fetchFromAgent, startAgentProcess, setAgentStatus } from "./agent-utils";
+import { META_AGENT_ENABLED, fetchFromAgent, agentFetch, startAgentProcess, setAgentStatus } from "./agent-utils";
 import { AgentDB } from "../../db";
 import { ProviderKeys } from "../../providers";
 import { agentProcesses, getBinaryStatus, BIN_DIR } from "../../server";
@@ -44,6 +44,7 @@ export async function handleSystemRoutes(
     return json({
       projects: process.env.PROJECTS_ENABLED === "true",
       metaAgent: process.env.META_AGENT_ENABLED === "true",
+      costTracking: process.env.COST_TRACKING_ENABLED !== "false",
     });
   }
 
@@ -178,6 +179,94 @@ export async function handleSystemRoutes(
     }
 
     return json({ task: { ...data, agentId: agent.id, agentName: agent.name } });
+  }
+
+  // POST /api/tasks/:agentId/:taskId/execute - Execute a task immediately
+  const executeTaskMatch = path.match(/^\/api\/tasks\/([^/]+)\/([^/]+)\/execute$/);
+  if (executeTaskMatch && method === "POST") {
+    const [, agentId, taskId] = executeTaskMatch;
+    const agent = AgentDB.findById(agentId);
+    if (!agent) return json({ error: "Agent not found" }, 404);
+    if (agent.status !== "running" || !agent.port) return json({ error: "Agent is not running" }, 400);
+
+    try {
+      const res = await agentFetch(agentId, agent.port, `/tasks/${taskId}/execute`, {
+        method: "POST",
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await res.json();
+      if (!res.ok) return json({ error: data.error || `HTTP ${res.status}` }, res.status);
+      return json(data);
+    } catch (err) {
+      return json({ error: `Failed to execute task: ${err}` }, 500);
+    }
+  }
+
+  // POST /api/tasks/:agentId - Create a task on an agent
+  const createTaskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
+  if (createTaskMatch && method === "POST") {
+    const agentId = createTaskMatch[1];
+    const agent = AgentDB.findById(agentId);
+    if (!agent) return json({ error: "Agent not found" }, 404);
+    if (agent.status !== "running" || !agent.port) return json({ error: "Agent is not running" }, 400);
+
+    try {
+      const body = await req.json();
+      const res = await agentFetch(agentId, agent.port, "/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await res.json();
+      if (!res.ok) return json({ error: data.error || `HTTP ${res.status}` }, res.status);
+      return json(data, 201);
+    } catch (err) {
+      return json({ error: `Failed to create task: ${err}` }, 500);
+    }
+  }
+
+  // PUT /api/tasks/:agentId/:taskId - Update a task on an agent
+  if (singleTaskMatch && method === "PUT") {
+    const [, agentId, taskId] = singleTaskMatch;
+    const agent = AgentDB.findById(agentId);
+    if (!agent) return json({ error: "Agent not found" }, 404);
+    if (agent.status !== "running" || !agent.port) return json({ error: "Agent is not running" }, 400);
+
+    try {
+      const body = await req.json();
+      const res = await agentFetch(agentId, agent.port, `/tasks/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await res.json();
+      if (!res.ok) return json({ error: data.error || `HTTP ${res.status}` }, res.status);
+      return json(data);
+    } catch (err) {
+      return json({ error: `Failed to update task: ${err}` }, 500);
+    }
+  }
+
+  // DELETE /api/tasks/:agentId/:taskId - Delete a task on an agent
+  if (singleTaskMatch && method === "DELETE") {
+    const [, agentId, taskId] = singleTaskMatch;
+    const agent = AgentDB.findById(agentId);
+    if (!agent) return json({ error: "Agent not found" }, 404);
+    if (agent.status !== "running" || !agent.port) return json({ error: "Agent is not running" }, 400);
+
+    try {
+      const res = await agentFetch(agentId, agent.port, `/tasks/${taskId}`, {
+        method: "DELETE",
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await res.json();
+      if (!res.ok) return json({ error: data.error || `HTTP ${res.status}` }, res.status);
+      return json(data);
+    } catch (err) {
+      return json({ error: `Failed to delete task: ${err}` }, 500);
+    }
   }
 
   // GET /api/dashboard - Get dashboard statistics

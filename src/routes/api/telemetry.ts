@@ -1,5 +1,6 @@
 import { json } from "./helpers";
-import { TelemetryDB } from "../../db";
+import { TelemetryDB, AgentDB } from "../../db";
+import { getModelCost } from "../../providers";
 import { telemetryBroadcaster, type TelemetryEvent } from "../../server";
 
 export async function handleTelemetryRoutes(
@@ -35,6 +36,23 @@ export async function handleTelemetryRoutes(
 
       // Filter out debug events - too noisy
       const filteredEvents = body.events.filter(e => e.level !== "debug");
+
+      // Compute cost per LLM event if cost tracking is enabled
+      const costTrackingEnabled = process.env.COST_TRACKING_ENABLED !== "false";
+      if (costTrackingEnabled) {
+        const agent = AgentDB.findById(body.agent_id);
+        if (agent) {
+          const pricing = getModelCost(agent.provider, agent.model);
+          for (const event of filteredEvents) {
+            if (event.category === "LLM" && event.data) {
+              const inputTokens = (event.data.input_tokens as number) || 0;
+              const outputTokens = (event.data.output_tokens as number) || 0;
+              (event as any).cost = (inputTokens * pricing.input_cost + outputTokens * pricing.output_cost) / 1_000_000;
+            }
+          }
+        }
+      }
+
       const inserted = TelemetryDB.insertBatch(body.agent_id, filteredEvents);
 
       // Broadcast to SSE clients

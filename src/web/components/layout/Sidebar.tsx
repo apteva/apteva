@@ -39,20 +39,22 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
       {/* Sidebar - hidden on mobile unless open, always visible on md+ */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 w-64 bg-[#0a0a0a] border-r border-[#1a1a1a] p-4 flex flex-col transform transition-transform duration-200 ease-in-out
+          fixed inset-y-0 left-0 z-50 w-64 p-4 flex flex-col transform transition-transform duration-200 ease-in-out
           md:relative md:w-56 md:translate-x-0 md:z-auto
           ${isOpen ? "translate-x-0" : "-translate-x-full"}
         `}
+        style={{ backgroundColor: "var(--color-bg)", borderRight: "1px solid var(--color-border)" }}
       >
         {/* Mobile header with close button */}
         <div className="flex items-center justify-between mb-4 md:hidden">
           <div className="flex items-center gap-2">
-            <span className="text-[#f97316]">&gt;_</span>
+            <span style={{ color: "var(--color-accent)" }}>&gt;_</span>
             <span className="text-lg tracking-wider">apteva</span>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-[#666] hover:text-[#e0e0e0] transition"
+            className="p-2 transition"
+            style={{ color: "var(--color-text-muted)" }}
           >
             <CloseIcon />
           </button>
@@ -137,26 +139,31 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
 
         {/* User profile - pinned to bottom */}
         {user && (
-          <div className="relative border-t border-[#1a1a1a] pt-3 mt-3">
+          <div className="relative pt-3 mt-3" style={{ borderTop: "1px solid var(--color-border)" }}>
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded hover:bg-[#111] transition"
+              className="w-full flex items-center gap-3 px-3 py-2 rounded transition"
+              style={{ color: "var(--color-text)" }}
+              onMouseEnter={e => e.currentTarget.style.backgroundColor = "var(--color-surface)"}
+              onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}
             >
-              <div className="w-8 h-8 rounded-full bg-[#f97316] flex items-center justify-center text-black font-medium text-sm flex-shrink-0">
+              <div className="w-8 h-8 rounded-full flex items-center justify-center text-black font-medium text-sm flex-shrink-0" style={{ backgroundColor: "var(--color-accent)" }}>
                 {user.username.charAt(0).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0 text-left">
                 <p className="text-sm font-medium truncate">{user.username}</p>
-                <p className="text-xs text-[#555]">{user.role}</p>
+                <p className="text-xs" style={{ color: "var(--color-text-faint)" }}>{user.role}</p>
               </div>
             </button>
             {showUserMenu && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
-                <div className="absolute left-3 bottom-full mb-1 w-48 bg-[#111] border border-[#222] rounded-lg shadow-xl z-50">
+                <div className="absolute left-3 bottom-full mb-1 w-48 rounded-lg shadow-xl z-50" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border-light)" }}>
                   <button
                     onClick={handleLogout}
-                    className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-[#1a1a1a] transition rounded-lg"
+                    className="w-full px-4 py-2.5 text-left text-sm text-red-400 transition rounded-lg"
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = "var(--color-surface-raised)"}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}
                   >
                     Sign out
                   </button>
@@ -182,16 +189,28 @@ function NavButton({ icon, label, active, onClick, badge }: NavButtonProps) {
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2 rounded font-medium transition ${
-        active
-          ? "bg-[#111] text-[#e0e0e0]"
-          : "text-[#666] hover:bg-[#111] hover:text-[#888]"
-      }`}
+      className="w-full flex items-center gap-3 px-3 py-2 rounded font-medium transition"
+      style={{
+        backgroundColor: active ? "var(--color-surface)" : "transparent",
+        color: active ? "var(--color-text)" : "var(--color-text-muted)",
+      }}
+      onMouseEnter={e => {
+        if (!active) {
+          e.currentTarget.style.backgroundColor = "var(--color-surface)";
+          e.currentTarget.style.color = "var(--color-text-secondary)";
+        }
+      }}
+      onMouseLeave={e => {
+        if (!active) {
+          e.currentTarget.style.backgroundColor = "transparent";
+          e.currentTarget.style.color = "var(--color-text-muted)";
+        }
+      }}
     >
       {icon}
       {label}
       {badge && (
-        <span className="ml-auto bg-[#333] text-[#888] text-xs px-2 py-0.5 rounded-full">
+        <span className="ml-auto text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: "var(--color-surface-raised)", color: "var(--color-text-secondary)" }}>
           {badge}
         </span>
       )}

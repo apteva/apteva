@@ -5,7 +5,7 @@ import { AgentDB, ProjectDB, McpServerDB, McpServerToolDB, SkillDB, TelemetryDB,
 import { TestCaseDB, TestRunDB } from "./db-tests";
 import { runTest, runAll } from "./test-runner";
 import { getProvidersWithStatus, PROVIDERS, ProviderKeys } from "./providers";
-import { startAgentProcess, setAgentStatus, toApiAgent, META_AGENT_ID, agentFetch } from "./routes/api/agent-utils";
+import { startAgentProcess, setAgentStatus, toApiAgent, META_AGENT_ID, agentFetch, fetchFromAgent } from "./routes/api/agent-utils";
 import { agentProcesses } from "./server";
 import { getTriggerProvider, getTriggerProviderIds, registerTriggerProvider } from "./triggers";
 import { ComposioTriggerProvider } from "./triggers/composio";
@@ -217,6 +217,31 @@ SKILLS & MCP SERVERS:
     },
   },
   {
+    name: "update_project",
+    description: "Update an existing project's name, description, or color.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "The project ID to update" },
+        name: { type: "string", description: "New project name" },
+        description: { type: "string", description: "New project description" },
+        color: { type: "string", description: "New hex color code (e.g. #6366f1)" },
+      },
+      required: ["project_id"],
+    },
+  },
+  {
+    name: "delete_project",
+    description: "Delete a project. Agents, MCP servers, and skills in the project will be unassigned (not deleted).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "The project ID to delete" },
+      },
+      required: ["project_id"],
+    },
+  },
+  {
     name: "list_providers",
     description: "List all available LLM providers and their configuration status (which have API keys).",
     inputSchema: {
@@ -354,6 +379,60 @@ EXAMPLES:
         message: { type: "string", description: "The message to send" },
       },
       required: ["agent_id", "message"],
+    },
+  },
+  // Task management on agents
+  {
+    name: "list_agent_tasks",
+    description: "List tasks on a running agent. Tasks are scheduled work items that agents execute autonomously.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "The agent ID to list tasks from" },
+        status: { type: "string", description: "Filter by status: all, pending, running, completed, failed, cancelled (default: all)" },
+      },
+      required: ["agent_id"],
+    },
+  },
+  {
+    name: "create_agent_task",
+    description: "Create a new task on a running agent. The agent must have the tasks feature enabled.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "The agent ID to create the task on" },
+        title: { type: "string", description: "Task title" },
+        description: { type: "string", description: "Task description / instructions for the agent" },
+        type: { type: "string", description: "Task type: once (one-time) or recurring (default: once)" },
+        priority: { type: "number", description: "Priority 1-10, higher = more important (default: 5)" },
+        execute_at: { type: "string", description: "ISO timestamp for scheduled execution (optional, for one-time tasks)" },
+        recurrence: { type: "string", description: "Cron expression for recurring tasks (e.g. '*/30 * * * *' = every 30 min)" },
+      },
+      required: ["agent_id", "title"],
+    },
+  },
+  {
+    name: "delete_agent_task",
+    description: "Delete a task from a running agent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "The agent ID" },
+        task_id: { type: "string", description: "The task ID to delete" },
+      },
+      required: ["agent_id", "task_id"],
+    },
+  },
+  {
+    name: "execute_agent_task",
+    description: "Immediately execute a task on a running agent, regardless of its schedule.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "The agent ID" },
+        task_id: { type: "string", description: "The task ID to execute" },
+      },
+      required: ["agent_id", "task_id"],
     },
   },
   // Skills management
@@ -751,10 +830,15 @@ After adding, use assign_mcp_server_to_agent to give an agent access to these to
   },
 ];
 
+// Project-only tools — hidden entirely when PROJECTS_ENABLED is not set
+const PROJECT_ONLY_TOOLS = new Set(["list_projects", "create_project", "update_project", "delete_project"]);
+
 // Build tools list — when PROJECTS_ENABLED, add project_id to required for all tools that accept it
 function getPlatformTools() {
   const projectsEnabled = process.env.PROJECTS_ENABLED === "true";
-  if (!projectsEnabled) return PLATFORM_TOOLS;
+  if (!projectsEnabled) {
+    return PLATFORM_TOOLS.filter(tool => !PROJECT_ONLY_TOOLS.has(tool.name));
+  }
 
   return PLATFORM_TOOLS.map(tool => {
     const props = tool.inputSchema.properties as Record<string, unknown> | undefined;
@@ -968,6 +1052,36 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `Project created: ${JSON.stringify({ id: project.id, name: project.name, color: project.color }, null, 2)}` }] };
       }
 
+      case "update_project": {
+        const project = ProjectDB.findById(args.project_id);
+        if (!project) return { content: [{ type: "text", text: `Project not found: ${args.project_id}` }], isError: true };
+
+        const updates: Record<string, unknown> = {};
+        if (args.name !== undefined) updates.name = args.name;
+        if (args.description !== undefined) updates.description = args.description;
+        if (args.color !== undefined) updates.color = args.color;
+
+        if (Object.keys(updates).length === 0) {
+          return { content: [{ type: "text", text: "No updates provided" }], isError: true };
+        }
+
+        const updated = ProjectDB.update(args.project_id, updates);
+        return { content: [{ type: "text", text: `Project updated: ${JSON.stringify({ id: updated!.id, name: updated!.name, description: updated!.description, color: updated!.color }, null, 2)}` }] };
+      }
+
+      case "delete_project": {
+        const project = ProjectDB.findById(args.project_id);
+        if (!project) return { content: [{ type: "text", text: `Project not found: ${args.project_id}` }], isError: true };
+
+        const agentCounts = ProjectDB.getAgentCounts();
+        const agentCount = agentCounts.get(args.project_id) || 0;
+
+        const deleted = ProjectDB.delete(args.project_id);
+        if (!deleted) return { content: [{ type: "text", text: "Failed to delete project" }], isError: true };
+
+        return { content: [{ type: "text", text: `Project "${project.name}" deleted. ${agentCount} agent(s) were unassigned.` }] };
+      }
+
       case "list_providers": {
         const providers = getProvidersWithStatus();
         const llmProviders = providers.filter(p => p.type === "llm");
@@ -1153,7 +1267,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ message: args.message }),
-            signal: AbortSignal.timeout(60000),
+            signal: AbortSignal.timeout(120000),
           });
 
           if (!res.ok) {
@@ -1161,11 +1275,121 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
             return { content: [{ type: "text", text: `Agent responded with error: ${err}` }], isError: true };
           }
 
-          const data = await res.json();
-          const reply = data.response || data.message || JSON.stringify(data);
+          // Agent returns SSE stream — consume and assemble content chunks
+          const reader = res.body?.getReader();
+          if (!reader) {
+            return { content: [{ type: "text", text: "No response stream from agent" }], isError: true };
+          }
+
+          const decoder = new TextDecoder();
+          const contentChunks: string[] = [];
+          let raw = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            raw += decoder.decode(value, { stream: true });
+          }
+
+          // Parse SSE lines: "data: {...}"
+          for (const line of raw.split("\n")) {
+            const sseData = line.startsWith("data: ") ? line.slice(6) : line.trim();
+            if (!sseData) continue;
+            try {
+              const evt = JSON.parse(sseData);
+              if (evt.type === "content" && evt.content) {
+                contentChunks.push(evt.content);
+              }
+            } catch {
+              // Not valid JSON — skip
+            }
+          }
+
+          const reply = contentChunks.join("") || "(no response)";
           return { content: [{ type: "text", text: reply }] };
         } catch (err) {
           return { content: [{ type: "text", text: `Failed to communicate with agent: ${err}` }], isError: true };
+        }
+      }
+
+      case "list_agent_tasks": {
+        const agent = AgentDB.findById(args.agent_id);
+        if (!agent) return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+        if (agent.status !== "running" || !agent.port) return { content: [{ type: "text", text: `Agent ${agent.name} is not running` }], isError: true };
+
+        const status = args.status || "all";
+        const data = await fetchFromAgent(agent.id, agent.port, `/tasks?status=${status}`);
+        if (!data) return { content: [{ type: "text", text: "Failed to fetch tasks from agent" }], isError: true };
+
+        const tasks = (data.tasks || []).map((t: any) => ({
+          id: t.id, title: t.title, type: t.type, status: t.status, priority: t.priority,
+          recurrence: t.recurrence, next_run: t.next_run, execute_at: t.execute_at, created_at: t.created_at,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify({ tasks, count: tasks.length }, null, 2) }] };
+      }
+
+      case "create_agent_task": {
+        const agent = AgentDB.findById(args.agent_id);
+        if (!agent) return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+        if (agent.status !== "running" || !agent.port) return { content: [{ type: "text", text: `Agent ${agent.name} is not running` }], isError: true };
+
+        const body: Record<string, unknown> = {
+          title: args.title,
+          description: args.description,
+          type: args.type || "once",
+          priority: args.priority || 5,
+        };
+        if (args.execute_at) body.execute_at = args.execute_at;
+        if (args.recurrence) body.recurrence = args.recurrence;
+
+        try {
+          const res = await agentFetch(agent.id, agent.port, "/tasks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(5000),
+          });
+          const data = await res.json();
+          if (!res.ok) return { content: [{ type: "text", text: `Failed to create task: ${data.error || res.status}` }], isError: true };
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Failed to create task: ${err}` }], isError: true };
+        }
+      }
+
+      case "delete_agent_task": {
+        const agent = AgentDB.findById(args.agent_id);
+        if (!agent) return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+        if (agent.status !== "running" || !agent.port) return { content: [{ type: "text", text: `Agent ${agent.name} is not running` }], isError: true };
+
+        try {
+          const res = await agentFetch(agent.id, agent.port, `/tasks/${args.task_id}`, {
+            method: "DELETE",
+            signal: AbortSignal.timeout(5000),
+          });
+          const data = await res.json();
+          if (!res.ok) return { content: [{ type: "text", text: `Failed to delete task: ${data.error || res.status}` }], isError: true };
+          return { content: [{ type: "text", text: `Task ${args.task_id} deleted successfully` }] };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Failed to delete task: ${err}` }], isError: true };
+        }
+      }
+
+      case "execute_agent_task": {
+        const agent = AgentDB.findById(args.agent_id);
+        if (!agent) return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+        if (agent.status !== "running" || !agent.port) return { content: [{ type: "text", text: `Agent ${agent.name} is not running` }], isError: true };
+
+        try {
+          const res = await agentFetch(agent.id, agent.port, `/tasks/${args.task_id}/execute`, {
+            method: "POST",
+            signal: AbortSignal.timeout(5000),
+          });
+          const data = await res.json();
+          if (!res.ok) return { content: [{ type: "text", text: `Failed to execute task: ${data.error || res.status}` }], isError: true };
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Failed to execute task: ${err}` }], isError: true };
         }
       }
 
@@ -1861,19 +2085,21 @@ export async function handlePlatformMcpRequest(req: Request): Promise<Response> 
         instructions: `This MCP server controls the Apteva AI agent management platform.
 
 You can manage:
-- AGENTS: Create, configure, start, stop, and delete AI agents. Each agent has a provider (LLM), model, system prompt, and optional features (memory, tasks, vision, MCP tools, files).
-- PROJECTS: Organize agents into projects for grouping.
-- MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Assign servers to agents.
-- SKILLS: Reusable instruction sets that specialize agent behavior. Use create_skill to create new skills (pass project_id from context to scope to the current project), then assign them to agents. Use list_skills, get_skill, create_skill, toggle_skill, assign_skill_to_agent, unassign_skill_from_agent, delete_skill.
+- AGENTS: Create, configure, start, stop, and delete AI agents. Each agent has a provider (LLM), model, system prompt, and optional features (memory, tasks, vision, MCP tools, files). Use update_agent to assign/remove MCP servers (add_mcp_servers, remove_mcp_servers) and skills (add_skills, remove_skills).
+- TASKS: List, create, delete, and execute tasks on running agents. Tasks are scheduled work items that agents execute autonomously. Agents must have the tasks feature enabled. Tools: list_agent_tasks, create_agent_task, delete_agent_task, execute_agent_task.
+- PROJECTS: Organize agents into projects. Tools: list_projects, create_project, update_project, delete_project. Use project tools when the user is viewing All Projects. Deleting a project unassigns its agents (does not delete them).
+- MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Use update_agent with add_mcp_servers to assign servers to agents.
+- SKILLS: Reusable instruction sets that specialize agent behavior. Use create_skill to create new skills (pass project_id from context to scope to the current project). Use update_agent with add_skills/remove_skills to assign/unassign skills to agents. Tools: list_skills, get_skill, create_skill, update_skill, toggle_skill, delete_skill.
 - PROVIDERS: View which LLM providers have API keys configured.
-- TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Use list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
+- TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Tools: list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
 - SUBSCRIPTIONS & TRIGGERS: Subscribe agents to external events (webhooks). Supports multiple providers (composio, agentdojo). Use list_trigger_providers → list_trigger_types → list_integration_connections → create_subscription. Manage with enable_subscription, disable_subscription, delete_subscription, list_subscriptions.
-- INTEGRATIONS: Connect third-party apps and create MCP servers from them. Supports agentdojo and composio providers. Use list_integration_providers → list_integration_apps → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → assign_mcp_server_to_agent. For OAuth apps, direct the user to the Browse Toolkits UI.
+- INTEGRATIONS: Connect third-party apps and create MCP servers from them. Supports agentdojo and composio providers. Use list_integration_providers → list_integration_apps → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → then update_agent with add_mcp_servers to assign to an agent. For OAuth apps, direct the user to the Browse Toolkits UI.
 
 CRITICAL: ALWAYS pass project_id to every tool call that accepts it. API keys and resources are scoped per project — calls without project_id will fail. The chat context tells you the current project id.
 
-Typical workflow: list_providers → create_agent → assign MCP servers/skills → start_agent.
-Integration workflow: list_integration_providers → list_integration_apps (browse) → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → assign_mcp_server_to_agent.
+Typical workflow: list_providers → create_agent → update_agent (add_mcp_servers/add_skills) → start_agent.
+Task workflow: list_agent_tasks → create_agent_task (schedule work) → execute_agent_task (run immediately).
+Integration workflow: list_integration_providers → list_integration_apps (browse) → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → update_agent (add_mcp_servers).
 Subscription workflow: list_trigger_providers → list_trigger_types (pick trigger) → list_integration_connections (pick account) → create_subscription (link trigger to agent).
 Test workflow: create_test (set agent, message, eval criteria) → run_test → check results.
 Always use list_providers first to check which providers have API keys before creating agents.`,

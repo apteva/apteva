@@ -20,6 +20,7 @@ interface ProjectContextValue {
   unassignedCount: number;
   projectsEnabled: boolean; // Feature flag
   metaAgentEnabled: boolean; // Feature flag
+  costTrackingEnabled: boolean; // Feature flag
   setCurrentProjectId: (id: string | null) => void;
   createProject: (data: { name: string; description?: string; color?: string }) => Promise<Project | null>;
   updateProject: (id: string, data: { name?: string; description?: string; color?: string }) => Promise<Project | null>;
@@ -58,6 +59,7 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
   const [unassignedCount, setUnassignedCount] = useState(0);
   const [projectsEnabled, setProjectsEnabled] = useState(false);
   const [metaAgentEnabled, setMetaAgentEnabled] = useState(false);
+  const [costTrackingEnabled, setCostTrackingEnabled] = useState(true);
 
   // Fetch feature flags on mount
   useEffect(() => {
@@ -66,10 +68,12 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
       .then(data => {
         setProjectsEnabled(data.projects === true);
         setMetaAgentEnabled(data.metaAgent === true);
+        setCostTrackingEnabled(data.costTracking !== false);
       })
       .catch(() => {
         setProjectsEnabled(false);
         setMetaAgentEnabled(false);
+        setCostTrackingEnabled(true);
       });
   }, []);
 
@@ -198,12 +202,13 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     unassignedCount,
     projectsEnabled,
     metaAgentEnabled,
+    costTrackingEnabled,
     setCurrentProjectId,
     createProject,
     updateProject,
     deleteProject,
     refreshProjects,
-  }), [projects, currentProjectId, currentProject, isLoading, error, unassignedCount, projectsEnabled, metaAgentEnabled, setCurrentProjectId, createProject, updateProject, deleteProject, refreshProjects]);
+  }), [projects, currentProjectId, currentProject, isLoading, error, unassignedCount, projectsEnabled, metaAgentEnabled, costTrackingEnabled, setCurrentProjectId, createProject, updateProject, deleteProject, refreshProjects]);
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>;
 }

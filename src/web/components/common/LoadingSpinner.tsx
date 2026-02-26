@@ -7,7 +7,7 @@ interface LoadingSpinnerProps {
 
 export function LoadingSpinner({ message = "Loading...", fullScreen = false }: LoadingSpinnerProps) {
   const content = (
-    <div className="flex items-center gap-3 text-[#666]">
+    <div className="flex items-center gap-3 text-[var(--color-text-muted)]">
       <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
         <circle
           className="opacity-25"
@@ -30,7 +30,7 @@ export function LoadingSpinner({ message = "Loading...", fullScreen = false }: L
 
   if (fullScreen) {
     return (
-      <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] font-mono flex items-center justify-center">
         {content}
       </div>
     );

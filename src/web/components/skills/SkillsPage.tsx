@@ -293,7 +293,7 @@ export function SkillsPage() {
           <div className="flex items-center justify-between mb-6">
             <div>
               <h1 className="text-2xl font-semibold mb-1">Skills</h1>
-              <p className="text-[#666]">
+              <p className="text-[var(--color-text-muted)]">
                 Manage agent skills - instructions that teach agents how to perform tasks.
               </p>
             </div>
@@ -301,13 +301,13 @@ export function SkillsPage() {
               <div className="flex gap-2">
                 <button
                   onClick={() => setShowImport(true)}
-                  className="bg-[#1a1a1a] hover:bg-[#222] text-white px-4 py-2 rounded font-medium transition border border-[#333]"
+                  className="bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] text-white px-4 py-2 rounded font-medium transition border border-[var(--color-border-light)]"
                 >
                   Import
                 </button>
                 <button
                   onClick={() => setShowCreate(true)}
-                  className="bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition"
+                  className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition"
                 >
                   + Create Skill
                 </button>
@@ -316,13 +316,13 @@ export function SkillsPage() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1 mb-6 bg-[#111] border border-[#1a1a1a] rounded-lg p-1 w-fit">
+          <div className="flex gap-1 mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-1 w-fit">
             <button
               onClick={() => setActiveTab("installed")}
               className={`px-4 py-2 rounded text-sm font-medium transition ${
                 activeTab === "installed"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               Installed ({filteredSkills.length})
@@ -331,8 +331,8 @@ export function SkillsPage() {
               onClick={() => setActiveTab("github")}
               className={`px-4 py-2 rounded text-sm font-medium transition ${
                 activeTab === "github"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               Browse GitHub
@@ -341,8 +341,8 @@ export function SkillsPage() {
               onClick={() => setActiveTab("marketplace")}
               className={`px-4 py-2 rounded text-sm font-medium transition ${
                 activeTab === "marketplace"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               Marketplace
@@ -353,21 +353,21 @@ export function SkillsPage() {
           {activeTab === "installed" && (
             <>
               {loading ? (
-                <div className="text-[#666]">Loading skills...</div>
+                <div className="text-[var(--color-text-muted)]">Loading skills...</div>
               ) : skills.length === 0 ? (
-                <div className="text-center py-20 text-[#666]">
+                <div className="text-center py-20 text-[var(--color-text-muted)]">
                   <p className="text-lg">No skills installed</p>
                   <p className="text-sm mt-1">Create a skill or browse the marketplace</p>
                   <button
                     onClick={() => setActiveTab("marketplace")}
-                    className="mt-4 bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition"
+                    className="mt-4 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition"
                   >
                     Browse Marketplace
                   </button>
                 </div>
               ) : filteredSkills.length === 0 ? (
-                <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center">
-                  <p className="text-[#666]">No skills match this filter.</p>
+                <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center">
+                  <p className="text-[var(--color-text-muted)]">No skills match this filter.</p>
                 </div>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -407,12 +407,12 @@ export function SkillsPage() {
                   value={githubRepo}
                   onChange={(e) => setGithubRepo(e.target.value)}
                   placeholder="Enter GitHub repo (e.g., WordPress/agent-skills)"
-                  className="flex-1 bg-[#111] border border-[#333] rounded-lg px-4 py-3 focus:outline-none focus:border-[#f97316]"
+                  className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
                 />
                 <button
                   type="submit"
                   disabled={githubLoading}
-                  className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-6 py-3 rounded-lg font-medium transition"
+                  className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-6 py-3 rounded-lg font-medium transition"
                 >
                   {githubLoading ? "..." : "Browse"}
                 </button>
@@ -420,8 +420,8 @@ export function SkillsPage() {
 
               {/* Project Scope Selector */}
               {hasProjects && githubSkills.length > 0 && (
-                <div className="flex items-center gap-3 p-3 bg-[#0a0a0a] border border-[#222] rounded-lg">
-                  <span className="text-sm text-[#666]">Install to:</span>
+                <div className="flex items-center gap-3 p-3 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg">
+                  <span className="text-sm text-[var(--color-text-muted)]">Install to:</span>
                   <Select
                     value={githubProjectId || ""}
                     onChange={(value) => setGithubProjectId(value || null)}
@@ -449,11 +449,11 @@ export function SkillsPage() {
                       href={githubRepoInfo.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[#f97316] hover:underline font-medium"
+                      className="text-[var(--color-accent)] hover:underline font-medium"
                     >
                       {githubRepoInfo.owner}/{githubRepoInfo.repo}
                     </a>
-                    <span className="text-sm text-[#666]">
+                    <span className="text-sm text-[var(--color-text-muted)]">
                       {githubSkills.length} skill{githubSkills.length !== 1 ? "s" : ""} found
                     </span>
                   </div>
@@ -461,7 +461,7 @@ export function SkillsPage() {
                     <button
                       onClick={installAllFromGitHub}
                       disabled={!!installingGithub}
-                      className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-4 py-2 rounded transition disabled:opacity-50"
+                      className="text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-4 py-2 rounded transition disabled:opacity-50"
                     >
                       Install All
                     </button>
@@ -471,17 +471,17 @@ export function SkillsPage() {
 
               {/* Loading */}
               {githubLoading && (
-                <div className="text-center py-8 text-[#666]">
+                <div className="text-center py-8 text-[var(--color-text-muted)]">
                   Fetching skills from repository...
                 </div>
               )}
 
               {/* Empty State */}
               {!githubLoading && !githubRepoInfo && !githubError && (
-                <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
+                <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
                   <div className="text-4xl mb-4">📦</div>
                   <h3 className="text-lg font-medium mb-2">Browse Skills from GitHub</h3>
-                  <p className="text-[#666] mb-6 max-w-md mx-auto">
+                  <p className="text-[var(--color-text-muted)] mb-6 max-w-md mx-auto">
                     Enter a GitHub repository to browse and install skills. Skills are markdown files with instructions that teach agents how to perform specific tasks.
                   </p>
                   <div className="flex flex-wrap gap-2 justify-center">
@@ -494,7 +494,7 @@ export function SkillsPage() {
                           setGithubRepo(repo);
                           browseGitHubRepo(repo);
                         }}
-                        className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition"
+                        className="text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-3 py-1.5 rounded transition"
                       >
                         {label}
                       </button>
@@ -505,7 +505,7 @@ export function SkillsPage() {
 
               {/* No Skills Found */}
               {!githubLoading && githubRepoInfo && githubSkills.length === 0 && (
-                <div className="text-center py-8 text-[#666]">
+                <div className="text-center py-8 text-[var(--color-text-muted)]">
                   No skills found in this repository. Skills should be in subdirectories with a SKILL.md file.
                 </div>
               )}
@@ -520,8 +520,8 @@ export function SkillsPage() {
                     return (
                       <div
                         key={skill.name}
-                        className={`bg-[#111] border rounded-lg p-4 transition ${
-                          installed ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+                        className={`bg-[var(--color-surface)] border rounded-lg p-4 transition ${
+                          installed ? "border-green-500/30" : "border-[var(--color-border)] hover:border-[var(--color-border-light)]"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -532,10 +532,10 @@ export function SkillsPage() {
                                 <span className="text-xs text-green-400">✓ Installed</span>
                               )}
                             </div>
-                            <p className="text-sm text-[#666] mt-1 line-clamp-2">
+                            <p className="text-sm text-[var(--color-text-muted)] mt-1 line-clamp-2">
                               {skill.description || "No description"}
                             </p>
-                            <div className="flex items-center gap-2 mt-2 text-xs text-[#555]">
+                            <div className="flex items-center gap-2 mt-2 text-xs text-[var(--color-text-faint)]">
                               <span>{(skill.size / 1024).toFixed(1)}KB</span>
                               <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">
                                 GitHub
@@ -544,12 +544,12 @@ export function SkillsPage() {
                           </div>
                           <div className="flex-shrink-0">
                             {installed ? (
-                              <span className="text-xs text-[#555] px-3 py-1.5">Added</span>
+                              <span className="text-xs text-[var(--color-text-faint)] px-3 py-1.5">Added</span>
                             ) : (
                               <button
                                 onClick={() => installFromGitHub(skill)}
                                 disabled={isInstalling}
-                                className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition disabled:opacity-50"
+                                className="text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-3 py-1.5 rounded transition disabled:opacity-50"
                               >
                                 {isInstalling ? "Installing..." : "Install"}
                               </button>
@@ -563,10 +563,10 @@ export function SkillsPage() {
               )}
 
               {/* Info */}
-              <div className="p-4 bg-[#111] border border-[#1a1a1a] rounded-lg text-sm text-[#666]">
+              <div className="p-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-muted)]">
                 <p>
                   Skills are sourced from GitHub repositories. Each skill should be in its own directory with a{" "}
-                  <code className="text-[#888] bg-[#0a0a0a] px-1 rounded">SKILL.md</code> file containing instructions.
+                  <code className="text-[var(--color-text-secondary)] bg-[var(--color-bg)] px-1 rounded">SKILL.md</code> file containing instructions.
                 </p>
               </div>
             </div>
@@ -584,12 +584,12 @@ export function SkillsPage() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && searchMarketplace()}
                     placeholder="Search skills..."
-                    className="flex-1 bg-[#111] border border-[#1a1a1a] rounded px-4 py-2 focus:outline-none focus:border-[#f97316]"
+                    className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-4 py-2 focus:outline-none focus:border-[var(--color-accent)]"
                   />
                   <button
                     onClick={() => searchMarketplace()}
                     disabled={marketplaceLoading}
-                    className="bg-[#1a1a1a] hover:bg-[#222] text-white px-4 py-2 rounded font-medium transition border border-[#333]"
+                    className="bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] text-white px-4 py-2 rounded font-medium transition border border-[var(--color-border-light)]"
                   >
                     {marketplaceLoading ? "..." : "Search"}
                   </button>
@@ -597,9 +597,9 @@ export function SkillsPage() {
               </div>
 
               {marketplaceLoading ? (
-                <div className="text-[#666]">Loading...</div>
+                <div className="text-[var(--color-text-muted)]">Loading...</div>
               ) : marketplaceSkills.length === 0 ? (
-                <div className="text-center py-20 text-[#666]">
+                <div className="text-center py-20 text-[var(--color-text-muted)]">
                   <p className="text-lg">No skills found</p>
                   <p className="text-sm mt-1">Try a different search term</p>
                 </div>
@@ -697,7 +697,7 @@ function SkillCard({
     }
     if (skill.project_id === null) {
       return (
-        <span className="text-xs text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">
+        <span className="text-xs text-[var(--color-text-muted)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 rounded">
           Global
         </span>
       );
@@ -707,9 +707,9 @@ function SkillCard({
 
   return (
     <div
-      className={`bg-[#111] rounded-lg p-5 border transition cursor-pointer ${
-        skill.enabled ? "border-[#1a1a1a]" : "border-[#1a1a1a] opacity-60"
-      } hover:border-[#333]`}
+      className={`bg-[var(--color-surface)] rounded-lg p-5 border transition cursor-pointer ${
+        skill.enabled ? "border-[var(--color-border)]" : "border-[var(--color-border)] opacity-60"
+      } hover:border-[var(--color-border-light)]`}
       onClick={onView}
     >
       <div className="flex items-start justify-between mb-3">
@@ -718,11 +718,11 @@ function SkillCard({
             <h3 className="font-semibold text-lg truncate">{skill.name}</h3>
             {getScopeBadge()}
           </div>
-          <p className="text-xs text-[#666] flex items-center gap-2 mt-0.5">
+          <p className="text-xs text-[var(--color-text-muted)] flex items-center gap-2 mt-0.5">
             <span className={`px-1.5 py-0.5 rounded text-[10px] ${
               skill.source === "skillsmp" ? "bg-purple-500/20 text-purple-400" :
               skill.source === "github" ? "bg-blue-500/20 text-blue-400" :
-              "bg-[#222] text-[#888]"
+              "bg-[var(--color-surface-raised)] text-[var(--color-text-secondary)]"
             }`}>
               {sourceLabel}
             </span>
@@ -735,7 +735,7 @@ function SkillCard({
             onToggle();
           }}
           className={`w-10 h-5 rounded-full transition-colors relative ${
-            skill.enabled ? "bg-[#f97316]" : "bg-[#333]"
+            skill.enabled ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-raised)]"
           }`}
         >
           <span
@@ -746,17 +746,17 @@ function SkillCard({
         </button>
       </div>
 
-      <p className="text-sm text-[#888] line-clamp-2 mb-4">{skill.description}</p>
+      <p className="text-sm text-[var(--color-text-secondary)] line-clamp-2 mb-4">{skill.description}</p>
 
       <div className="flex items-center justify-between">
         <div className="flex gap-1 flex-wrap">
           {skill.allowed_tools.slice(0, 2).map((tool) => (
-            <span key={tool} className="text-xs bg-[#222] px-2 py-0.5 rounded text-[#666]">
+            <span key={tool} className="text-xs bg-[var(--color-surface-raised)] px-2 py-0.5 rounded text-[var(--color-text-muted)]">
               {tool}
             </span>
           ))}
           {skill.allowed_tools.length > 2 && (
-            <span className="text-xs text-[#666]">+{skill.allowed_tools.length - 2}</span>
+            <span className="text-xs text-[var(--color-text-muted)]">+{skill.allowed_tools.length - 2}</span>
           )}
         </div>
         <button
@@ -785,11 +785,11 @@ function MarketplaceSkillCard({
   onInstall: () => void;
 }) {
   return (
-    <div className="bg-[#111] rounded-lg p-5 border border-[#1a1a1a] hover:border-[#333] transition">
+    <div className="bg-[var(--color-surface)] rounded-lg p-5 border border-[var(--color-border)] hover:border-[var(--color-border-light)] transition">
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-lg truncate">{skill.name}</h3>
-          <p className="text-xs text-[#666] mt-0.5">
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
             by {skill.author} · v{skill.version}
           </p>
         </div>
@@ -798,12 +798,12 @@ function MarketplaceSkillCard({
         </div>
       </div>
 
-      <p className="text-sm text-[#888] line-clamp-2 mb-4">{skill.description}</p>
+      <p className="text-sm text-[var(--color-text-secondary)] line-clamp-2 mb-4">{skill.description}</p>
 
       <div className="flex items-center justify-between">
         <div className="flex gap-1 flex-wrap">
           {skill.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="text-xs bg-[#222] px-2 py-0.5 rounded text-[#666]">
+            <span key={tag} className="text-xs bg-[var(--color-surface-raised)] px-2 py-0.5 rounded text-[var(--color-text-muted)]">
               {tag}
             </span>
           ))}
@@ -814,14 +814,14 @@ function MarketplaceSkillCard({
           <button
             onClick={onInstall}
             disabled={installing}
-            className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-3 py-1 rounded text-sm font-medium transition"
+            className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-3 py-1 rounded text-sm font-medium transition"
           >
             {installing ? "Installing..." : "Install"}
           </button>
         )}
       </div>
 
-      <div className="mt-3 text-xs text-[#555]">
+      <div className="mt-3 text-xs text-[var(--color-text-faint)]">
         {skill.downloads.toLocaleString()} downloads
       </div>
     </div>
@@ -895,10 +895,10 @@ function CreateSkillModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-[#111] border border-[#1a1a1a] rounded-lg w-full max-w-2xl max-h-[90vh] overflow-auto"
+        className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-2xl max-h-[90vh] overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-6 border-b border-[#1a1a1a]">
+        <div className="p-6 border-b border-[var(--color-border)]">
           <h2 className="text-xl font-semibold">Create Skill</h2>
         </div>
 
@@ -910,32 +910,32 @@ function CreateSkillModal({
           )}
 
           <div>
-            <label className="block text-sm text-[#888] mb-1">Name</label>
+            <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
               placeholder="my-skill-name"
-              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
-            <p className="text-xs text-[#555] mt-1">Lowercase letters, numbers, and hyphens only</p>
+            <p className="text-xs text-[var(--color-text-faint)] mt-1">Lowercase letters, numbers, and hyphens only</p>
           </div>
 
           <div>
-            <label className="block text-sm text-[#888] mb-1">Description</label>
+            <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Description</label>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="What this skill does and when to use it..."
-              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
 
           {/* Project Scope - only show when projects exist */}
           {hasProjects && (
             <div>
-              <label className="block text-sm text-[#888] mb-1">Scope</label>
+              <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Scope</label>
               <Select
                 value={projectId || ""}
                 onChange={(value) => setProjectId(value || null)}
@@ -945,35 +945,35 @@ function CreateSkillModal({
                 ]}
                 placeholder="Select scope..."
               />
-              <p className="text-xs text-[#555] mt-1">
+              <p className="text-xs text-[var(--color-text-faint)] mt-1">
                 Global skills are available to all agents. Project-scoped skills are only available to agents in that project.
               </p>
             </div>
           )}
 
           <div>
-            <label className="block text-sm text-[#888] mb-1">Instructions (Markdown)</label>
+            <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Instructions (Markdown)</label>
             <textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="# Skill Instructions&#10;&#10;Write detailed instructions here..."
               rows={12}
-              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] font-mono text-sm"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] font-mono text-sm"
             />
           </div>
         </div>
 
-        <div className="p-6 border-t border-[#1a1a1a] flex justify-end gap-3">
+        <div className="p-6 border-t border-[var(--color-border)] flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-[#888] hover:text-white transition"
+            className="px-4 py-2 text-[var(--color-text-secondary)] hover:text-white transition"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={saving}
-            className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+            className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
           >
             {saving ? "Creating..." : "Create Skill"}
           </button>
@@ -1029,12 +1029,12 @@ function ImportSkillModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-[#111] border border-[#1a1a1a] rounded-lg w-full max-w-2xl max-h-[90vh] overflow-auto"
+        className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-2xl max-h-[90vh] overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-6 border-b border-[#1a1a1a]">
+        <div className="p-6 border-b border-[var(--color-border)]">
           <h2 className="text-xl font-semibold">Import Skill</h2>
-          <p className="text-sm text-[#666] mt-1">Paste the contents of a SKILL.md file</p>
+          <p className="text-sm text-[var(--color-text-muted)] mt-1">Paste the contents of a SKILL.md file</p>
         </div>
 
         <div className="p-6 space-y-4">
@@ -1056,21 +1056,21 @@ description: What this skill does...
 
 Your skill instructions here...`}
             rows={16}
-            className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] font-mono text-sm"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] font-mono text-sm"
           />
         </div>
 
-        <div className="p-6 border-t border-[#1a1a1a] flex justify-end gap-3">
+        <div className="p-6 border-t border-[var(--color-border)] flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-[#888] hover:text-white transition"
+            className="px-4 py-2 text-[var(--color-text-secondary)] hover:text-white transition"
           >
             Cancel
           </button>
           <button
             onClick={handleImport}
             disabled={importing}
-            className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+            className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
           >
             {importing ? "Importing..." : "Import Skill"}
           </button>
@@ -1129,24 +1129,24 @@ function ViewSkillModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-[#111] border border-[#1a1a1a] rounded-lg w-full max-w-3xl max-h-[90vh] overflow-auto"
+        className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-3xl max-h-[90vh] overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-6 border-b border-[#1a1a1a] flex items-center justify-between">
+        <div className="p-6 border-b border-[var(--color-border)] flex items-center justify-between">
           <div>
             <h2 className="text-xl font-semibold">{skill.name}</h2>
-            <p className="text-sm text-[#666] mt-0.5">{skill.description}</p>
+            <p className="text-sm text-[var(--color-text-muted)] mt-0.5">{skill.description}</p>
           </div>
           <div className="flex gap-2">
             <button
               onClick={handleExport}
-              className="text-sm text-[#888] hover:text-white transition px-3 py-1 rounded border border-[#333]"
+              className="text-sm text-[var(--color-text-secondary)] hover:text-white transition px-3 py-1 rounded border border-[var(--color-border-light)]"
             >
               Export
             </button>
             <button
               onClick={() => setEditing(!editing)}
-              className="text-sm text-[#888] hover:text-white transition px-3 py-1 rounded border border-[#333]"
+              className="text-sm text-[var(--color-text-secondary)] hover:text-white transition px-3 py-1 rounded border border-[var(--color-border-light)]"
             >
               {editing ? "View" : "Edit"}
             </button>
@@ -1159,19 +1159,19 @@ function ViewSkillModal({
               value={content}
               onChange={(e) => setContent(e.target.value)}
               rows={20}
-              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] font-mono text-sm"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] font-mono text-sm"
             />
           ) : (
-            <pre className="bg-[#0a0a0a] border border-[#222] rounded p-4 font-mono text-sm overflow-auto max-h-[60vh] whitespace-pre-wrap">
+            <pre className="bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded p-4 font-mono text-sm overflow-auto max-h-[60vh] whitespace-pre-wrap">
               {skill.content}
             </pre>
           )}
         </div>
 
-        <div className="p-6 border-t border-[#1a1a1a] flex justify-between">
-          <div className="text-xs text-[#555]">
+        <div className="p-6 border-t border-[var(--color-border)] flex justify-between">
+          <div className="text-xs text-[var(--color-text-faint)]">
             {skill.source !== "local" && skill.source_url && (
-              <a href={skill.source_url} target="_blank" rel="noopener noreferrer" className="text-[#f97316] hover:underline">
+              <a href={skill.source_url} target="_blank" rel="noopener noreferrer" className="text-[var(--color-accent)] hover:underline">
                 View source →
               </a>
             )}
@@ -1179,7 +1179,7 @@ function ViewSkillModal({
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-[#888] hover:text-white transition"
+              className="px-4 py-2 text-[var(--color-text-secondary)] hover:text-white transition"
             >
               Close
             </button>
@@ -1187,7 +1187,7 @@ function ViewSkillModal({
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+                className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
               >
                 {saving ? "Saving..." : "Save Changes"}
               </button>

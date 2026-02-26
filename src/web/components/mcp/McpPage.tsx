@@ -141,14 +141,14 @@ export function McpPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold mb-1">MCP Servers</h1>
-            <p className="text-[#666]">
+            <p className="text-[var(--color-text-muted)]">
               Manage Model Context Protocol servers for tool integrations.
             </p>
           </div>
           {activeTab === "servers" && (
             <button
               onClick={() => setShowAdd(true)}
-              className="bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition"
+              className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition"
             >
               + Add Server
             </button>
@@ -156,13 +156,13 @@ export function McpPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-[#111] border border-[#1a1a1a] rounded-lg p-1 w-fit">
+        <div className="flex gap-1 mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-1 w-fit">
           <button
             onClick={() => setActiveTab("servers")}
             className={`px-4 py-2 rounded text-sm font-medium transition ${
               activeTab === "servers"
-                ? "bg-[#1a1a1a] text-white"
-                : "text-[#666] hover:text-[#888]"
+                ? "bg-[var(--color-surface-raised)] text-white"
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
             }`}
           >
             My Servers
@@ -171,8 +171,8 @@ export function McpPage() {
             onClick={() => setActiveTab("hosted")}
             className={`px-4 py-2 rounded text-sm font-medium transition ${
               activeTab === "hosted"
-                ? "bg-[#1a1a1a] text-white"
-                : "text-[#666] hover:text-[#888]"
+                ? "bg-[var(--color-surface-raised)] text-white"
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
             }`}
           >
             Hosted Services
@@ -181,8 +181,8 @@ export function McpPage() {
             onClick={() => setActiveTab("registry")}
             className={`px-4 py-2 rounded text-sm font-medium transition ${
               activeTab === "registry"
-                ? "bg-[#1a1a1a] text-white"
-                : "text-[#666] hover:text-[#888]"
+                ? "bg-[var(--color-surface-raised)] text-white"
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
             }`}
           >
             Browse Registry
@@ -194,28 +194,28 @@ export function McpPage() {
           <>
             {/* Loading */}
             {loading && (
-              <div className="text-center py-8 text-[#666]">Loading...</div>
+              <div className="text-center py-8 text-[var(--color-text-muted)]">Loading...</div>
             )}
 
             {/* Empty State */}
             {!loading && filteredServers.length === 0 && servers.length === 0 && (
-              <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
-                <McpIcon className="w-12 h-12 text-[#333] mx-auto mb-4" />
+              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+                <McpIcon className="w-12 h-12 text-[var(--color-border-light)] mx-auto mb-4" />
                 <h3 className="text-lg font-medium mb-2">No MCP servers configured</h3>
-                <p className="text-[#666] mb-6 max-w-md mx-auto">
+                <p className="text-[var(--color-text-muted)] mb-6 max-w-md mx-auto">
                   MCP servers extend your agents with tools like file access, web browsing,
                   database connections, and more.
                 </p>
                 <div className="flex gap-3 justify-center">
                   <button
                     onClick={() => setShowAdd(true)}
-                    className="bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition"
+                    className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition"
                   >
                     Add Manually
                   </button>
                   <button
                     onClick={() => setActiveTab("registry")}
-                    className="border border-[#333] hover:border-[#666] px-4 py-2 rounded font-medium transition"
+                    className="border border-[var(--color-border-light)] hover:border-[var(--color-text-muted)] px-4 py-2 rounded font-medium transition"
                   >
                     Browse Registry
                   </button>
@@ -225,8 +225,8 @@ export function McpPage() {
 
             {/* Empty filter state */}
             {!loading && filteredServers.length === 0 && servers.length > 0 && (
-              <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center">
-                <p className="text-[#666]">No servers match this filter.</p>
+              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center">
+                <p className="text-[var(--color-text-muted)]">No servers match this filter.</p>
               </div>
             )}
 
@@ -298,9 +298,9 @@ export function McpPage() {
 
         {/* Info - only show on servers tab */}
         {activeTab === "servers" && (
-          <div className="mt-8 p-4 bg-[#111] border border-[#1a1a1a] rounded-lg">
+          <div className="mt-8 p-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg">
             <h3 className="font-medium mb-2">Quick Start</h3>
-            <p className="text-sm text-[#666] mb-3">
+            <p className="text-sm text-[var(--color-text-muted)] mb-3">
               Add an MCP server by providing its npm package name. For example:
             </p>
             <div className="flex flex-wrap gap-2">
@@ -309,7 +309,7 @@ export function McpPage() {
                 { name: "fetch", pkg: "@modelcontextprotocol/server-fetch" },
                 { name: "memory", pkg: "@modelcontextprotocol/server-memory" },
               ].map(s => (
-                <code key={s.name} className="text-xs bg-[#0a0a0a] px-2 py-1 rounded">
+                <code key={s.name} className="text-xs bg-[var(--color-bg)] px-2 py-1 rounded">
                   {s.pkg}
                 </code>
               ))}
@@ -396,7 +396,7 @@ function McpServerCard({
     }
     if (server.project_id === null) {
       return (
-        <span className="text-xs text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">
+        <span className="text-xs text-[var(--color-text-muted)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 rounded">
           Global
         </span>
       );
@@ -406,28 +406,28 @@ function McpServerCard({
 
   return (
     <div
-      className={`bg-[#111] border rounded-lg p-4 cursor-pointer transition ${
-        selected ? "border-[#f97316]" : "border-[#1a1a1a] hover:border-[#333]"
+      className={`bg-[var(--color-surface)] border rounded-lg p-4 cursor-pointer transition ${
+        selected ? "border-[var(--color-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-border-light)]"
       }`}
       onClick={isAvailable ? onSelect : undefined}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className={`w-2 h-2 rounded-full ${
-            isAvailable ? "bg-green-400" : "bg-[#444]"
+            isAvailable ? "bg-green-400" : "bg-[var(--color-scrollbar)]"
           }`} />
           <div>
             <div className="flex items-center gap-2">
               <h3 className="font-medium">{server.name}</h3>
               {getScopeBadge()}
             </div>
-            <p className="text-sm text-[#666]">{getServerInfo()}</p>
+            <p className="text-sm text-[var(--color-text-muted)]">{getServerInfo()}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={(e) => { e.stopPropagation(); onEdit(); }}
-            className="text-sm text-[#666] hover:text-[#888] px-3 py-1 transition"
+            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] px-3 py-1 transition"
             title="Edit server settings"
           >
             Edit
@@ -436,7 +436,7 @@ function McpServerCard({
             // Remote servers: no start/stop, just delete
             <button
               onClick={(e) => { e.stopPropagation(); onDelete(); }}
-              className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
+              className="text-sm text-[var(--color-text-muted)] hover:text-red-400 px-3 py-1 transition"
             >
               Remove
             </button>
@@ -445,19 +445,19 @@ function McpServerCard({
             <>
               <button
                 onClick={(e) => { e.stopPropagation(); onSelect(); }}
-                className="text-sm text-[#f97316] hover:text-[#fb923c] px-3 py-1 transition"
+                className="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] px-3 py-1 transition"
               >
                 Tools
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onStop(); }}
-                className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
+                className="text-sm text-[var(--color-text-muted)] hover:text-red-400 px-3 py-1 transition"
               >
                 Stop
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
+                className="text-sm text-[var(--color-text-muted)] hover:text-red-400 px-3 py-1 transition"
               >
                 Delete
               </button>
@@ -467,13 +467,13 @@ function McpServerCard({
             <>
               <button
                 onClick={(e) => { e.stopPropagation(); onStart(); }}
-                className="text-sm text-[#666] hover:text-green-400 px-3 py-1 transition"
+                className="text-sm text-[var(--color-text-muted)] hover:text-green-400 px-3 py-1 transition"
               >
                 Start
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                className="text-sm text-[#666] hover:text-red-400 px-3 py-1 transition"
+                className="text-sm text-[var(--color-text-muted)] hover:text-red-400 px-3 py-1 transition"
               >
                 Delete
               </button>
@@ -523,20 +523,20 @@ function ToolsPanel({
   }, [server.id, authFetch]);
 
   return (
-    <div className="bg-[#111] border border-[#1a1a1a] rounded-lg overflow-hidden">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg overflow-hidden">
       {/* Header */}
-      <div className="p-4 border-b border-[#1a1a1a] flex items-center justify-between">
+      <div className="p-4 border-b border-[var(--color-border)] flex items-center justify-between">
         <div>
           <h3 className="font-medium">{server.name} Tools</h3>
           {serverInfo && (
-            <p className="text-xs text-[#666]">
+            <p className="text-xs text-[var(--color-text-muted)]">
               {serverInfo.name} v{serverInfo.version}
             </p>
           )}
         </div>
         <button
           onClick={onClose}
-          className="text-[#666] hover:text-[#888] text-xl leading-none"
+          className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] text-xl leading-none"
         >
           ×
         </button>
@@ -544,7 +544,7 @@ function ToolsPanel({
 
       {/* Content */}
       <div className="p-4 max-h-[500px] overflow-auto">
-        {loading && <p className="text-[#666]">Loading tools...</p>}
+        {loading && <p className="text-[var(--color-text-muted)]">Loading tools...</p>}
 
         {error && (
           <div className="text-red-400 text-sm p-3 bg-red-500/10 rounded">
@@ -553,7 +553,7 @@ function ToolsPanel({
         )}
 
         {!loading && !error && tools.length === 0 && (
-          <p className="text-[#666]">No tools available from this server.</p>
+          <p className="text-[var(--color-text-muted)]">No tools available from this server.</p>
         )}
 
         {!loading && !error && tools.length > 0 && !selectedTool && (
@@ -562,11 +562,11 @@ function ToolsPanel({
               <button
                 key={tool.name}
                 onClick={() => setSelectedTool(tool)}
-                className="w-full text-left p-3 bg-[#0a0a0a] hover:bg-[#1a1a1a] border border-[#222] hover:border-[#333] rounded transition"
+                className="w-full text-left p-3 bg-[var(--color-bg)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-border-light)] rounded transition"
               >
                 <div className="font-medium text-sm">{tool.name}</div>
                 {tool.description && (
-                  <div className="text-xs text-[#666] mt-1">{tool.description}</div>
+                  <div className="text-xs text-[var(--color-text-muted)] mt-1">{tool.description}</div>
                 )}
               </button>
             ))}
@@ -658,25 +658,25 @@ function ToolTester({
       <div className="flex items-center gap-2">
         <button
           onClick={onBack}
-          className="text-[#666] hover:text-[#888] text-sm"
+          className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] text-sm"
         >
           ← Back
         </button>
-        <span className="text-[#444]">/</span>
+        <span className="text-[var(--color-text-faint)]">/</span>
         <span className="font-medium">{tool.name}</span>
       </div>
 
       {/* Description */}
       {tool.description && (
-        <p className="text-sm text-[#666]">{tool.description}</p>
+        <p className="text-sm text-[var(--color-text-muted)]">{tool.description}</p>
       )}
 
       {/* Schema info */}
       {tool.inputSchema && (
         <div className="text-xs">
           <details className="cursor-pointer">
-            <summary className="text-[#666] hover:text-[#888]">Input Schema</summary>
-            <pre className="mt-2 p-2 bg-[#0a0a0a] rounded text-[#888] overflow-auto max-h-32">
+            <summary className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">Input Schema</summary>
+            <pre className="mt-2 p-2 bg-[var(--color-bg)] rounded text-[var(--color-text-secondary)] overflow-auto max-h-32">
               {JSON.stringify(tool.inputSchema, null, 2)}
             </pre>
           </details>
@@ -685,11 +685,11 @@ function ToolTester({
 
       {/* Arguments input */}
       <div>
-        <label className="block text-sm text-[#666] mb-1">Arguments (JSON)</label>
+        <label className="block text-sm text-[var(--color-text-muted)] mb-1">Arguments (JSON)</label>
         <textarea
           value={args}
           onChange={(e) => setArgs(e.target.value)}
-          className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 h-32 font-mono text-sm focus:outline-none focus:border-[#f97316] resize-none"
+          className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 h-32 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)] resize-none"
           placeholder="{}"
         />
       </div>
@@ -698,7 +698,7 @@ function ToolTester({
       <button
         onClick={callTool}
         disabled={loading}
-        className="w-full bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+        className="w-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
       >
         {loading ? "Calling..." : "Call Tool"}
       </button>
@@ -713,7 +713,7 @@ function ToolTester({
       {/* Result */}
       {result && (
         <div className="space-y-2">
-          <div className="text-sm text-[#666]">
+          <div className="text-sm text-[var(--color-text-muted)]">
             Result {result.isError && <span className="text-red-400">(error)</span>}
           </div>
           <div className={`p-3 rounded text-sm ${result.isError ? "bg-red-500/10" : "bg-green-500/10"}`}>
@@ -829,12 +829,12 @@ function RegistryBrowser({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search MCP servers (e.g., filesystem, github, slack...)"
-          className="flex-1 bg-[#111] border border-[#333] rounded-lg px-4 py-3 focus:outline-none focus:border-[#f97316]"
+          className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
         />
         <button
           type="submit"
           disabled={loading}
-          className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-6 py-3 rounded-lg font-medium transition"
+          className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-6 py-3 rounded-lg font-medium transition"
         >
           {loading ? "..." : "Search"}
         </button>
@@ -849,7 +849,7 @@ function RegistryBrowser({
 
       {/* Results */}
       {!loading && searched && servers.length === 0 && (
-        <div className="text-center py-8 text-[#666]">
+        <div className="text-center py-8 text-[var(--color-text-muted)]">
           No servers found. Try a different search term.
         </div>
       )}
@@ -859,15 +859,15 @@ function RegistryBrowser({
           {servers.map((server) => (
             <div
               key={server.id}
-              className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 hover:border-[#333] transition"
+              className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 hover:border-[var(--color-border-light)] transition"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <h3 className="font-medium truncate">{server.name}</h3>
-                  <p className="text-sm text-[#666] mt-1 line-clamp-2">
+                  <p className="text-sm text-[var(--color-text-muted)] mt-1 line-clamp-2">
                     {server.description || "No description"}
                   </p>
-                  <div className="flex items-center gap-2 mt-2 text-xs text-[#555]">
+                  <div className="flex items-center gap-2 mt-2 text-xs text-[var(--color-text-faint)]">
                     {server.version && <span>v{server.version}</span>}
                     <span className={`px-1.5 py-0.5 rounded ${
                       server.npmPackage ? "bg-green-500/10 text-green-400" : "bg-blue-500/10 text-blue-400"
@@ -875,7 +875,7 @@ function RegistryBrowser({
                       {server.npmPackage ? "npm" : "remote"}
                     </span>
                   </div>
-                  <code className="text-xs text-[#555] bg-[#0a0a0a] px-2 py-0.5 rounded mt-2 inline-block truncate max-w-full">
+                  <code className="text-xs text-[var(--color-text-faint)] bg-[var(--color-bg)] px-2 py-0.5 rounded mt-2 inline-block truncate max-w-full">
                     {server.npmPackage || server.fullName}
                   </code>
                 </div>
@@ -884,7 +884,7 @@ function RegistryBrowser({
                     <button
                       onClick={() => installServer(server)}
                       disabled={installing === server.id}
-                      className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition disabled:opacity-50"
+                      className="text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-3 py-1.5 rounded transition disabled:opacity-50"
                     >
                       {installing === server.id ? "Adding..." : "Add"}
                     </button>
@@ -893,7 +893,7 @@ function RegistryBrowser({
                       href={server.repository}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-sm text-[#666] hover:text-[#f97316] transition"
+                      className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition"
                     >
                       View →
                     </a>
@@ -907,20 +907,20 @@ function RegistryBrowser({
 
       {/* Loading */}
       {loading && (
-        <div className="text-center py-8 text-[#666]">
+        <div className="text-center py-8 text-[var(--color-text-muted)]">
           Searching registry...
         </div>
       )}
 
       {/* Registry info */}
-      <div className="p-4 bg-[#111] border border-[#1a1a1a] rounded-lg text-sm text-[#666]">
+      <div className="p-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-muted)]">
         <p>
           Servers are sourced from the{" "}
           <a
             href="https://github.com/modelcontextprotocol/servers"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[#f97316] hover:underline"
+            className="text-[var(--color-accent)] hover:underline"
           >
             official MCP registry
           </a>
@@ -1052,7 +1052,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
   }, [authFetch, projectId]);
 
   if (loading) {
-    return <div className="text-center py-8 text-[#666]">Loading...</div>;
+    return <div className="text-center py-8 text-[var(--color-text-muted)]">Loading...</div>;
   }
 
   const hasAnyConnection = composioConnected || smitheryConnected || agentDojoConnected;
@@ -1060,14 +1060,14 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
 
   if (!hasAnyConnection) {
     return (
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
-        <p className="text-[#888] mb-2">No hosted MCP services connected</p>
-        <p className="text-sm text-[#666] mb-4">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+        <p className="text-[var(--color-text-secondary)] mb-2">No hosted MCP services connected</p>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">
           Connect Composio, Smithery, or AgentDojo in Settings to access cloud-based MCP servers.
         </p>
         <a
           href="/settings"
-          className="inline-block bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-4 py-2 rounded text-sm font-medium transition"
+          className="inline-block bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-4 py-2 rounded text-sm font-medium transition"
         >
           Go to Settings →
         </a>
@@ -1081,14 +1081,14 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
     <div className="space-y-6">
       {/* Provider Tabs - show when multiple providers are connected */}
       {connectedCount > 1 && (
-        <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded-lg p-1 w-fit">
+        <div className="flex gap-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg p-1 w-fit">
           {composioConnected && (
             <button
               onClick={() => { setActiveProvider("composio"); setSubTab("configs"); }}
               className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
                 activeProvider === "composio"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               <span className="w-2 h-2 rounded-full bg-purple-500" />
@@ -1100,8 +1100,8 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
               onClick={() => setActiveProvider("smithery")}
               className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
                 activeProvider === "smithery"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               <span className="w-2 h-2 rounded-full bg-blue-500" />
@@ -1113,8 +1113,8 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
               onClick={() => setActiveProvider("agentdojo")}
               className={`px-4 py-2 rounded text-sm font-medium transition flex items-center gap-2 ${
                 activeProvider === "agentdojo"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -1129,13 +1129,13 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
         <>
           {/* Sub-tabs for Composio */}
           <div className="flex items-center justify-between">
-            <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded-lg p-1">
+            <div className="flex gap-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg p-1">
               <button
                 onClick={() => setSubTab("configs")}
                 className={`px-4 py-2 rounded text-sm font-medium transition ${
                   subTab === "configs"
-                    ? "bg-[#1a1a1a] text-white"
-                    : "text-[#666] hover:text-[#888]"
+                    ? "bg-[var(--color-surface-raised)] text-white"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                 }`}
               >
                 MCP Configs
@@ -1144,15 +1144,15 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
                 onClick={() => setSubTab("connect")}
                 className={`px-4 py-2 rounded text-sm font-medium transition ${
                   subTab === "connect"
-                    ? "bg-[#1a1a1a] text-white"
-                    : "text-[#666] hover:text-[#888]"
+                    ? "bg-[var(--color-surface-raised)] text-white"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                 }`}
               >
                 Connect Apps
               </button>
             </div>
             {connectedCount === 1 && (
-              <div className="flex items-center gap-2 text-xs text-[#666]">
+              <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
                 <span className="w-2 h-2 rounded-full bg-purple-500" />
                 Composio
                 <span className="text-green-400">Connected</span>
@@ -1163,7 +1163,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
           {/* Connect Apps Tab */}
           {subTab === "connect" && (
             <div>
-              <p className="text-sm text-[#666] mb-4">
+              <p className="text-sm text-[var(--color-text-muted)] mb-4">
                 Connect your accounts to enable tools in MCP configs
               </p>
               <IntegrationsPanel
@@ -1181,14 +1181,14 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
           {subTab === "configs" && (
             <div>
               <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-[#666]">
+                <p className="text-sm text-[var(--color-text-muted)]">
                   Your MCP configs from Composio
                 </p>
                 <div className="flex items-center gap-3">
                   <button
                     onClick={fetchComposioConfigs}
                     disabled={loadingConfigs}
-                    className="text-xs text-[#666] hover:text-[#888] transition"
+                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition"
                   >
                     {loadingConfigs ? "Loading..." : "Refresh"}
                   </button>
@@ -1196,7 +1196,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
                     href="https://app.composio.dev/mcp_configs"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-[#666] hover:text-[#f97316] transition"
+                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition"
                   >
                     Create Config →
                   </a>
@@ -1204,18 +1204,18 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
               </div>
 
               {loadingConfigs ? (
-                <div className="text-center py-6 text-[#666]">Loading configs...</div>
+                <div className="text-center py-6 text-[var(--color-text-muted)]">Loading configs...</div>
               ) : composioConfigs.length === 0 ? (
-                <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
-                  <p className="text-sm text-[#666]">No MCP configs found</p>
-                  <p className="text-xs text-[#555] mt-2">
-                    First <button onClick={() => setSubTab("connect")} className="text-[#f97316] hover:text-[#fb923c]">connect some apps</button>, then create a config.
+                <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+                  <p className="text-sm text-[var(--color-text-muted)]">No MCP configs found</p>
+                  <p className="text-xs text-[var(--color-text-faint)] mt-2">
+                    First <button onClick={() => setSubTab("connect")} className="text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">connect some apps</button>, then create a config.
                   </p>
                   <a
                     href="https://app.composio.dev/mcp_configs"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-[#f97316] hover:text-[#fb923c] mt-2 inline-block"
+                    className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] mt-2 inline-block"
                   >
                     Create in Composio →
                   </a>
@@ -1228,14 +1228,14 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
                     return (
                       <div
                         key={config.id}
-                        className={`bg-[#111] border rounded-lg p-3 transition flex items-center justify-between ${
-                          added ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+                        className={`bg-[var(--color-surface)] border rounded-lg p-3 transition flex items-center justify-between ${
+                          added ? "border-green-500/30" : "border-[var(--color-border)] hover:border-[var(--color-border-light)]"
                         }`}
                       >
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-sm">{config.name}</span>
-                            <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
+                            <span className="text-xs text-[var(--color-text-faint)]">{config.toolsCount} tools</span>
                             {added && (
                               <span className="text-xs text-green-400">Added</span>
                             )}
@@ -1245,25 +1245,25 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
                               {config.toolkits.slice(0, 4).map((toolkit) => (
                                 <span
                                   key={toolkit}
-                                  className="text-xs bg-[#1a1a1a] text-[#666] px-1.5 py-0.5 rounded"
+                                  className="text-xs bg-[var(--color-surface-raised)] text-[var(--color-text-muted)] px-1.5 py-0.5 rounded"
                                 >
                                   {toolkit}
                                 </span>
                               ))}
                               {config.toolkits.length > 4 && (
-                                <span className="text-xs text-[#555]">+{config.toolkits.length - 4}</span>
+                                <span className="text-xs text-[var(--color-text-faint)]">+{config.toolkits.length - 4}</span>
                               )}
                             </div>
                           )}
                         </div>
                         <div className="flex items-center gap-2 ml-3">
                           {added ? (
-                            <span className="text-xs text-[#555] px-2 py-1">In Servers</span>
+                            <span className="text-xs text-[var(--color-text-faint)] px-2 py-1">In Servers</span>
                           ) : (
                             <button
                               onClick={() => addComposioConfig(config.id)}
                               disabled={isAdding}
-                              className="text-xs bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
+                              className="text-xs bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
                             >
                               {isAdding ? "Adding..." : "Add"}
                             </button>
@@ -1272,7 +1272,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
                             href={`https://app.composio.dev/mcp_configs/${config.id}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-xs text-[#666] hover:text-[#888] transition"
+                            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition"
                           >
                             Edit
                           </a>
@@ -1291,30 +1291,30 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
       {smitheryConnected && (connectedCount === 1 || activeProvider === "smithery") && (
         <div>
           {connectedCount === 1 && (
-            <div className="flex items-center gap-2 text-xs text-[#666] mb-4">
+            <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)] mb-4">
               <span className="w-2 h-2 rounded-full bg-blue-500" />
               Smithery
               <span className="text-green-400">Connected</span>
             </div>
           )}
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm text-[#666]">
+            <p className="text-sm text-[var(--color-text-muted)]">
               Add MCP servers from the Smithery registry
             </p>
             <a
               href="https://smithery.ai/servers"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-[#666] hover:text-[#f97316] transition"
+              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition"
             >
               Browse Smithery →
             </a>
           </div>
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
-            <p className="text-sm text-[#666]">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+            <p className="text-sm text-[var(--color-text-muted)]">
               Smithery servers can be added from the <strong>Browse Registry</strong> tab.
             </p>
-            <p className="text-xs text-[#555] mt-2">
+            <p className="text-xs text-[var(--color-text-faint)] mt-2">
               Your API key will be used automatically when adding Smithery servers.
             </p>
           </div>
@@ -1330,10 +1330,10 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
         />
       )}
 
-      <div className="p-3 bg-[#0a0a0a] border border-[#222] rounded text-xs text-[#666]">
-        <strong className="text-[#888]">Tip:</strong> Connect apps first, then add MCP configs to make tools available to your agents.
+      <div className="p-3 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded text-xs text-[var(--color-text-muted)]">
+        <strong className="text-[var(--color-text-secondary)]">Tip:</strong> Connect apps first, then add MCP configs to make tools available to your agents.
         {" · "}
-        <a href="/settings" className="text-[#f97316] hover:text-[#fb923c]">Add more providers in Settings</a>
+        <a href="/settings" className="text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">Add more providers in Settings</a>
       </div>
     </div>
     </>
@@ -1446,7 +1446,7 @@ function AgentDojoContent({
       {AlertDialog}
       <div>
         {showProviderBadge && (
-          <div className="flex items-center gap-2 text-xs text-[#666] mb-4">
+          <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)] mb-4">
             <span className="w-2 h-2 rounded-full bg-green-500" />
             AgentDojo
             <span className="text-green-400">Connected</span>
@@ -1455,13 +1455,13 @@ function AgentDojoContent({
 
         {/* Sub-tabs */}
         <div className="flex items-center justify-between mb-4">
-          <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded-lg p-1">
+          <div className="flex gap-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg p-1">
             <button
               onClick={() => setSubTab("configs")}
               className={`px-4 py-2 rounded text-sm font-medium transition ${
                 subTab === "configs"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               MCP Servers
@@ -1470,8 +1470,8 @@ function AgentDojoContent({
               onClick={() => setSubTab("toolkits")}
               className={`px-4 py-2 rounded text-sm font-medium transition ${
                 subTab === "toolkits"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               Browse Toolkits
@@ -1483,25 +1483,25 @@ function AgentDojoContent({
         {subTab === "configs" && (
           <div>
             <div className="flex items-center justify-between mb-3">
-              <p className="text-sm text-[#666]">
+              <p className="text-sm text-[var(--color-text-muted)]">
                 Your MCP servers from AgentDojo
               </p>
               <button
                 onClick={fetchConfigs}
                 disabled={loadingConfigs}
-                className="text-xs text-[#666] hover:text-[#888] transition"
+                className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition"
               >
                 {loadingConfigs ? "Loading..." : "Refresh"}
               </button>
             </div>
 
             {loadingConfigs ? (
-              <div className="text-center py-6 text-[#666]">Loading servers...</div>
+              <div className="text-center py-6 text-[var(--color-text-muted)]">Loading servers...</div>
             ) : configs.length === 0 ? (
-              <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 text-center">
-                <p className="text-sm text-[#666]">No MCP servers found</p>
-                <p className="text-xs text-[#555] mt-2">
-                  <button onClick={() => setSubTab("toolkits")} className="text-[#f97316] hover:text-[#fb923c]">
+              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+                <p className="text-sm text-[var(--color-text-muted)]">No MCP servers found</p>
+                <p className="text-xs text-[var(--color-text-faint)] mt-2">
+                  <button onClick={() => setSubTab("toolkits")} className="text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">
                     Browse toolkits
                   </button>
                   {" "}to create a new MCP server.
@@ -1515,37 +1515,37 @@ function AgentDojoContent({
                   return (
                     <div
                       key={config.id}
-                      className={`bg-[#111] border rounded-lg p-3 transition flex items-center justify-between ${
-                        added ? "border-green-500/30" : "border-[#1a1a1a] hover:border-[#333]"
+                      className={`bg-[var(--color-surface)] border rounded-lg p-3 transition flex items-center justify-between ${
+                        added ? "border-green-500/30" : "border-[var(--color-border)] hover:border-[var(--color-border-light)]"
                       }`}
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{config.name}</span>
-                          <span className="text-xs text-[#555]">{config.toolsCount} tools</span>
+                          <span className="text-xs text-[var(--color-text-faint)]">{config.toolsCount} tools</span>
                           {added && (
                             <span className="text-xs text-green-400">Added</span>
                           )}
                         </div>
                         {config.mcpUrl && (
-                          <code className="text-xs text-[#555] mt-1 block truncate">
+                          <code className="text-xs text-[var(--color-text-faint)] mt-1 block truncate">
                             {config.mcpUrl}
                           </code>
                         )}
                         {!config.mcpUrl && config.slug && (
-                          <code className="text-xs text-[#555] mt-1 block truncate">
+                          <code className="text-xs text-[var(--color-text-faint)] mt-1 block truncate">
                             {config.slug}
                           </code>
                         )}
                       </div>
                       <div className="flex items-center gap-2 ml-3">
                         {added ? (
-                          <span className="text-xs text-[#555] px-2 py-1">In Servers</span>
+                          <span className="text-xs text-[var(--color-text-faint)] px-2 py-1">In Servers</span>
                         ) : (
                           <button
                             onClick={() => addConfig(config.id)}
                             disabled={isAdding}
-                            className="text-xs bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
+                            className="text-xs bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-3 py-1 rounded font-medium transition disabled:opacity-50"
                           >
                             {isAdding ? "Adding..." : "Add"}
                           </button>
@@ -1562,7 +1562,7 @@ function AgentDojoContent({
         {/* Browse Toolkits Tab */}
         {subTab === "toolkits" && (
           <div>
-            <p className="text-sm text-[#666] mb-4">
+            <p className="text-sm text-[var(--color-text-muted)] mb-4">
               Browse available toolkits and create MCP servers
             </p>
             <IntegrationsPanel
@@ -1845,10 +1845,10 @@ function AddServerModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="p-4 border-b border-[#1a1a1a] flex items-center justify-between sticky top-0 bg-[#111]">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="p-4 border-b border-[var(--color-border)] flex items-center justify-between sticky top-0 bg-[var(--color-surface)]">
           <h2 className="text-lg font-semibold">Add MCP Server</h2>
-          <button onClick={onClose} className="text-[#666] hover:text-[#888]">
+          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">
             ✕
           </button>
         </div>
@@ -1856,7 +1856,7 @@ function AddServerModal({
         <div className="p-4 space-y-4">
           {/* Quick picks */}
           <div>
-            <p className="text-sm text-[#666] mb-2">Quick add:</p>
+            <p className="text-sm text-[var(--color-text-muted)] mb-2">Quick add:</p>
             <div className="flex flex-wrap gap-2">
               {[
                 { name: "filesystem", pkg: "@modelcontextprotocol/server-filesystem", type: "npm" as const },
@@ -1877,7 +1877,7 @@ function AddServerModal({
                       setPipModule("");
                     }
                   }}
-                  className="text-sm bg-[#1a1a1a] hover:bg-[#222] px-3 py-1 rounded transition"
+                  className="text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] px-3 py-1 rounded transition"
                 >
                   {s.name}
                 </button>
@@ -1886,13 +1886,13 @@ function AddServerModal({
           </div>
 
           {/* Mode toggle */}
-          <div className="flex gap-1 bg-[#0a0a0a] border border-[#222] rounded p-1">
+          <div className="flex gap-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded p-1">
             <button
               onClick={() => setMode("npm")}
               className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
                 mode === "npm"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               npm
@@ -1901,8 +1901,8 @@ function AddServerModal({
               onClick={() => setMode("pip")}
               className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
                 mode === "pip"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               pip
@@ -1911,8 +1911,8 @@ function AddServerModal({
               onClick={() => setMode("command")}
               className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
                 mode === "command"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               Command
@@ -1921,8 +1921,8 @@ function AddServerModal({
               onClick={() => setMode("http")}
               className={`flex-1 px-2 py-1.5 rounded text-sm transition ${
                 mode === "http"
-                  ? "bg-[#1a1a1a] text-white"
-                  : "text-[#666] hover:text-[#888]"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               HTTP
@@ -1931,20 +1931,20 @@ function AddServerModal({
 
           {/* Name */}
           <div>
-            <label className="block text-sm text-[#666] mb-1">Name</label>
+            <label className="block text-sm text-[var(--color-text-muted)] mb-1">Name</label>
             <input
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g., pushover"
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
 
           {/* Project Scope - only show when projects exist */}
           {hasProjects && (
             <div>
-              <label className="block text-sm text-[#666] mb-1">Scope</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">Scope</label>
               <Select
                 value={projectId || ""}
                 onChange={(value) => setProjectId(value || null)}
@@ -1954,7 +1954,7 @@ function AddServerModal({
                 ]}
                 placeholder="Select scope..."
               />
-              <p className="text-xs text-[#555] mt-1">
+              <p className="text-xs text-[var(--color-text-faint)] mt-1">
                 Global servers are available to all agents. Project-scoped servers are only available to agents in that project.
               </p>
             </div>
@@ -1963,15 +1963,15 @@ function AddServerModal({
           {/* npm Package */}
           {mode === "npm" && (
             <div>
-              <label className="block text-sm text-[#666] mb-1">npm Package</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">npm Package</label>
               <input
                 type="text"
                 value={pkg}
                 onChange={e => handlePackageChange(e.target.value)}
                 placeholder="e.g., @modelcontextprotocol/server-filesystem or paste full command"
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
               />
-              <p className="text-xs text-[#555] mt-1">
+              <p className="text-xs text-[var(--color-text-faint)] mt-1">
                 Package name or paste a full npx command with credentials
               </p>
             </div>
@@ -1981,7 +1981,7 @@ function AddServerModal({
           {mode === "pip" && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-[#666] mb-1">pip Package</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-1">pip Package</label>
                 <input
                   type="text"
                   value={pkg}
@@ -1994,22 +1994,22 @@ function AddServerModal({
                     }
                   }}
                   placeholder="e.g., late-sdk[mcp]"
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
                 />
-                <p className="text-xs text-[#555] mt-1">
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">
                   Python package with extras, e.g., late-sdk[mcp] or mcp-server-time
                 </p>
               </div>
               <div>
-                <label className="block text-sm text-[#666] mb-1">Module (optional)</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-1">Module (optional)</label>
                 <input
                   type="text"
                   value={pipModule}
                   onChange={e => setPipModule(e.target.value)}
                   placeholder="e.g., late.mcp"
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
-                <p className="text-xs text-[#555] mt-1">
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">
                   Python module to run with -m. Auto-detected from package name if not specified.
                 </p>
               </div>
@@ -2019,15 +2019,15 @@ function AddServerModal({
           {/* Custom Command */}
           {mode === "command" && (
             <div>
-              <label className="block text-sm text-[#666] mb-1">Command</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">Command</label>
               <input
                 type="text"
                 value={command}
                 onChange={e => handleCommandChange(e.target.value)}
                 placeholder="e.g., npx -y pushover-mcp@latest start --token YOUR_TOKEN"
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
               />
-              <p className="text-xs text-[#555] mt-1">
+              <p className="text-xs text-[var(--color-text-faint)] mt-1">
                 Paste the full command - credentials like YOUR_TOKEN will be auto-extracted
               </p>
             </div>
@@ -2037,38 +2037,38 @@ function AddServerModal({
           {mode === "http" && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-[#666] mb-1">URL</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-1">URL</label>
                 <input
                   type="text"
                   value={url}
                   onChange={e => setUrl(e.target.value)}
                   placeholder="e.g., https://example.com/wp-json/mcp/v1/messages"
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
-              <div className="p-3 bg-[#0a0a0a] border border-[#222] rounded">
-                <p className="text-xs text-[#666] mb-3">
+              <div className="p-3 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded">
+                <p className="text-xs text-[var(--color-text-muted)] mb-3">
                   Optional: Basic Auth credentials (will be encoded and stored securely)
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-[#555] mb-1">Username</label>
+                    <label className="block text-xs text-[var(--color-text-faint)] mb-1">Username</label>
                     <input
                       type="text"
                       value={username}
                       onChange={e => setUsername(e.target.value)}
                       placeholder="username"
-                      className="w-full bg-[#111] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                      className="w-full bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-[#555] mb-1">Password</label>
+                    <label className="block text-xs text-[var(--color-text-faint)] mb-1">Password</label>
                     <input
                       type="password"
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                       placeholder="password or app key"
-                      className="w-full bg-[#111] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                      className="w-full bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                     />
                   </div>
                 </div>
@@ -2079,19 +2079,19 @@ function AddServerModal({
           {/* Environment Variables / Credentials */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-sm text-[#666]">
+              <label className="text-sm text-[var(--color-text-muted)]">
                 Environment Variables / Credentials
               </label>
               <button
                 onClick={addEnvVar}
-                className="text-xs text-[#f97316] hover:text-[#fb923c] transition"
+                className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition"
               >
                 + Add Variable
               </button>
             </div>
 
             {envVars.length === 0 && (
-              <p className="text-xs text-[#555] bg-[#0a0a0a] border border-[#222] rounded p-3">
+              <p className="text-xs text-[var(--color-text-faint)] bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded p-3">
                 Add environment variables for API tokens and credentials.
                 These are stored encrypted and passed to the server at startup.
               </p>
@@ -2106,18 +2106,18 @@ function AddServerModal({
                       value={env.key}
                       onChange={e => updateEnvVar(index, "key", e.target.value)}
                       placeholder="KEY"
-                      className="w-1/3 bg-[#0a0a0a] border border-[#333] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[#f97316]"
+                      className="w-1/3 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[var(--color-accent)]"
                     />
                     <input
                       type="password"
                       value={env.value}
                       onChange={e => updateEnvVar(index, "value", e.target.value)}
                       placeholder="value"
-                      className="flex-1 bg-[#0a0a0a] border border-[#333] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[#f97316]"
+                      className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[var(--color-accent)]"
                     />
                     <button
                       onClick={() => removeEnvVar(index)}
-                      className="text-[#666] hover:text-red-400 px-2 transition"
+                      className="text-[var(--color-text-muted)] hover:text-red-400 px-2 transition"
                     >
                       ✕
                     </button>
@@ -2130,17 +2130,17 @@ function AddServerModal({
           {error && <p className="text-red-400 text-sm">{error}</p>}
         </div>
 
-        <div className="p-4 border-t border-[#1a1a1a] flex justify-end gap-2 sticky bottom-0 bg-[#111]">
+        <div className="p-4 border-t border-[var(--color-border)] flex justify-end gap-2 sticky bottom-0 bg-[var(--color-surface)]">
           <button
             onClick={onClose}
-            className="px-4 py-2 border border-[#333] hover:border-[#666] rounded transition"
+            className="px-4 py-2 border border-[var(--color-border-light)] hover:border-[var(--color-text-muted)] rounded transition"
           >
             Cancel
           </button>
           <button
             onClick={handleAdd}
             disabled={saving || !name || (mode === "npm" ? !pkg : mode === "pip" ? !pkg : mode === "http" ? !url : !command)}
-            className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-black rounded font-medium transition disabled:opacity-50"
+            className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black rounded font-medium transition disabled:opacity-50"
           >
             {saving ? "Adding..." : "Add Server"}
           </button>
@@ -2303,37 +2303,37 @@ function EditServerModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="p-4 border-b border-[#1a1a1a] flex items-center justify-between sticky top-0 bg-[#111]">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="p-4 border-b border-[var(--color-border)] flex items-center justify-between sticky top-0 bg-[var(--color-surface)]">
           <h2 className="text-lg font-semibold">Edit MCP Server</h2>
-          <button onClick={onClose} className="text-[#666] hover:text-[#888]">
+          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">
             ✕
           </button>
         </div>
 
         <div className="p-4 space-y-4">
           {/* Server Type Info */}
-          <div className="text-sm text-[#666] bg-[#0a0a0a] border border-[#222] rounded p-3">
-            Type: <span className="text-[#888]">{server.type}</span>
-            {server.package && <> • Package: <span className="text-[#888] font-mono">{server.package}</span></>}
-            {server.command && <> • Command: <span className="text-[#888] font-mono">{server.command}</span></>}
+          <div className="text-sm text-[var(--color-text-muted)] bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded p-3">
+            Type: <span className="text-[var(--color-text-secondary)]">{server.type}</span>
+            {server.package && <> • Package: <span className="text-[var(--color-text-secondary)] font-mono">{server.package}</span></>}
+            {server.command && <> • Command: <span className="text-[var(--color-text-secondary)] font-mono">{server.command}</span></>}
           </div>
 
           {/* Name */}
           <div>
-            <label className="block text-sm text-[#666] mb-1">Name</label>
+            <label className="block text-sm text-[var(--color-text-muted)] mb-1">Name</label>
             <input
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
 
           {/* Project Scope */}
           {hasProjects && (
             <div>
-              <label className="block text-sm text-[#666] mb-1">Scope</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">Scope</label>
               <Select
                 value={projectId || ""}
                 onChange={(value) => setProjectId(value || null)}
@@ -2349,12 +2349,12 @@ function EditServerModal({
           {/* Package (for npm type) */}
           {server.type === "npm" && (
             <div>
-              <label className="block text-sm text-[#666] mb-1">npm Package</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">npm Package</label>
               <input
                 type="text"
                 value={pkg}
                 onChange={e => setPkg(e.target.value)}
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
               />
             </div>
           )}
@@ -2362,12 +2362,12 @@ function EditServerModal({
           {/* Package (for pip type) */}
           {server.type === "pip" && (
             <div>
-              <label className="block text-sm text-[#666] mb-1">pip Package</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">pip Package</label>
               <input
                 type="text"
                 value={pkg}
                 onChange={e => setPkg(e.target.value)}
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
               />
             </div>
           )}
@@ -2376,34 +2376,34 @@ function EditServerModal({
           {isRemote && (
             <>
               <div>
-                <label className="block text-sm text-[#666] mb-1">Server URL</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-1">Server URL</label>
                 <input
                   type="text"
                   value={url}
                   onChange={e => setUrl(e.target.value)}
                   placeholder="https://example.com/mcp"
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
               <div>
-                <label className="block text-sm text-[#666] mb-1">Authentication (Basic Auth)</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-1">Authentication (Basic Auth)</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={username}
                     onChange={e => setUsername(e.target.value)}
                     placeholder="Username"
-                    className="flex-1 bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                    className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                   />
                   <input
                     type="password"
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     placeholder="Password / App Password"
-                    className="flex-1 bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                    className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                   />
                 </div>
-                <p className="text-xs text-[#555] mt-1">
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">
                   Leave empty if no authentication required
                 </p>
               </div>
@@ -2414,22 +2414,22 @@ function EditServerModal({
           {server.type === "custom" && (
             <>
               <div>
-                <label className="block text-sm text-[#666] mb-1">Command</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-1">Command</label>
                 <input
                   type="text"
                   value={command}
                   onChange={e => setCommand(e.target.value)}
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
               <div>
-                <label className="block text-sm text-[#666] mb-1">Arguments</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-1">Arguments</label>
                 <input
                   type="text"
                   value={args}
                   onChange={e => setArgs(e.target.value)}
                   placeholder="e.g., --token $TOKEN --verbose"
-                  className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 font-mono text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
             </>
@@ -2439,19 +2439,19 @@ function EditServerModal({
           {!isRemote && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm text-[#666]">
+                <label className="text-sm text-[var(--color-text-muted)]">
                   Environment Variables / Credentials
                 </label>
                 <button
                   onClick={addEnvVar}
-                  className="text-xs text-[#f97316] hover:text-[#fb923c] transition"
+                  className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition"
                 >
                   + Add Variable
                 </button>
               </div>
 
               {envVars.length === 0 && (
-                <p className="text-xs text-[#555] bg-[#0a0a0a] border border-[#222] rounded p-3">
+                <p className="text-xs text-[var(--color-text-faint)] bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded p-3">
                   No environment variables configured.
                 </p>
               )}
@@ -2465,18 +2465,18 @@ function EditServerModal({
                         value={env.key}
                         onChange={e => updateEnvVar(index, "key", e.target.value)}
                         placeholder="KEY"
-                        className="w-1/3 bg-[#0a0a0a] border border-[#333] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[#f97316]"
+                        className="w-1/3 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[var(--color-accent)]"
                       />
                       <input
                         type="password"
                         value={env.value}
                         onChange={e => updateEnvVar(index, "value", e.target.value)}
                         placeholder="value"
-                        className="flex-1 bg-[#0a0a0a] border border-[#333] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[#f97316]"
+                        className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-[var(--color-accent)]"
                       />
                       <button
                         onClick={() => removeEnvVar(index)}
-                        className="text-[#666] hover:text-red-400 px-2 transition"
+                        className="text-[var(--color-text-muted)] hover:text-red-400 px-2 transition"
                       >
                         ✕
                       </button>
@@ -2485,7 +2485,7 @@ function EditServerModal({
                 </div>
               )}
 
-              <p className="text-xs text-[#555] mt-2">
+              <p className="text-xs text-[var(--color-text-faint)] mt-2">
                 {server.status === "running" ? "Server will be automatically restarted to apply changes." : "Changes will take effect when the server is started."}
               </p>
             </div>
@@ -2494,17 +2494,17 @@ function EditServerModal({
           {error && <p className="text-red-400 text-sm">{error}</p>}
         </div>
 
-        <div className="p-4 border-t border-[#1a1a1a] flex justify-end gap-2 sticky bottom-0 bg-[#111]">
+        <div className="p-4 border-t border-[var(--color-border)] flex justify-end gap-2 sticky bottom-0 bg-[var(--color-surface)]">
           <button
             onClick={onClose}
-            className="px-4 py-2 border border-[#333] hover:border-[#666] rounded transition"
+            className="px-4 py-2 border border-[var(--color-border-light)] hover:border-[var(--color-text-muted)] rounded transition"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={saving || !name.trim()}
-            className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-black rounded font-medium transition disabled:opacity-50"
+            className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black rounded font-medium transition disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save Changes"}
           </button>

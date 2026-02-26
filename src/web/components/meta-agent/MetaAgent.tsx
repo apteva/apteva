@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, createContext, useContext, type ReactNode } from "react";
 import { Chat } from "@apteva/apteva-kit";
-import { useAuth, useProjects, useTriggerRefresh } from "../../context";
+import { useAuth, useProjects, useTriggerRefresh, useTheme } from "../../context";
 
 interface MetaAgentStatus {
   enabled: boolean;
@@ -112,8 +112,8 @@ export function MetaAgentButton() {
       onClick={ctx.toggle}
       className={`hidden md:flex items-center gap-2 px-3 py-2 rounded transition ${
         ctx.isOpen
-          ? "bg-[#f97316] text-white"
-          : "bg-[#151515] hover:bg-[#1a1a1a] text-[#888] hover:text-white"
+          ? "bg-[var(--color-accent)] text-white"
+          : "bg-[var(--color-bg-secondary)] hover:bg-[var(--color-surface-raised)] text-[var(--color-text-secondary)] hover:text-white"
       }`}
       title="Apteva Assistant"
     >
@@ -128,6 +128,7 @@ export function MetaAgentButton() {
 
 // Chat panel component - renders as a right-side drawer
 export function MetaAgentPanel() {
+  const { theme } = useTheme();
   const ctx = useMetaAgent();
   const { currentProjectId, currentProject } = useProjects();
   const triggerRefresh = useTriggerRefresh();
@@ -157,16 +158,16 @@ export function MetaAgentPanel() {
       />
 
       {/* Drawer Panel */}
-      <div className="hidden md:flex fixed top-0 right-0 h-full w-[480px] lg:w-[540px] bg-[#0a0a0a] border-l border-[#1a1a1a] shadow-2xl z-50 flex-col">
+      <div className="hidden md:flex fixed top-0 right-0 h-full w-[480px] lg:w-[540px] bg-[var(--color-bg)] border-l border-[var(--color-border)] shadow-2xl z-50 flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[#1a1a1a] bg-[#111]">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
           <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${isRunning ? "bg-green-400" : "bg-[#444]"}`} />
+            <div className={`w-2 h-2 rounded-full ${isRunning ? "bg-green-400" : "bg-[var(--color-scrollbar)]"}`} />
             <span className="font-medium text-sm">Apteva Assistant</span>
           </div>
           <button
             onClick={close}
-            className="text-[#666] hover:text-[#888] transition"
+            className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition"
           >
             <CloseIcon />
           </button>
@@ -180,15 +181,16 @@ export function MetaAgentPanel() {
               apiUrl={`/api/agents/${agent!.id}`}
               placeholder="Ask me anything about Apteva..."
               variant="terminal"
+              theme={theme.id as "light" | "dark"}
               showHeader={false}
               context={chatContext}
               onToolResult={triggerRefresh}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-              <AssistantIcon className="w-12 h-12 text-[#333] mb-4" />
+              <AssistantIcon className="w-12 h-12 text-[var(--color-border-light)] mb-4" />
               <h3 className="font-medium mb-2">Apteva Assistant</h3>
-              <p className="text-sm text-[#666] mb-6">
+              <p className="text-sm text-[var(--color-text-muted)] mb-6">
                 I can help you navigate Apteva, create agents, set up MCP servers, and more.
               </p>
               {error && (
@@ -197,7 +199,7 @@ export function MetaAgentPanel() {
               <button
                 onClick={startAgent}
                 disabled={isStarting}
-                className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-white px-6 py-2 rounded font-medium transition"
+                className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-white px-6 py-2 rounded font-medium transition"
               >
                 {isStarting ? "Starting..." : "Start Assistant"}
               </button>

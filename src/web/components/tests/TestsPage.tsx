@@ -271,7 +271,7 @@ export function TestsPage() {
       running: "bg-blue-900/50 text-blue-400",
     };
     return (
-      <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[status] || "bg-[#222] text-[#666]"}`}>
+      <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[status] || "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"}`}>
         {status.toUpperCase()}
       </span>
     );
@@ -297,7 +297,7 @@ export function TestsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold">Tests</h1>
-          <p className="text-sm text-[#666] mt-1">
+          <p className="text-sm text-[var(--color-text-muted)] mt-1">
             Describe behavior, AI handles the rest
           </p>
         </div>
@@ -306,14 +306,14 @@ export function TestsPage() {
             <button
               onClick={handleRunAll}
               disabled={runningAll}
-              className="px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] text-[#e0e0e0] rounded text-sm font-medium transition disabled:opacity-50"
+              className="px-4 py-2 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] text-[var(--color-text)] rounded text-sm font-medium transition disabled:opacity-50"
             >
               {runningAll ? "Running..." : "Run All"}
             </button>
           )}
           <button
             onClick={openCreate}
-            className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-white rounded text-sm font-medium transition"
+            className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white rounded text-sm font-medium transition"
           >
             + New Test
           </button>
@@ -322,19 +322,19 @@ export function TestsPage() {
 
       {/* Test list */}
       {loading ? (
-        <div className="text-[#666] text-sm">Loading...</div>
+        <div className="text-[var(--color-text-muted)] text-sm">Loading...</div>
       ) : tests.length === 0 ? (
         <div className="text-center py-16">
-          <div className="text-[#333] text-4xl mb-4">
+          <div className="text-[var(--color-border-light)] text-4xl mb-4">
             <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
             </svg>
           </div>
-          <p className="text-[#666] mb-2">No tests yet</p>
-          <p className="text-xs text-[#555] mb-4">Describe what your agents should do and let AI verify it</p>
+          <p className="text-[var(--color-text-muted)] mb-2">No tests yet</p>
+          <p className="text-xs text-[var(--color-text-faint)] mb-4">Describe what your agents should do and let AI verify it</p>
           <button
             onClick={openCreate}
-            className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] text-white rounded text-sm font-medium transition"
+            className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white rounded text-sm font-medium transition"
           >
             Create your first test
           </button>
@@ -342,7 +342,7 @@ export function TestsPage() {
       ) : (
         <div className="space-y-3">
           {tests.map(tc => (
-            <div key={tc.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+            <div key={tc.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
@@ -352,18 +352,18 @@ export function TestsPage() {
                       : tc.last_run && (<>
                           {statusBadge(tc.last_run.status)}
                           {tc.last_run.score != null && (
-                            <span className="text-xs text-[#888] font-mono">{tc.last_run.score}/10</span>
+                            <span className="text-xs text-[var(--color-text-secondary)] font-mono">{tc.last_run.score}/10</span>
                           )}
                         </>)
                     }
                   </div>
                   {tc.behavior && (
-                    <p className="text-xs text-[#888] mb-1.5 line-clamp-2">{tc.behavior}</p>
+                    <p className="text-xs text-[var(--color-text-secondary)] mb-1.5 line-clamp-2">{tc.behavior}</p>
                   )}
-                  <div className="text-xs text-[#666] space-y-0.5">
+                  <div className="text-xs text-[var(--color-text-muted)] space-y-0.5">
                     <div>
                       Agent:{" "}
-                      <span className="text-[#888]">
+                      <span className="text-[var(--color-text-secondary)]">
                         {tc.agent_name || (tc.last_run?.selected_agent_name
                           ? `${tc.last_run.selected_agent_name} (auto-selected)`
                           : "Auto (AI picks)")}
@@ -371,18 +371,18 @@ export function TestsPage() {
                     </div>
                     {tc.last_run?.generated_message && (
                       <div className="truncate">
-                        Message: <span className="text-[#888]">"{tc.last_run.generated_message}"</span>
+                        Message: <span className="text-[var(--color-text-secondary)]">"{tc.last_run.generated_message}"</span>
                       </div>
                     )}
                     {tc.input_message && !tc.last_run?.generated_message && (
                       <div className="truncate">
-                        Message: <span className="text-[#888]">"{tc.input_message}"</span>
+                        Message: <span className="text-[var(--color-text-secondary)]">"{tc.input_message}"</span>
                       </div>
                     )}
                     {tc.last_run && (
                       <div>
                         Last run:{" "}
-                        <span className="text-[#888]">
+                        <span className="text-[var(--color-text-secondary)]">
                           {tc.last_run.duration_ms ? `${(tc.last_run.duration_ms / 1000).toFixed(1)}s` : "---"}
                           {tc.last_run.judge_reasoning && ` --- "${tc.last_run.judge_reasoning.slice(0, 80)}${tc.last_run.judge_reasoning.length > 80 ? "..." : ""}"`}
                         </span>
@@ -393,7 +393,7 @@ export function TestsPage() {
                 <div className="flex items-center gap-1 ml-3 shrink-0">
                   <button
                     onClick={() => viewRuns(tc.id)}
-                    className="px-2 py-1 text-xs text-[#666] hover:text-[#888] hover:bg-[#1a1a1a] rounded transition"
+                    className="px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-raised)] rounded transition"
                     title="View run history"
                   >
                     History
@@ -401,19 +401,19 @@ export function TestsPage() {
                   <button
                     onClick={() => handleRun(tc.id)}
                     disabled={runningTests.has(tc.id)}
-                    className="px-3 py-1 text-xs bg-[#1a1a1a] hover:bg-[#222] text-[#e0e0e0] rounded transition disabled:opacity-50"
+                    className="px-3 py-1 text-xs bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] text-[var(--color-text)] rounded transition disabled:opacity-50"
                   >
                     {runningTests.has(tc.id) ? "Running..." : "Run"}
                   </button>
                   <button
                     onClick={() => openEdit(tc)}
-                    className="px-2 py-1 text-xs text-[#666] hover:text-[#888] hover:bg-[#1a1a1a] rounded transition"
+                    className="px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-raised)] rounded transition"
                   >
                     Edit
                   </button>
                   <button
                     onClick={() => handleDelete(tc.id)}
-                    className="px-2 py-1 text-xs text-[#666] hover:text-red-400 hover:bg-[#1a1a1a] rounded transition"
+                    className="px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-red-400 hover:bg-[var(--color-surface-raised)] rounded transition"
                   >
                     Delete
                   </button>
@@ -428,50 +428,50 @@ export function TestsPage() {
       {selectedRuns && (
         <div className="mt-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-[#888]">Run History</h2>
+            <h2 className="text-sm font-bold text-[var(--color-text-secondary)]">Run History</h2>
             <button
               onClick={() => { setSelectedRuns(null); setExpandedRun(null); }}
-              className="text-xs text-[#666] hover:text-[#888]"
+              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
             >
               Close
             </button>
           </div>
           {selectedRuns.runs.length === 0 ? (
-            <p className="text-sm text-[#666]">No runs yet</p>
+            <p className="text-sm text-[var(--color-text-muted)]">No runs yet</p>
           ) : (
             <div className="space-y-2">
               {selectedRuns.runs.map(run => (
-                <div key={run.id} className="bg-[#0d0d0d] border border-[#1a1a1a] rounded p-3">
+                <div key={run.id} className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded p-3">
                   <div
                     className="flex items-center justify-between cursor-pointer"
                     onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}
                   >
                     <div className="flex items-center gap-3">
                       {statusBadge(run.status)}
-                      <span className="text-xs text-[#666]">
+                      <span className="text-xs text-[var(--color-text-muted)]">
                         {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "---"}
                       </span>
                       {run.score != null && (
-                        <span className="text-xs text-[#888] font-mono">{run.score}/10</span>
+                        <span className="text-xs text-[var(--color-text-secondary)] font-mono">{run.score}/10</span>
                       )}
                       {run.selected_agent_name && (
-                        <span className="text-xs text-[#555]">
+                        <span className="text-xs text-[var(--color-text-faint)]">
                           Agent: {run.selected_agent_name}
                         </span>
                       )}
-                      <span className="text-xs text-[#555]">
+                      <span className="text-xs text-[var(--color-text-faint)]">
                         {new Date(run.created_at).toLocaleString()}
                       </span>
                     </div>
-                    <span className="text-xs text-[#555]">{expandedRun === run.id ? "---" : "+"}</span>
+                    <span className="text-xs text-[var(--color-text-faint)]">{expandedRun === run.id ? "---" : "+"}</span>
                   </div>
                   {expandedRun === run.id && (
                     <div className="mt-3 space-y-2">
                       {run.planner_reasoning && (
                         <div>
-                          <div className="text-xs text-[#666] mb-1">Planner:</div>
-                          <div className="text-sm text-[#aaa] bg-[#0a0a0a] p-2 rounded">
-                            {run.selected_agent_name && <span className="text-[#f97316]">{run.selected_agent_name}</span>}
+                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Planner:</div>
+                          <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">
+                            {run.selected_agent_name && <span className="text-[var(--color-accent)]">{run.selected_agent_name}</span>}
                             {run.selected_agent_name && " --- "}
                             {run.planner_reasoning}
                           </div>
@@ -479,26 +479,26 @@ export function TestsPage() {
                       )}
                       {run.generated_message && (
                         <div>
-                          <div className="text-xs text-[#666] mb-1">Generated Message:</div>
-                          <div className="text-sm text-[#aaa] bg-[#0a0a0a] p-2 rounded">"{run.generated_message}"</div>
+                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Generated Message:</div>
+                          <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">"{run.generated_message}"</div>
                         </div>
                       )}
                       {run.judge_reasoning && (
                         <div>
-                          <div className="text-xs text-[#666] mb-1">Judge:</div>
-                          <div className="text-sm text-[#aaa] bg-[#0a0a0a] p-2 rounded">{run.judge_reasoning}</div>
+                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Judge:</div>
+                          <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">{run.judge_reasoning}</div>
                         </div>
                       )}
                       {run.error && (
                         <div>
                           <div className="text-xs text-red-400 mb-1">Error:</div>
-                          <div className="text-sm text-red-300 bg-[#0a0a0a] p-2 rounded">{run.error}</div>
+                          <div className="text-sm text-red-300 bg-[var(--color-bg)] p-2 rounded">{run.error}</div>
                         </div>
                       )}
                       {run.agent_response && (
                         <div>
-                          <div className="text-xs text-[#666] mb-1">Agent Response (Thread):</div>
-                          <pre className="text-xs text-[#888] bg-[#0a0a0a] p-2 rounded overflow-auto max-h-64">
+                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Agent Response (Thread):</div>
+                          <pre className="text-xs text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded overflow-auto max-h-64">
                             {run.agent_response}
                           </pre>
                         </div>
@@ -515,34 +515,34 @@ export function TestsPage() {
       {/* Create/Edit Form Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={() => setShowForm(false)}>
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg w-full max-w-lg mx-4 p-6" onClick={e => e.stopPropagation()}>
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-lg mx-4 p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-bold mb-4">{editingTest ? "Edit Test" : "New Test"}</h2>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-[#666] mb-1">Name</label>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-1">Name</label>
                 <input
                   value={formName}
                   onChange={e => setFormName(e.target.value)}
                   placeholder="e.g. Social Media Posting"
-                  className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs text-[#666] mb-1">Behavior</label>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-1">Behavior</label>
                 <textarea
                   value={formBehavior}
                   onChange={e => setFormBehavior(e.target.value)}
                   placeholder="Describe what should happen, e.g. 'When asked to post on social media, the agent creates a proper post with relevant hashtags and confirms it was published'"
                   rows={3}
-                  className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316] resize-none"
+                  className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)] resize-none"
                 />
-                <p className="text-xs text-[#555] mt-1">AI will generate the test message and evaluate results based on this</p>
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">AI will generate the test message and evaluate results based on this</p>
               </div>
 
               <div>
-                <label className="block text-xs text-[#666] mb-1">Agent</label>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-1">Agent</label>
                 <Select
                   value={formAgentId}
                   onChange={setFormAgentId}
@@ -552,21 +552,21 @@ export function TestsPage() {
                     label: `${a.name} (${a.status})`,
                   }))}
                 />
-                <p className="text-xs text-[#555] mt-1">Leave empty to let AI choose the right agent</p>
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">Leave empty to let AI choose the right agent</p>
               </div>
             </div>
 
             <div className="flex justify-end gap-2 mt-6">
               <button
                 onClick={() => setShowForm(false)}
-                className="px-4 py-2 text-sm text-[#888] hover:text-[#e0e0e0] transition"
+                className="px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSave}
                 disabled={!formName || !formBehavior}
-                className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-white rounded text-sm font-medium transition"
+                className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-white rounded text-sm font-medium transition"
               >
                 {editingTest ? "Save" : "Create"}
               </button>

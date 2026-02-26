@@ -23,24 +23,24 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex items-center justify-center p-8">
+    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] font-mono flex items-center justify-center p-8">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-2 mb-2">
-            <span className="text-[#f97316] text-3xl">&gt;_</span>
+            <span className="text-[var(--color-accent)] text-3xl">&gt;_</span>
             <span className="text-3xl tracking-wider">apteva</span>
           </div>
-          <p className="text-[#666]">Run AI agents locally</p>
+          <p className="text-[var(--color-text-muted)]">Run AI agents locally</p>
         </div>
 
-        <div className="bg-[#111] rounded-lg border border-[#1a1a1a] p-8">
+        <div className="bg-[var(--color-surface)] rounded-lg border border-[var(--color-border)] p-8">
           <h2 className="text-2xl font-semibold mb-2">Welcome back</h2>
-          <p className="text-[#666] mb-6">Sign in to continue to apteva</p>
+          <p className="text-[var(--color-text-muted)] mb-6">Sign in to continue to apteva</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="username" className="block text-sm text-[#888] mb-1">
+              <label htmlFor="username" className="block text-sm text-[var(--color-text-secondary)] mb-1">
                 Username
               </label>
               <input
@@ -51,12 +51,12 @@ export function LoginPage() {
                 placeholder="Enter your username"
                 autoFocus
                 required
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-4 py-3 focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm text-[#888] mb-1">
+              <label htmlFor="password" className="block text-sm text-[var(--color-text-secondary)] mb-1">
                 Password
               </label>
               <input
@@ -66,7 +66,7 @@ export function LoginPage() {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="Enter your password"
                 required
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-4 py-3 focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
               />
             </div>
 
@@ -79,7 +79,7 @@ export function LoginPage() {
             <button
               type="submit"
               disabled={loading || !username || !password}
-              className="w-full bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-3 rounded font-medium transition"
+              className="w-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-3 rounded font-medium transition"
             >
               {loading ? "Signing in..." : "Sign In"}
             </button>

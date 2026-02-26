@@ -8,7 +8,7 @@ interface ModalProps {
 export function Modal({ children, onClose }: ModalProps) {
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-[#111] rounded p-6 w-full max-w-xl lg:max-w-2xl border border-[#1a1a1a] max-h-[90vh] overflow-y-auto">
+      <div className="bg-[var(--color-surface)] rounded p-6 w-full max-w-xl lg:max-w-2xl border border-[var(--color-border)] max-h-[90vh] overflow-y-auto">
         {children}
       </div>
     </div>
@@ -37,13 +37,13 @@ export function ConfirmModal({
 }: ConfirmModalProps) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-sm">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-sm">
         {title && <h3 className="font-medium mb-2">{title}</h3>}
-        <p className="text-sm text-[#ccc] mb-4">{message}</p>
+        <p className="text-sm text-[var(--color-text)] mb-4">{message}</p>
         <div className="flex gap-2">
           <button
             onClick={onCancel}
-            className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+            className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
           >
             {cancelText}
           </button>
@@ -52,7 +52,7 @@ export function ConfirmModal({
             className={`flex-1 text-sm text-white px-4 py-2 rounded transition ${
               confirmVariant === "danger"
                 ? "bg-red-500 hover:bg-red-600"
-                : "bg-[#f97316] hover:bg-[#ea580c]"
+                : "bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]"
             }`}
           >
             {confirmText}
@@ -93,17 +93,17 @@ export function AlertModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-sm text-center">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-sm text-center">
         <div
           className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${iconColors[variant]}`}
         >
           <span className="text-xl">{icons[variant]}</span>
         </div>
         {title && <h3 className="font-medium mb-2">{title}</h3>}
-        <p className="text-sm text-[#ccc] mb-4">{message}</p>
+        <p className="text-sm text-[var(--color-text)] mb-4">{message}</p>
         <button
           onClick={onClose}
-          className="w-full text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+          className="w-full text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
         >
           {buttonText}
         </button>

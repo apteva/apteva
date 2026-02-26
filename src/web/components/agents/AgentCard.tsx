@@ -34,21 +34,21 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
   return (
     <div
       onClick={onSelect}
-      className={`bg-[#111] rounded p-5 border transition cursor-pointer flex flex-col h-full ${
+      className={`bg-[var(--color-surface)] rounded p-5 border transition cursor-pointer flex flex-col h-full ${
         selected
-          ? 'border-[#f97316]'
-          : 'border-[#1a1a1a] hover:border-[#333]'
+          ? 'border-[var(--color-accent)]'
+          : 'border-[var(--color-border)] hover:border-[var(--color-border-light)]'
       }`}
     >
       <div className="flex items-start justify-between mb-3">
         <div>
           <h3 className="font-semibold text-lg">{agent.name}</h3>
-          <p className="text-sm text-[#666]">
+          <p className="text-sm text-[var(--color-text-muted)]">
             {agent.provider} / {agent.model}
-            {agent.port && <span className="text-[#444]"> · :{agent.port}</span>}
+            {agent.port && <span className="text-[var(--color-text-faint)]"> · :{agent.port}</span>}
           </p>
           {showProject && project && (
-            <p className="text-sm text-[#666] flex items-center gap-1.5 mt-1">
+            <p className="text-sm text-[var(--color-text-muted)] flex items-center gap-1.5 mt-1">
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
               {project.name}
             </p>
@@ -62,7 +62,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
           {enabledFeatures.map(({ key, icon: Icon, label }) => (
             <span
               key={key}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#f97316]/10 text-[#f97316]/70 text-xs"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--color-accent-10)] text-[var(--color-accent-70)] text-xs"
               title={label}
             >
               <Icon className="w-3 h-3" />
@@ -84,7 +84,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
                   isAvailable
                     ? "bg-green-500/10 text-green-400"
-                    : "bg-[#222] text-[#666]"
+                    : "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"
                 }`}
                 title={`MCP: ${server.name} (${isAvailable ? "available" : server.status})`}
               >
@@ -105,7 +105,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
                 skill.enabled
                   ? "bg-purple-500/10 text-purple-400"
-                  : "bg-[#222] text-[#666]"
+                  : "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"
               }`}
               title={`Skill: ${skill.name} v${skill.version}`}
             >
@@ -125,7 +125,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
                 sub.enabled
                   ? "bg-cyan-500/10 text-cyan-400"
-                  : "bg-[#222] text-[#666]"
+                  : "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"
               }`}
               title={`Trigger: ${sub.trigger_slug.replace(/_/g, " ")}`}
             >
@@ -136,7 +136,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
         </div>
       )}
 
-      <p className="text-sm text-[#666] line-clamp-2 mb-4 flex-1">
+      <p className="text-sm text-[var(--color-text-muted)] line-clamp-2 mb-4 flex-1">
         {agent.systemPrompt}
       </p>
 
@@ -145,9 +145,9 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
         disabled={agent.status === "starting" || agent.status === "stopping"}
         className={`w-full px-3 py-1.5 rounded text-sm font-medium transition mt-auto ${
           agent.status === "starting" || agent.status === "stopping"
-            ? "bg-[#333] text-[#666] cursor-wait"
+            ? "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)] cursor-wait"
             : agent.status === "running"
-              ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
+              ? "bg-red-500/15 text-red-500 hover:bg-red-500/25 border border-red-500/20"
               : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
         }`}
       >
@@ -175,7 +175,7 @@ function StatusBadge({ status, isActive, activityLabel }: { status: Agent["statu
           ? "bg-yellow-500/20 text-yellow-400 animate-pulse"
           : status === "running"
             ? "bg-[#3b82f6]/20 text-[#3b82f6]"
-            : "bg-[#333] text-[#666]"
+            : "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"
       }`}
     >
       {status}

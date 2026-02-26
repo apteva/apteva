@@ -199,7 +199,7 @@ export function ActivityPage({ agents, loading, onNavigate }: ActivityPageProps)
   }, [timeline]);
 
   if (loading) {
-    return <div className="flex-1 flex items-center justify-center text-[#666]">Loading...</div>;
+    return <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">Loading...</div>;
   }
 
   const runningCount = filteredAgents.filter(a => a.status === "running").length;
@@ -211,7 +211,7 @@ export function ActivityPage({ agents, loading, onNavigate }: ActivityPageProps)
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold">Activity</h1>
-            <p className="text-sm text-[#666] mt-0.5">
+            <p className="text-sm text-[var(--color-text-muted)] mt-0.5">
               {runningCount} of {filteredAgents.length} agents running
             </p>
           </div>
@@ -232,7 +232,7 @@ export function ActivityPage({ agents, loading, onNavigate }: ActivityPageProps)
       {/* Timeline */}
       <div className="flex-1 overflow-auto px-6 pb-6">
         {timeline.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-[#555]">
+          <div className="flex flex-col items-center justify-center py-20 text-[var(--color-text-faint)]">
             <p className="text-lg mb-2">No activity yet</p>
             <p className="text-sm">Agent activity will appear here in real-time.</p>
           </div>
@@ -241,26 +241,26 @@ export function ActivityPage({ agents, loading, onNavigate }: ActivityPageProps)
             {groupedTimeline.map(group => (
               <div key={group.label}>
                 {/* Date header */}
-                <div className="sticky top-0 z-10 bg-[#0a0a0a]/95 backdrop-blur-sm py-2 mb-1">
-                  <span className="text-xs font-semibold text-[#666] uppercase tracking-wider">
+                <div className="sticky top-0 z-10 bg-[var(--color-bg)] backdrop-blur-sm py-2 mb-1">
+                  <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
                     {group.label}
                   </span>
                 </div>
 
                 {/* Events */}
-                <div className="relative ml-3 border-l border-[#1a1a1a]">
+                <div className="relative ml-3 border-l border-[var(--color-border)]">
                   {group.events.map(evt => {
                     const isNew = !seenIds.has(evt.id);
                     if (isNew) seenIds.add(evt.id); // mark seen after first render
                     const agentName = agentNameMap.get(evt.agent_id) || evt.agent_id.slice(0, 8);
                     const dotColor = evt.level === "error"
                       ? "bg-red-400"
-                      : CATEGORY_COLORS[evt.category] || "bg-[#555]";
+                      : CATEGORY_COLORS[evt.category] || "bg-[var(--color-text-faint)]";
 
                     return (
                       <div
                         key={evt.id}
-                        className={`relative pl-6 pr-3 py-2.5 hover:bg-[#111]/50 transition-colors ${
+                        className={`relative pl-6 pr-3 py-2.5 hover:bg-[var(--color-surface-hover)] transition-colors ${
                           isNew ? "animate-slideIn" : ""
                         }`}
                       >
@@ -272,19 +272,19 @@ export function ActivityPage({ agents, loading, onNavigate }: ActivityPageProps)
                             <p className={`text-sm ${evt.level === "error" ? "text-red-400" : ""}`}>
                               {describeEvent(evt, agentName)}
                             </p>
-                            <div className="flex items-center gap-2 text-[11px] text-[#555] mt-0.5">
-                              <span className="text-[#888] font-medium">{agentName}</span>
-                              <span className="text-[#333]">&middot;</span>
-                              <span className="text-[#555]">{evt.category}</span>
+                            <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-faint)] mt-0.5">
+                              <span className="text-[var(--color-text-secondary)] font-medium">{agentName}</span>
+                              <span className="text-[var(--color-border-light)]">&middot;</span>
+                              <span className="text-[var(--color-text-faint)]">{evt.category}</span>
                               {evt.duration_ms != null && evt.duration_ms > 0 && (
                                 <>
-                                  <span className="text-[#333]">&middot;</span>
+                                  <span className="text-[var(--color-border-light)]">&middot;</span>
                                   <span>{evt.duration_ms < 1000 ? `${evt.duration_ms}ms` : `${(evt.duration_ms / 1000).toFixed(1)}s`}</span>
                                 </>
                               )}
                             </div>
                           </div>
-                          <span className="text-[11px] text-[#555] shrink-0 pt-0.5">
+                          <span className="text-[11px] text-[var(--color-text-faint)] shrink-0 pt-0.5">
                             {timeAgo(evt.timestamp)}
                           </span>
                         </div>

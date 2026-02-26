@@ -69,7 +69,7 @@ export function AgentsView({
             )}
             <h1 className="text-xl font-semibold">{headerTitle}</h1>
             {currentProjectId !== null && (
-              <span className="text-sm text-[#666]">
+              <span className="text-sm text-[var(--color-text-muted)]">
                 ({filteredAgents.length} agent{filteredAgents.length !== 1 ? "s" : ""})
               </span>
             )}
@@ -78,7 +78,7 @@ export function AgentsView({
             <button
               onClick={onNewAgent}
               disabled={!canCreateAgent}
-              className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
+              className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
             >
               + New Agent
             </button>
@@ -132,7 +132,7 @@ export function AgentsView({
 
 function EmptyState({ onNewAgent, canCreateAgent, hasProjectFilter }: { onNewAgent?: () => void; canCreateAgent?: boolean; hasProjectFilter?: boolean }) {
   return (
-    <div className="text-center py-20 text-[#666]">
+    <div className="text-center py-20 text-[var(--color-text-muted)]">
       {hasProjectFilter ? (
         <>
           <p className="text-lg">No agents in this project</p>
@@ -148,7 +148,7 @@ function EmptyState({ onNewAgent, canCreateAgent, hasProjectFilter }: { onNewAge
         <button
           onClick={onNewAgent}
           disabled={!canCreateAgent}
-          className="mt-4 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
+          className="mt-4 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
         >
           + New Agent
         </button>

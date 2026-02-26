@@ -594,9 +594,9 @@ export function TriggersTab() {
 
   if (providers.length === 0 && !triggersLoading) {
     return (
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-8 text-center">
-        <p className="text-[#666]">No trigger providers configured.</p>
-        <p className="text-sm text-[#555] mt-1">Add API keys for Composio or AgentDojo in Settings to enable triggers.</p>
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+        <p className="text-[var(--color-text-muted)]">No trigger providers configured.</p>
+        <p className="text-sm text-[var(--color-text-faint)] mt-1">Add API keys for Composio or AgentDojo in Settings to enable triggers.</p>
       </div>
     );
   }
@@ -614,8 +614,8 @@ export function TriggersTab() {
       {/* Provider Selector — only show if multiple configured */}
       {providers.length > 1 && (
         <div className="flex items-center gap-2">
-          <span className="text-xs text-[#666]">Provider:</span>
-          <div className="flex gap-1 bg-[#111] border border-[#1a1a1a] rounded-lg p-0.5">
+          <span className="text-xs text-[var(--color-text-muted)]">Provider:</span>
+          <div className="flex gap-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-0.5">
             {providers.map(p => (
               <button
                 key={p.id}
@@ -627,8 +627,8 @@ export function TriggersTab() {
                 }}
                 className={`px-3 py-1 rounded text-xs font-medium transition ${
                   selectedProvider === p.id
-                    ? "bg-[#1a1a1a] text-white"
-                    : "text-[#666] hover:text-[#888]"
+                    ? "bg-[var(--color-surface-raised)] text-white"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                 }`}
               >
                 {p.name}
@@ -642,19 +642,19 @@ export function TriggersTab() {
       {!isAgentDojo && (
       <section>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-[#888]">
+          <h3 className="text-sm font-medium text-[var(--color-text-secondary)]">
             Subscriptions ({subscriptions.length})
           </h3>
           <button
             onClick={() => setShowAddSub(true)}
-            className="text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition"
+            className="text-xs bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-3 py-1.5 rounded transition"
           >
             + Add Subscription
           </button>
         </div>
 
         {subscriptions.length === 0 ? (
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
             No subscriptions yet. Add one to route trigger events to an agent.
           </div>
         ) : (
@@ -662,15 +662,15 @@ export function TriggersTab() {
             {subscriptions.map(sub => {
               const agent = agentMap.get(sub.agent_id);
               return (
-                <div key={sub.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sub.enabled ? "bg-green-400" : "bg-[#666]"}`} />
+                <div key={sub.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sub.enabled ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
                       {sub.trigger_slug.replace(/_/g, " ")}
-                      <span className="text-[#555] mx-1.5">&rarr;</span>
-                      <span className="text-[#f97316]">{agent?.name || "Unknown Agent"}</span>
+                      <span className="text-[var(--color-text-faint)] mx-1.5">&rarr;</span>
+                      <span className="text-[var(--color-accent)]">{agent?.name || "Unknown Agent"}</span>
                     </div>
-                    <div className="text-xs text-[#666]">
+                    <div className="text-xs text-[var(--color-text-muted)]">
                       {sub.trigger_instance_id
                         ? `Instance: ${sub.trigger_instance_id.slice(0, 12)}...`
                         : "All instances"
@@ -690,7 +690,7 @@ export function TriggersTab() {
                     </button>
                     <button
                       onClick={() => deleteSubscription(sub.id)}
-                      className="text-xs text-[#666] hover:text-red-400 transition px-2"
+                      className="text-xs text-[var(--color-text-muted)] hover:text-red-400 transition px-2"
                     >
                       Delete
                     </button>
@@ -706,25 +706,25 @@ export function TriggersTab() {
       {/* Trigger Instances — only show for providers that have them (not AgentDojo) */}
       {!isAgentDojo && (
         <section>
-          <h3 className="text-sm font-medium text-[#888] mb-3">
+          <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">
             Trigger Instances ({triggers.length})
           </h3>
           {triggersLoading ? (
-            <div className="text-center py-6 text-[#666] text-sm">Loading triggers...</div>
+            <div className="text-center py-6 text-[var(--color-text-muted)] text-sm">Loading triggers...</div>
           ) : triggers.length === 0 ? (
-            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
               No trigger instances. Browse trigger types below to create one.
             </div>
           ) : (
             <div className="space-y-2">
               {triggers.map(trigger => (
-                <div key={trigger.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[#666]"}`} />
+                <div key={trigger.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
                       {trigger.trigger_slug.replace(/_/g, " ")}
                     </div>
-                    <div className="text-xs text-[#666]">
+                    <div className="text-xs text-[var(--color-text-muted)]">
                       ID: {trigger.id.slice(0, 12)}... | Created: {new Date(trigger.created_at).toLocaleDateString()}
                     </div>
                   </div>
@@ -741,7 +741,7 @@ export function TriggersTab() {
                     </button>
                     <button
                       onClick={() => deleteTrigger(trigger.id)}
-                      className="text-xs text-[#666] hover:text-red-400 transition px-2"
+                      className="text-xs text-[var(--color-text-muted)] hover:text-red-400 transition px-2"
                     >
                       Delete
                     </button>
@@ -757,20 +757,20 @@ export function TriggersTab() {
       {isAgentDojo && (
         <section>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-[#888]">
+            <h3 className="text-sm font-medium text-[var(--color-text-secondary)]">
               Active Subscriptions ({triggers.length})
             </h3>
             <button
               onClick={openAddDojoSub}
-              className="text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition"
+              className="text-xs bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-3 py-1.5 rounded transition"
             >
               + Add Subscription
             </button>
           </div>
           {triggersLoading ? (
-            <div className="text-center py-6 text-[#666] text-sm">Loading subscriptions...</div>
+            <div className="text-center py-6 text-[var(--color-text-muted)] text-sm">Loading subscriptions...</div>
           ) : triggers.length === 0 ? (
-            <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-6 text-center text-[#666] text-sm">
+            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
               No active subscriptions. Browse trigger types below to create one.
             </div>
           ) : (
@@ -779,19 +779,19 @@ export function TriggersTab() {
                 const localSub = subscriptions.find(s => s.trigger_instance_id === trigger.id);
                 const agent = localSub ? agentMap.get(localSub.agent_id) : null;
                 return (
-                  <div key={trigger.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-3 flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[#666]"}`} />
+                  <div key={trigger.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">
                         {(trigger.config?.title as string) || trigger.trigger_slug.replace(/_/g, " ")}
                         {agent && (
                           <>
-                            <span className="text-[#555] mx-1.5">&rarr;</span>
-                            <span className="text-[#f97316]">{agent.name}</span>
+                            <span className="text-[var(--color-text-faint)] mx-1.5">&rarr;</span>
+                            <span className="text-[var(--color-accent)]">{agent.name}</span>
                           </>
                         )}
                       </div>
-                      <div className="text-xs text-[#666]">
+                      <div className="text-xs text-[var(--color-text-muted)]">
                         {trigger.config?.server && <span>{String(trigger.config.server)} | </span>}
                         ID: {String(trigger.id).slice(0, 8)} | Created: {new Date(trigger.created_at).toLocaleDateString()}
                       </div>
@@ -809,7 +809,7 @@ export function TriggersTab() {
                       </button>
                       <button
                         onClick={() => deleteTrigger(trigger.id)}
-                        className="text-xs text-[#666] hover:text-red-400 transition px-2"
+                        className="text-xs text-[var(--color-text-muted)] hover:text-red-400 transition px-2"
                       >
                         Delete
                       </button>
@@ -824,19 +824,19 @@ export function TriggersTab() {
 
       {/* Browse Trigger Types */}
       <section>
-        <h3 className="text-sm font-medium text-[#888] mb-3">Browse Trigger Types</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Browse Trigger Types</h3>
         <div className="flex gap-2 mb-3">
           <input
             type="text"
             value={toolkitFilter}
             onChange={(e) => setToolkitFilter(e.target.value)}
             placeholder="Toolkit filter (e.g. github, gmail, slack)"
-            className="flex-1 bg-[#111] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+            className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
           />
           <button
             onClick={() => browseTriggerTypes(toolkitFilter || undefined)}
             disabled={typesLoading}
-            className="text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-4 py-2 rounded transition disabled:opacity-50"
+            className="text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-4 py-2 rounded transition disabled:opacity-50"
           >
             {typesLoading ? "Loading..." : "Browse"}
           </button>
@@ -849,28 +849,28 @@ export function TriggersTab() {
               value={typeSearch}
               onChange={(e) => setTypeSearch(e.target.value)}
               placeholder="Search trigger types..."
-              className="w-full bg-[#111] border border-[#333] rounded px-3 py-2 text-sm mb-3 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm mb-3 focus:outline-none focus:border-[var(--color-accent)]"
             />
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {filteredTypes.slice(0, 30).map(tt => (
-                <div key={tt.slug} className="bg-[#111] border border-[#1a1a1a] hover:border-[#333] rounded-lg p-3 transition">
+                <div key={tt.slug} className="bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-border-light)] rounded-lg p-3 transition">
                   <div className="flex items-start gap-3">
                     {tt.logo ? (
                       <img src={tt.logo} alt={tt.toolkit_name} className="w-8 h-8 rounded object-contain flex-shrink-0" />
                     ) : (
-                      <div className="w-8 h-8 rounded bg-[#1a1a1a] flex items-center justify-center text-xs flex-shrink-0">
+                      <div className="w-8 h-8 rounded bg-[var(--color-surface-raised)] flex items-center justify-center text-xs flex-shrink-0">
                         {tt.toolkit_name?.[0]?.toUpperCase() || "?"}
                       </div>
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{tt.name}</div>
-                      <div className="text-xs text-[#666]">{tt.toolkit_name}</div>
-                      <div className="text-xs text-[#555] mt-1 line-clamp-2">{tt.description}</div>
+                      <div className="text-xs text-[var(--color-text-muted)]">{tt.toolkit_name}</div>
+                      <div className="text-xs text-[var(--color-text-faint)] mt-1 line-clamp-2">{tt.description}</div>
                     </div>
                   </div>
                   <button
                     onClick={() => startCreate(tt)}
-                    className="w-full mt-3 text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#333] hover:border-[#f97316] px-3 py-1.5 rounded transition"
+                    className="w-full mt-3 text-xs bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-3 py-1.5 rounded transition"
                   >
                     {isAgentDojo ? "Subscribe" : "Create Trigger"}
                   </button>
@@ -878,7 +878,7 @@ export function TriggersTab() {
               ))}
             </div>
             {filteredTypes.length > 30 && (
-              <p className="text-xs text-[#555] mt-3 text-center">
+              <p className="text-xs text-[var(--color-text-faint)] mt-3 text-center">
                 Showing first 30 of {filteredTypes.length} types. Use search to filter.
               </p>
             )}
@@ -889,22 +889,22 @@ export function TriggersTab() {
       {/* Create Trigger Modal */}
       {showCreate && selectedType && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-md mx-4">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-md mx-4">
             <h3 className="font-medium mb-1">
               {isAgentDojo ? "Create Subscription" : "Create Trigger"}
             </h3>
-            <p className="text-xs text-[#666] mb-4">
+            <p className="text-xs text-[var(--color-text-muted)] mb-4">
               {selectedType.name}
-              {selectedType.toolkit_name && <span className="text-[#555]"> ({selectedType.toolkit_name})</span>}
+              {selectedType.toolkit_name && <span className="text-[var(--color-text-faint)]"> ({selectedType.toolkit_name})</span>}
             </p>
 
             <div className="space-y-4">
               {/* Connected Account — only for Composio */}
               {!isAgentDojo && (
                 <div>
-                  <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
+                  <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Connected Account</label>
                   {connectedAccounts.length === 0 ? (
-                    <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                    <div className="text-xs text-[var(--color-text-muted)] bg-[var(--color-bg)] rounded p-3">
                       No connected accounts available. Connect an app first in the Integrations tab.
                     </div>
                   ) : (
@@ -924,9 +924,9 @@ export function TriggersTab() {
               {/* Agent selection — for AgentDojo direct subscription */}
               {isAgentDojo && (
                 <div>
-                  <label className="block text-xs text-[#888] mb-1.5">Route to Agent</label>
+                  <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Route to Agent</label>
                   {agents.length === 0 ? (
-                    <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                    <div className="text-xs text-[var(--color-text-muted)] bg-[var(--color-bg)] rounded p-3">
                       No agents available. Create an agent first.
                     </div>
                   ) : (
@@ -943,7 +943,7 @@ export function TriggersTab() {
 
                   {/* Connected account — auto-matched from toolkit */}
                   <div className="mt-3">
-                    <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
+                    <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Connected Account</label>
                     {browseMatchedAccount ? (
                       <div className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded p-3">
                         Connected: {browseMatchedAccount.appName}
@@ -958,13 +958,13 @@ export function TriggersTab() {
                   {/* Dynamic config fields from config_schema */}
                   {selectedType.config_schema && Object.keys((selectedType.config_schema as any).properties || {}).length > 0 && (
                     <div className="mt-3">
-                      <label className="block text-xs text-[#888] mb-1.5">Configuration</label>
+                      <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Configuration</label>
                       <div className="space-y-2">
                         {Object.entries((selectedType.config_schema as any).properties || {}).map(([key, schema]: [string, any]) => {
                           const required = ((selectedType.config_schema as any).required || []).includes(key);
                           return (
                             <div key={key}>
-                              <label className="block text-[11px] text-[#888] mb-1">
+                              <label className="block text-[11px] text-[var(--color-text-secondary)] mb-1">
                                 {schema.title || key}
                                 {required && <span className="text-red-400 ml-0.5">*</span>}
                               </label>
@@ -973,7 +973,7 @@ export function TriggersTab() {
                                 value={browseConfig[key] || ""}
                                 onChange={(e) => setBrowseConfig(prev => ({ ...prev, [key]: e.target.value }))}
                                 placeholder={schema.description || `Enter ${schema.title || key}...`}
-                                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                               />
                             </div>
                           );
@@ -988,7 +988,7 @@ export function TriggersTab() {
             <div className="flex gap-2 mt-4">
               <button
                 onClick={() => { setShowCreate(false); setSelectedType(null); }}
-                className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
               >
                 Cancel
               </button>
@@ -998,7 +998,7 @@ export function TriggersTab() {
                   !createAgentId || !browseMatchedAccount || creating ||
                   (selectedType?.config_schema && ((selectedType.config_schema as any).required || []).some((key: string) => !browseConfig[key]?.trim()))
                 ) : (!selectedAccountId || creating)}
-                className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
+                className="flex-1 text-sm bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white px-4 py-2 rounded transition disabled:opacity-50"
               >
                 {creating ? "Creating..." : isAgentDojo ? "Subscribe" : "Create"}
               </button>
@@ -1010,9 +1010,9 @@ export function TriggersTab() {
       {/* Add Subscription Modal */}
       {showAddSub && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-md mx-4">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-md mx-4">
             <h3 className="font-medium mb-1">Route Trigger to Agent</h3>
-            <p className="text-xs text-[#666] mb-4">
+            <p className="text-xs text-[var(--color-text-muted)] mb-4">
               {triggers.length === 0
                 ? "No trigger instances yet. Create one first from the Browse section below."
                 : "Select a trigger instance and the agent that should handle its events."
@@ -1023,7 +1023,7 @@ export function TriggersTab() {
               <>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs text-[#888] mb-1.5">Trigger Instance</label>
+                    <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Trigger Instance</label>
                     <Select
                       value={subTriggerId}
                       onChange={setSubTriggerId}
@@ -1034,14 +1034,14 @@ export function TriggersTab() {
                       }))}
                     />
                     {subTriggerId && (
-                      <div className="text-xs text-[#555] mt-1 font-mono">
+                      <div className="text-xs text-[var(--color-text-faint)] mt-1 font-mono">
                         ID: {subTriggerId.slice(0, 16)}...
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <label className="block text-xs text-[#888] mb-1.5">Target Agent</label>
+                    <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Target Agent</label>
                     <Select
                       value={subAgentId}
                       onChange={setSubAgentId}
@@ -1057,14 +1057,14 @@ export function TriggersTab() {
                 <div className="flex gap-2 mt-5">
                   <button
                     onClick={() => { setShowAddSub(false); setSubTriggerId(""); setSubAgentId(""); }}
-                    className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                    className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleAddSubscription}
                     disabled={!subTriggerId || !subAgentId || addingSub}
-                    className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
+                    className="flex-1 text-sm bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white px-4 py-2 rounded transition disabled:opacity-50"
                   >
                     {addingSub ? "Adding..." : "Add"}
                   </button>
@@ -1074,7 +1074,7 @@ export function TriggersTab() {
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={() => setShowAddSub(false)}
-                  className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                  className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
                 >
                   Close
                 </button>
@@ -1087,56 +1087,56 @@ export function TriggersTab() {
       {/* AgentDojo Add Subscription Modal */}
       {showAddDojo && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#111] border border-[#333] rounded-lg p-6 w-full max-w-lg mx-4">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg p-6 w-full max-w-lg mx-4">
             <h3 className="font-medium mb-1">Add Subscription</h3>
-            <p className="text-xs text-[#666] mb-4">
+            <p className="text-xs text-[var(--color-text-muted)] mb-4">
               Select an app and trigger, then route it to an agent.
             </p>
 
             {dojoTypesLoading ? (
-              <div className="text-center py-8 text-[#666] text-sm">Loading...</div>
+              <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">Loading...</div>
             ) : dojoTriggerTypes.length === 0 ? (
-              <div className="text-center py-8 text-[#666] text-sm">
+              <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
                 No triggers available. Connect an app first in the Integrations tab.
               </div>
             ) : (
               <div className="space-y-4">
                 {/* App selector — custom dropdown with logos */}
                 <div>
-                  <label className="block text-xs text-[#888] mb-1.5">App</label>
+                  <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">App</label>
                   <div className="relative">
                     <button
                       onClick={() => { setDojoAppDropdownOpen(!dojoAppDropdownOpen); setDojoTriggerDropdownOpen(false); setDojoAppSearch(""); }}
-                      className="w-full flex items-center gap-2 bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm text-left hover:border-[#555] transition"
+                      className="w-full flex items-center gap-2 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm text-left hover:border-[var(--color-text-faint)] transition"
                     >
                       {dojoSelectedToolkitInfo ? (
                         <>
                           {dojoSelectedToolkitInfo.logo ? (
                             <img src={dojoSelectedToolkitInfo.logo} alt="" className="w-5 h-5 rounded object-contain flex-shrink-0" />
                           ) : (
-                            <div className="w-5 h-5 rounded bg-[#1a1a1a] flex items-center justify-center text-[10px] flex-shrink-0">
+                            <div className="w-5 h-5 rounded bg-[var(--color-surface-raised)] flex items-center justify-center text-[10px] flex-shrink-0">
                               {dojoSelectedToolkitInfo.name?.[0]?.toUpperCase() || "?"}
                             </div>
                           )}
                           <span className="flex-1 truncate">{dojoSelectedToolkitInfo.name}</span>
-                          <span className="text-[10px] text-[#666]">{dojoSelectedToolkitInfo.count} triggers</span>
+                          <span className="text-[10px] text-[var(--color-text-muted)]">{dojoSelectedToolkitInfo.count} triggers</span>
                         </>
                       ) : (
-                        <span className="text-[#666] flex-1">Select app...</span>
+                        <span className="text-[var(--color-text-muted)] flex-1">Select app...</span>
                       )}
-                      <span className="text-[#666] text-xs ml-1">&#9662;</span>
+                      <span className="text-[var(--color-text-muted)] text-xs ml-1">&#9662;</span>
                     </button>
                     {dojoAppDropdownOpen && (
                       <>
                         <div className="fixed inset-0 z-10" onClick={() => setDojoAppDropdownOpen(false)} />
-                        <div className="absolute left-0 right-0 top-full mt-1 bg-[#0a0a0a] border border-[#333] rounded-lg shadow-xl z-20 max-h-64 flex flex-col">
-                          <div className="p-2 border-b border-[#1a1a1a] flex-shrink-0">
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg shadow-xl z-20 max-h-64 flex flex-col">
+                          <div className="p-2 border-b border-[var(--color-border)] flex-shrink-0">
                             <input
                               type="text"
                               value={dojoAppSearch}
                               onChange={(e) => setDojoAppSearch(e.target.value)}
                               placeholder="Search apps..."
-                              className="w-full bg-[#111] border border-[#333] rounded px-2 py-1.5 text-sm focus:outline-none focus:border-[#f97316]"
+                              className="w-full bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                               autoFocus
                             />
                           </div>
@@ -1156,19 +1156,19 @@ export function TriggersTab() {
                                     setDojoConfig({});
                                     setDojoAppDropdownOpen(false);
                                   }}
-                                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition hover:bg-[#1a1a1a] ${
-                                    dojoSelectedToolkit === tk.slug ? "bg-[#1a1a1a] text-[#f97316]" : ""
+                                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition hover:bg-[var(--color-surface-raised)] ${
+                                    dojoSelectedToolkit === tk.slug ? "bg-[var(--color-surface-raised)] text-[var(--color-accent)]" : ""
                                   }`}
                                 >
                                   {tk.logo ? (
                                     <img src={tk.logo} alt="" className="w-5 h-5 rounded object-contain flex-shrink-0" />
                                   ) : (
-                                    <div className="w-5 h-5 rounded bg-[#1a1a1a] flex items-center justify-center text-[10px] flex-shrink-0">
+                                    <div className="w-5 h-5 rounded bg-[var(--color-surface-raised)] flex items-center justify-center text-[10px] flex-shrink-0">
                                       {tk.name?.[0]?.toUpperCase() || "?"}
                                     </div>
                                   )}
                                   <span className="flex-1 truncate">{tk.name}</span>
-                                  <span className="text-[10px] text-[#666]">{tk.count}</span>
+                                  <span className="text-[10px] text-[var(--color-text-muted)]">{tk.count}</span>
                                 </button>
                               ))}
                           </div>
@@ -1181,11 +1181,11 @@ export function TriggersTab() {
                 {/* Trigger selector — only shown when app is selected */}
                 {dojoSelectedToolkit && (
                   <div>
-                    <label className="block text-xs text-[#888] mb-1.5">Trigger</label>
+                    <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Trigger</label>
                     <div className="relative">
                       <button
                         onClick={() => { setDojoTriggerDropdownOpen(!dojoTriggerDropdownOpen); setDojoAppDropdownOpen(false); setDojoTriggerSearch(""); }}
-                        className="w-full flex items-center gap-2 bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm text-left hover:border-[#555] transition"
+                        className="w-full flex items-center gap-2 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm text-left hover:border-[var(--color-text-faint)] transition"
                       >
                         {dojoSelectedTriggerType ? (
                           <>
@@ -1197,22 +1197,22 @@ export function TriggersTab() {
                             </span>
                           </>
                         ) : (
-                          <span className="text-[#666] flex-1">Select trigger...</span>
+                          <span className="text-[var(--color-text-muted)] flex-1">Select trigger...</span>
                         )}
-                        <span className="text-[#666] text-xs ml-1">&#9662;</span>
+                        <span className="text-[var(--color-text-muted)] text-xs ml-1">&#9662;</span>
                       </button>
                       {dojoTriggerDropdownOpen && (
                         <>
                           <div className="fixed inset-0 z-10" onClick={() => setDojoTriggerDropdownOpen(false)} />
-                          <div className="absolute left-0 right-0 top-full mt-1 bg-[#0a0a0a] border border-[#333] rounded-lg shadow-xl z-20 max-h-64 flex flex-col">
+                          <div className="absolute left-0 right-0 top-full mt-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg shadow-xl z-20 max-h-64 flex flex-col">
                             {dojoToolkitTriggers.length > 3 && (
-                              <div className="p-2 border-b border-[#1a1a1a] flex-shrink-0">
+                              <div className="p-2 border-b border-[var(--color-border)] flex-shrink-0">
                                 <input
                                   type="text"
                                   value={dojoTriggerSearch}
                                   onChange={(e) => setDojoTriggerSearch(e.target.value)}
                                   placeholder="Search triggers..."
-                                  className="w-full bg-[#111] border border-[#333] rounded px-2 py-1.5 text-sm focus:outline-none focus:border-[#f97316]"
+                                  className="w-full bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                                   autoFocus
                                 />
                               </div>
@@ -1232,13 +1232,13 @@ export function TriggersTab() {
                                       setDojoConfig({});
                                       setDojoTriggerDropdownOpen(false);
                                     }}
-                                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition hover:bg-[#1a1a1a] ${
-                                      dojoSelectedType === t.slug ? "bg-[#1a1a1a] text-[#f97316]" : ""
+                                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition hover:bg-[var(--color-surface-raised)] ${
+                                      dojoSelectedType === t.slug ? "bg-[var(--color-surface-raised)] text-[var(--color-accent)]" : ""
                                     }`}
                                   >
                                     <div className="flex-1 min-w-0">
                                       <div className="truncate">{t.name}</div>
-                                      <div className="text-[10px] text-[#666] truncate">{t.description}</div>
+                                      <div className="text-[10px] text-[var(--color-text-muted)] truncate">{t.description}</div>
                                     </div>
                                     <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${
                                       t.type === "webhook" ? "bg-blue-500/10 text-blue-400" : "bg-yellow-500/10 text-yellow-400"
@@ -1258,7 +1258,7 @@ export function TriggersTab() {
                 {/* Connected account — auto-matched */}
                 {dojoSelectedType && (
                   <div>
-                    <label className="block text-xs text-[#888] mb-1.5">Connected Account</label>
+                    <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Connected Account</label>
                     {dojoMatchedAccount ? (
                       <div className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded p-3">
                         Connected: {dojoMatchedAccount.appName}
@@ -1274,13 +1274,13 @@ export function TriggersTab() {
                 {/* Dynamic config fields from config_schema */}
                 {dojoSelectedTriggerType && dojoSelectedTriggerType.config_schema && Object.keys(dojoSelectedTriggerType.config_schema.properties || {}).length > 0 && (
                   <div>
-                    <label className="block text-xs text-[#888] mb-1.5">Configuration</label>
+                    <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Configuration</label>
                     <div className="space-y-2">
                       {Object.entries((dojoSelectedTriggerType.config_schema as any).properties || {}).map(([key, schema]: [string, any]) => {
                         const required = ((dojoSelectedTriggerType.config_schema as any).required || []).includes(key);
                         return (
                           <div key={key}>
-                            <label className="block text-[11px] text-[#888] mb-1">
+                            <label className="block text-[11px] text-[var(--color-text-secondary)] mb-1">
                               {schema.title || key}
                               {required && <span className="text-red-400 ml-0.5">*</span>}
                             </label>
@@ -1289,7 +1289,7 @@ export function TriggersTab() {
                               value={dojoConfig[key] || ""}
                               onChange={(e) => setDojoConfig(prev => ({ ...prev, [key]: e.target.value }))}
                               placeholder={schema.description || `Enter ${schema.title || key}...`}
-                              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+                              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                             />
                           </div>
                         );
@@ -1300,9 +1300,9 @@ export function TriggersTab() {
 
                 {/* Agent selection */}
                 <div>
-                  <label className="block text-xs text-[#888] mb-1.5">Target Agent</label>
+                  <label className="block text-xs text-[var(--color-text-secondary)] mb-1.5">Target Agent</label>
                   {agents.length === 0 ? (
-                    <div className="text-xs text-[#666] bg-[#0a0a0a] rounded p-3">
+                    <div className="text-xs text-[var(--color-text-muted)] bg-[var(--color-bg)] rounded p-3">
                       No agents available. Create an agent first.
                     </div>
                   ) : (
@@ -1323,7 +1323,7 @@ export function TriggersTab() {
             <div className="flex gap-2 mt-5">
               <button
                 onClick={() => setShowAddDojo(false)}
-                className="flex-1 text-sm bg-[#1a1a1a] hover:bg-[#222] border border-[#333] px-4 py-2 rounded transition"
+                className="flex-1 text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] px-4 py-2 rounded transition"
               >
                 Cancel
               </button>
@@ -1333,7 +1333,7 @@ export function TriggersTab() {
                   dojoSelectedTriggerType?.config_schema &&
                   ((dojoSelectedTriggerType.config_schema as any).required || []).some((key: string) => !dojoConfig[key]?.trim())
                 )}
-                className="flex-1 text-sm bg-[#f97316] hover:bg-[#ea580c] text-white px-4 py-2 rounded transition disabled:opacity-50"
+                className="flex-1 text-sm bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white px-4 py-2 rounded transition disabled:opacity-50"
               >
                 {dojoCreating ? "Creating..." : "Subscribe"}
               </button>

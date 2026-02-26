@@ -35,14 +35,14 @@ export function Select({ value, options, onChange, placeholder = "Select...", co
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full bg-[#0a0a0a] border border-[#222] rounded ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between focus:outline-none focus:border-[#f97316] text-[#e0e0e0] hover:border-[#333] transition`}
+        className={`w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)] hover:border-[var(--color-border-light)] transition`}
       >
-        <span className={selectedOption ? "text-[#e0e0e0]" : "text-[#666]"}>
+        <span className={selectedOption ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"}>
           {selectedOption ? (
             <>
               {selectedOption.label}
               {selectedOption.recommended && (
-                <span className="text-[#f97316] text-xs ml-2">(Recommended)</span>
+                <span className="text-[var(--color-accent)] text-xs ml-2">(Recommended)</span>
               )}
             </>
           ) : placeholder}
@@ -51,7 +51,7 @@ export function Select({ value, options, onChange, placeholder = "Select...", co
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 w-full min-w-max mt-1 bg-[#111] border border-[#222] rounded shadow-lg max-h-60 overflow-y-auto scrollbar-hide">
+        <div className="absolute z-50 w-full min-w-max mt-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded shadow-lg max-h-60 overflow-y-auto scrollbar-hide">
           {options.map((option) => (
             <button
               key={option.value}
@@ -60,18 +60,18 @@ export function Select({ value, options, onChange, placeholder = "Select...", co
                 onChange(option.value);
                 setIsOpen(false);
               }}
-              className={`w-full ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between hover:bg-[#1a1a1a] transition ${
-                option.value === value ? "bg-[#1a1a1a] text-[#f97316]" : "text-[#e0e0e0]"
+              className={`w-full ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between hover:bg-[var(--color-surface-raised)] transition ${
+                option.value === value ? "bg-[var(--color-surface-raised)] text-[var(--color-accent)]" : "text-[var(--color-text)]"
               }`}
             >
               <span>
                 {option.label}
                 {option.recommended && (
-                  <span className="text-[#f97316] text-xs ml-2">(Recommended)</span>
+                  <span className="text-[var(--color-accent)] text-xs ml-2">(Recommended)</span>
                 )}
               </span>
               {option.value === value && (
-                <svg className="w-4 h-4 text-[#f97316]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 text-[var(--color-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               )}
@@ -86,7 +86,7 @@ export function Select({ value, options, onChange, placeholder = "Select...", co
 function ChevronIcon({ isOpen }: { isOpen: boolean }) {
   return (
     <svg
-      className={`w-4 h-4 text-[#666] transition-transform ${isOpen ? "rotate-180" : ""}`}
+      className={`w-4 h-4 text-[var(--color-text-muted)] transition-transform ${isOpen ? "rotate-180" : ""}`}
       fill="none"
       stroke="currentColor"
       viewBox="0 0 24 24"

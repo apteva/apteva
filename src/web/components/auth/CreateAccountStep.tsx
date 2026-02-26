@@ -75,13 +75,13 @@ export function CreateAccountStep({ onComplete }: CreateAccountStepProps) {
   return (
     <>
       <h2 className="text-2xl font-semibold mb-2">Create your account</h2>
-      <p className="text-[#666] mb-6">
+      <p className="text-[var(--color-text-muted)] mb-6">
         Set up your admin account to get started with apteva.
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label htmlFor="username" className="block text-sm text-[#888] mb-1">
+          <label htmlFor="username" className="block text-sm text-[var(--color-text-secondary)] mb-1">
             Username
           </label>
           <input
@@ -92,13 +92,13 @@ export function CreateAccountStep({ onComplete }: CreateAccountStepProps) {
             placeholder="Choose a username"
             autoFocus
             required
-            className="w-full bg-[#0a0a0a] border border-[#333] rounded px-4 py-3 focus:outline-none focus:border-[#f97316]"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
           />
-          <p className="text-xs text-[#666] mt-1">3-20 characters, letters, numbers, underscore</p>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">3-20 characters, letters, numbers, underscore</p>
         </div>
 
         <div>
-          <label htmlFor="password" className="block text-sm text-[#888] mb-1">
+          <label htmlFor="password" className="block text-sm text-[var(--color-text-secondary)] mb-1">
             Password
           </label>
           <input
@@ -108,13 +108,13 @@ export function CreateAccountStep({ onComplete }: CreateAccountStepProps) {
             onChange={e => setPassword(e.target.value)}
             placeholder="Enter a password"
             required
-            className="w-full bg-[#0a0a0a] border border-[#333] rounded px-4 py-3 focus:outline-none focus:border-[#f97316]"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
           />
-          <p className="text-xs text-[#666] mt-1">Min 8 characters, uppercase, lowercase, number</p>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">Min 8 characters, uppercase, lowercase, number</p>
         </div>
 
         <div>
-          <label htmlFor="confirmPassword" className="block text-sm text-[#888] mb-1">
+          <label htmlFor="confirmPassword" className="block text-sm text-[var(--color-text-secondary)] mb-1">
             Confirm Password
           </label>
           <input
@@ -124,7 +124,7 @@ export function CreateAccountStep({ onComplete }: CreateAccountStepProps) {
             onChange={e => setConfirmPassword(e.target.value)}
             placeholder="Confirm your password"
             required
-            className="w-full bg-[#0a0a0a] border border-[#333] rounded px-4 py-3 focus:outline-none focus:border-[#f97316]"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
           />
         </div>
 
@@ -132,14 +132,14 @@ export function CreateAccountStep({ onComplete }: CreateAccountStepProps) {
           <button
             type="button"
             onClick={() => setShowEmail(true)}
-            className="text-sm text-[#666] hover:text-[#888] transition"
+            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition"
           >
             + Add email for password recovery (optional)
           </button>
         ) : (
           <div>
-            <label htmlFor="email" className="block text-sm text-[#888] mb-1">
-              Email <span className="text-[#666]">(optional)</span>
+            <label htmlFor="email" className="block text-sm text-[var(--color-text-secondary)] mb-1">
+              Email <span className="text-[var(--color-text-muted)]">(optional)</span>
             </label>
             <input
               id="email"
@@ -147,9 +147,9 @@ export function CreateAccountStep({ onComplete }: CreateAccountStepProps) {
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="For password recovery only"
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-4 py-3 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-4 py-3 focus:outline-none focus:border-[var(--color-accent)]"
             />
-            <p className="text-xs text-[#666] mt-1">Only used for password recovery, never shared</p>
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">Only used for password recovery, never shared</p>
           </div>
         )}
 
@@ -162,13 +162,13 @@ export function CreateAccountStep({ onComplete }: CreateAccountStepProps) {
         <button
           type="submit"
           disabled={loading || !username || !password || !confirmPassword}
-          className="w-full bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-3 rounded font-medium transition"
+          className="w-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-3 rounded font-medium transition"
         >
           {loading ? "Creating account..." : "Create Account"}
         </button>
       </form>
 
-      <p className="text-xs text-[#666] mt-4 text-center">
+      <p className="text-xs text-[var(--color-text-muted)] mt-4 text-center">
         This will be your admin account with full access to apteva.
       </p>
     </>

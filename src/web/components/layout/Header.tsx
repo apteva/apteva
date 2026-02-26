@@ -134,24 +134,25 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
   };
 
   const getProjectColor = () => {
-    if (currentProjectId === null) return "#666";
-    if (currentProjectId === "unassigned") return "#888";
+    if (currentProjectId === null) return "var(--color-text-muted)";
+    if (currentProjectId === "unassigned") return "var(--color-text-secondary)";
     return currentProject?.color || "#6366f1";
   };
 
   return (
-    <header className="border-b border-[#1a1a1a] px-4 md:px-6 py-4 flex-shrink-0">
+    <header className="px-4 md:px-6 py-4 flex-shrink-0" style={{ borderBottom: "1px solid var(--color-border)" }}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           {/* Hamburger menu button - mobile only */}
           <button
             onClick={onMenuClick}
-            className="p-2 -ml-2 text-[#666] hover:text-[#e0e0e0] transition md:hidden"
+            className="p-2 -ml-2 transition md:hidden"
+            style={{ color: "var(--color-text-muted)" }}
           >
             <MenuIcon />
           </button>
           <div className="flex items-center gap-2">
-            <span className="text-[#f97316]">&gt;_</span>
+            <span style={{ color: "var(--color-accent)" }}>&gt;_</span>
             <span className="text-xl tracking-wider">apteva</span>
           </div>
 
@@ -160,7 +161,8 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
             <div className="relative ml-2 md:ml-4">
               <button
                 onClick={() => setShowProjectMenu(!showProjectMenu)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#222] bg-[#111] hover:bg-[#1a1a1a] transition text-sm"
+                className="flex items-center gap-2 px-3 py-1.5 rounded transition text-sm"
+                style={{ border: "1px solid var(--color-border-light)", backgroundColor: "var(--color-surface)" }}
               >
                 <span
                   className="w-2.5 h-2.5 rounded-full"
@@ -172,43 +174,49 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
                 <ChevronDownIcon />
               </button>
               {showProjectMenu && (
-                <div className="absolute left-0 top-full mt-1 w-56 bg-[#111] border border-[#222] rounded-lg shadow-xl z-50">
+                <div className="absolute left-0 top-full mt-1 w-56 rounded-lg shadow-xl z-50" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border-light)" }}>
                   <div className="py-1 max-h-64 overflow-y-auto">
                     <button
                       onClick={() => handleProjectSelect(null)}
-                      className={`w-full px-4 py-2 text-left text-sm flex items-center gap-2 hover:bg-[#1a1a1a] transition ${
-                        currentProjectId === null ? "bg-[#1a1a1a] text-[#f97316]" : ""
-                      }`}
+                      className="w-full px-4 py-2 text-left text-sm flex items-center gap-2 transition"
+                      style={{
+                        backgroundColor: currentProjectId === null ? "var(--color-surface-raised)" : "transparent",
+                        color: currentProjectId === null ? "var(--color-accent)" : "var(--color-text)",
+                      }}
                     >
-                      <span className="w-2.5 h-2.5 rounded-full bg-[#666]" />
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "var(--color-text-muted)" }} />
                       All Projects
                     </button>
                     {projects.map(project => (
                       <button
                         key={project.id}
                         onClick={() => handleProjectSelect(project.id)}
-                        className={`w-full px-4 py-2 text-left text-sm flex items-center gap-2 hover:bg-[#1a1a1a] transition ${
-                          currentProjectId === project.id ? "bg-[#1a1a1a] text-[#f97316]" : ""
-                        }`}
+                        className="w-full px-4 py-2 text-left text-sm flex items-center gap-2 transition"
+                        style={{
+                          backgroundColor: currentProjectId === project.id ? "var(--color-surface-raised)" : "transparent",
+                          color: currentProjectId === project.id ? "var(--color-accent)" : "var(--color-text)",
+                        }}
                       >
                         <span
                           className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                           style={{ backgroundColor: project.color }}
                         />
                         <span className="truncate">{project.name}</span>
-                        <span className="ml-auto text-xs text-[#666]">{project.agentCount}</span>
+                        <span className="ml-auto text-xs" style={{ color: "var(--color-text-muted)" }}>{project.agentCount}</span>
                       </button>
                     ))}
                     {unassignedCount > 0 && (
                       <button
                         onClick={() => handleProjectSelect("unassigned")}
-                        className={`w-full px-4 py-2 text-left text-sm flex items-center gap-2 hover:bg-[#1a1a1a] transition ${
-                          currentProjectId === "unassigned" ? "bg-[#1a1a1a] text-[#f97316]" : ""
-                        }`}
+                        className="w-full px-4 py-2 text-left text-sm flex items-center gap-2 transition"
+                        style={{
+                          backgroundColor: currentProjectId === "unassigned" ? "var(--color-surface-raised)" : "transparent",
+                          color: currentProjectId === "unassigned" ? "var(--color-accent)" : "var(--color-text)",
+                        }}
                       >
-                        <span className="w-2.5 h-2.5 rounded-full bg-[#888]" />
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "var(--color-text-secondary)" }} />
                         <span className="truncate">Unassigned</span>
-                        <span className="ml-auto text-xs text-[#666]">{unassignedCount}</span>
+                        <span className="ml-auto text-xs" style={{ color: "var(--color-text-muted)" }}>{unassignedCount}</span>
                       </button>
                     )}
                   </div>
@@ -222,7 +230,7 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
             <span
               className={`w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`}
             />
-            <span className="text-xs text-[#666] hidden sm:inline">
+            <span className="text-xs hidden sm:inline" style={{ color: "var(--color-text-muted)" }}>
               {connected ? "Live" : "Offline"}
             </span>
           </div>
@@ -230,7 +238,8 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
           <div className="relative">
             <button
               onClick={openNotifications}
-              className="relative p-2 text-[#666] hover:text-[#e0e0e0] transition rounded hover:bg-[#1a1a1a]"
+              className="relative p-2 transition rounded"
+              style={{ color: "var(--color-text-muted)" }}
             >
               <BellIcon className="w-5 h-5" />
               {unseenCount > 0 && (
@@ -253,40 +262,47 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
             {showNotifications && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
-                <div className="absolute right-0 top-full mt-1 w-80 bg-[#111] border border-[#222] rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto">
-                  <div className="px-4 py-3 border-b border-[#222] flex items-center justify-between">
+                <div className="absolute right-0 top-full mt-1 w-80 rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border-light)" }}>
+                  <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--color-border-light)" }}>
                     <span className="text-sm font-medium">Notifications</span>
                     {notifications.length > 0 && (
-                      <span className="text-xs text-[#666]">{notifications.length} recent</span>
+                      <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{notifications.length} recent</span>
                     )}
                   </div>
                   {notifications.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-sm text-[#666]">
+                    <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--color-text-muted)" }}>
                       No notifications
                     </div>
                   ) : (
                     <div className="py-1">
                       {notifications.map(n => (
-                        <div key={n.id} className={`px-4 py-3 hover:bg-[#1a1a1a] transition border-b border-[#1a1a1a] ${!n.seen ? "bg-[#0f0f0f]" : ""}`}>
+                        <div key={n.id} className="px-4 py-3 transition" style={{
+                          borderBottom: "1px solid var(--color-border)",
+                          backgroundColor: !n.seen ? "var(--color-bg-secondary)" : "transparent",
+                        }}>
                           <div className="flex items-center gap-2 mb-1">
                             <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                               !n.seen
-                                ? (n.level === "error" || n.category === "ERROR" ? "bg-red-400" : "bg-[#f97316]")
-                                : "bg-[#333]"
-                            }`} />
-                            <span className={`text-xs font-medium truncate ${!n.seen ? "text-[#ccc]" : "text-[#666]"}`}>
+                                ? (n.level === "error" || n.category === "ERROR" ? "bg-red-400" : "")
+                                : ""
+                            }`} style={{
+                              backgroundColor: !n.seen
+                                ? (n.level === "error" || n.category === "ERROR" ? undefined : "var(--color-accent)")
+                                : "var(--color-surface-raised)",
+                            }} />
+                            <span className="text-xs font-medium truncate" style={{ color: !n.seen ? "var(--color-text)" : "var(--color-text-muted)" }}>
                               {n.category === "system" && n.type === "agent_stopped" ? "Agent Stopped" :
                                n.category === "ERROR" ? "Error" :
                                `${n.category} / ${n.type}`}
                             </span>
-                            <span className="text-[10px] text-[#555] ml-auto flex-shrink-0">
+                            <span className="text-[10px] ml-auto flex-shrink-0" style={{ color: "var(--color-text-faint)" }}>
                               {formatNotifTime(n.timestamp)}
                             </span>
                           </div>
-                          <div className={`text-xs truncate ${!n.seen ? "text-[#aaa]" : "text-[#666]"}`}>
+                          <div className="text-xs truncate" style={{ color: !n.seen ? "var(--color-text-secondary)" : "var(--color-text-muted)" }}>
                             {n.error || (n.data as any)?.message || (n.data as any)?.error || `${n.type} event`}
                           </div>
-                          <div className="text-[10px] text-[#555] mt-1">
+                          <div className="text-[10px] mt-1" style={{ color: "var(--color-text-faint)" }}>
                             {agentNames[n.agent_id] || n.agent_id.slice(0, 8)}
                           </div>
                         </div>

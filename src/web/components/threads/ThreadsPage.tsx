@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Chat, convertApiMessages } from "@apteva/apteva-kit";
-import { useAgentActivity, useAuth, useProjects, useTelemetryContext } from "../../context";
+import { useAgentActivity, useAuth, useProjects, useTelemetryContext, useTheme } from "../../context";
 import type { TelemetryEvent } from "../../context";
 import type { Agent, Route } from "../../types";
 
@@ -20,6 +20,7 @@ interface ThreadsPageProps {
 }
 
 export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
+  const { theme } = useTheme();
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
   const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
@@ -146,7 +147,7 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
       <div className="px-6 pt-6 pb-4 shrink-0">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">Threads</h1>
-          <span className="text-sm text-[#666]">
+          <span className="text-sm text-[var(--color-text-muted)]">
             {threads.length} threads from {runningCount} running agents
           </span>
         </div>
@@ -162,7 +163,7 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
               <button
                 onClick={() => setShowAgentPicker(!showAgentPicker)}
                 disabled={runningAgents.length === 0}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#f97316]/10 text-[#f97316] text-sm font-medium hover:bg-[#f97316]/20 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent-10)] text-[var(--color-accent)] text-sm font-medium hover:bg-[var(--color-accent-20)] transition disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -174,15 +175,15 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
               {showAgentPicker && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowAgentPicker(false)} />
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-[#111] border border-[#222] rounded-lg shadow-xl z-50 max-h-60 overflow-auto">
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg shadow-xl z-50 max-h-60 overflow-auto">
                     {runningAgents.map(agent => (
                       <button
                         key={agent.id}
                         onClick={() => startNewChat(agent)}
-                        className="w-full text-left px-3 py-2.5 hover:bg-[#1a1a1a] transition"
+                        className="w-full text-left px-3 py-2.5 hover:bg-[var(--color-surface-raised)] transition"
                       >
                         <p className="text-sm font-medium truncate">{agent.name}</p>
-                        <p className="text-[10px] text-[#555]">{agent.provider} · {agent.model}</p>
+                        <p className="text-[10px] text-[var(--color-text-faint)]">{agent.provider} · {agent.model}</p>
                       </button>
                     ))}
                   </div>
@@ -193,11 +194,11 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
 
           <div className="flex-1 overflow-auto px-2 pb-2">
             {loadingThreads ? (
-              <div className="p-6 text-center text-[#555] text-sm">Loading threads...</div>
+              <div className="p-6 text-center text-[var(--color-text-faint)] text-sm">Loading threads...</div>
             ) : threads.length === 0 ? (
-              <div className="p-6 text-center text-[#555] text-sm">
+              <div className="p-6 text-center text-[var(--color-text-faint)] text-sm">
                 <p>No threads yet</p>
-                <p className="mt-1 text-[#444]">Start a conversation or wait for agents</p>
+                <p className="mt-1 text-[var(--color-text-faint)]">Start a conversation or wait for agents</p>
               </div>
             ) : (
               <div className="space-y-0.5">
@@ -219,7 +220,7 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {chatAgentId && chatKey ? (
             loadingMessages ? (
-              <div className="flex-1 flex items-center justify-center text-[#666]">Loading messages...</div>
+              <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">Loading messages...</div>
             ) : (
               <Chat
                 key={chatKey}
@@ -230,17 +231,18 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
                 placeholder={`Message ${chatAgentName}...`}
                 headerTitle={chatAgentName}
                 variant="terminal"
+                theme={theme.id as "light" | "dark"}
                 showHeader={true}
               />
             )
           ) : (
             <div className="flex-1 flex items-center justify-center">
-              <div className="text-center text-[#555]">
-                <svg className="w-12 h-12 mx-auto mb-3 text-[#333]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="text-center text-[var(--color-text-faint)]">
+                <svg className="w-12 h-12 mx-auto mb-3 text-[var(--color-border-light)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
                 <p className="text-sm">Select a thread or start a new conversation</p>
-                <p className="text-xs text-[#444] mt-1">Chat with any running agent</p>
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">Chat with any running agent</p>
               </div>
             </div>
           )}
@@ -267,32 +269,32 @@ function ThreadRow({ thread, selected, activities, onSelect }: {
       onClick={onSelect}
       className={`w-full text-left px-3 py-2.5 rounded-lg transition ${
         selected
-          ? "bg-[#f97316]/10"
-          : "hover:bg-[#151515]"
+          ? "bg-[var(--color-accent-10)]"
+          : "hover:bg-[var(--color-bg-secondary)]"
       }`}
     >
       <div className="flex items-center justify-between gap-2 mb-1">
         <span className="text-sm font-medium truncate">
           {thread.title || `Thread ${thread.id.slice(0, 8)}`}
         </span>
-        <span className="text-[10px] text-[#555] shrink-0">{timeAgo(thread.updated_at)}</span>
+        <span className="text-[10px] text-[var(--color-text-faint)] shrink-0">{timeAgo(thread.updated_at)}</span>
       </div>
       <div className="flex items-center gap-1.5">
         <span
           className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-            isActive ? "bg-green-400 animate-pulse" : "bg-[#444]"
+            isActive ? "bg-green-400 animate-pulse" : "bg-[var(--color-scrollbar)]"
           }`}
         />
-        <span className="text-[11px] text-[#f97316]">{thread.agent_name}</span>
+        <span className="text-[11px] text-[var(--color-accent)]">{thread.agent_name}</span>
         {thread.message_count != null && (
           <>
-            <span className="text-[#333]">&middot;</span>
-            <span className="text-[10px] text-[#555]">{thread.message_count} msgs</span>
+            <span className="text-[var(--color-border-light)]">&middot;</span>
+            <span className="text-[10px] text-[var(--color-text-faint)]">{thread.message_count} msgs</span>
           </>
         )}
       </div>
       {activityText && (
-        <p className="text-[11px] text-[#555] truncate mt-1">{activityText}</p>
+        <p className="text-[11px] text-[var(--color-text-faint)] truncate mt-1">{activityText}</p>
       )}
     </button>
   );

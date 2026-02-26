@@ -12,9 +12,9 @@ export const PROVIDERS = {
     docsUrl: "https://console.anthropic.com/settings/keys",
     testEndpoint: "https://api.anthropic.com/v1/messages",
     models: [
-      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", recommended: true },
-      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
-      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5 (Fast)" },
+      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", recommended: true, input_cost: 3, output_cost: 15 },
+      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", input_cost: 3, output_cost: 15 },
+      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5 (Fast)", input_cost: 0.8, output_cost: 4 },
     ],
   },
   openai: {
@@ -26,8 +26,8 @@ export const PROVIDERS = {
     docsUrl: "https://platform.openai.com/api-keys",
     testEndpoint: "https://api.openai.com/v1/models",
     models: [
-      { value: "gpt-4o", label: "GPT-4o", recommended: true },
-      { value: "gpt-4o-mini", label: "GPT-4o Mini (Fast)" },
+      { value: "gpt-4o", label: "GPT-4o", recommended: true, input_cost: 2.5, output_cost: 10 },
+      { value: "gpt-4o-mini", label: "GPT-4o Mini (Fast)", input_cost: 0.15, output_cost: 0.6 },
     ],
   },
   groq: {
@@ -39,8 +39,8 @@ export const PROVIDERS = {
     docsUrl: "https://console.groq.com/keys",
     testEndpoint: "https://api.groq.com/openai/v1/models",
     models: [
-      { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B", recommended: true },
-      { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B (Fast)" },
+      { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B", recommended: true, input_cost: 0, output_cost: 0 },
+      { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B (Fast)", input_cost: 0, output_cost: 0 },
     ],
   },
   gemini: {
@@ -52,8 +52,8 @@ export const PROVIDERS = {
     docsUrl: "https://aistudio.google.com/app/apikey",
     testEndpoint: "https://generativelanguage.googleapis.com/v1/models",
     models: [
-      { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview (Latest)", recommended: true },
-      { value: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview (Fast)" },
+      { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview (Latest)", recommended: true, input_cost: 2, output_cost: 12 },
+      { value: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview (Fast)", input_cost: 0.5, output_cost: 3 },
     ],
   },
   xai: {
@@ -65,8 +65,8 @@ export const PROVIDERS = {
     docsUrl: "https://console.x.ai/",
     testEndpoint: "https://api.x.ai/v1/models",
     models: [
-      { value: "grok-2", label: "Grok 2", recommended: true },
-      { value: "grok-2-mini", label: "Grok 2 Mini (Fast)" },
+      { value: "grok-2", label: "Grok 2", recommended: true, input_cost: 2, output_cost: 10 },
+      { value: "grok-2-mini", label: "Grok 2 Mini (Fast)", input_cost: 0.3, output_cost: 1 },
     ],
   },
   together: {
@@ -78,8 +78,8 @@ export const PROVIDERS = {
     docsUrl: "https://api.together.xyz/settings/api-keys",
     testEndpoint: "https://api.together.xyz/v1/models",
     models: [
-      { value: "moonshotai/Kimi-K2.5", label: "Kimi K2.5", recommended: true },
-      { value: "moonshotai/Kimi-K2-Thinking", label: "Kimi K2 Thinking (Reasoning)" },
+      { value: "moonshotai/Kimi-K2.5", label: "Kimi K2.5", recommended: true, input_cost: 1, output_cost: 4 },
+      { value: "moonshotai/Kimi-K2-Thinking", label: "Kimi K2 Thinking (Reasoning)", input_cost: 1, output_cost: 4 },
     ],
   },
   fireworks: {
@@ -91,10 +91,10 @@ export const PROVIDERS = {
     docsUrl: "https://fireworks.ai/api-keys",
     testEndpoint: "https://api.fireworks.ai/inference/v1/models",
     models: [
-      { value: "accounts/fireworks/models/kimi-k2p5", label: "Kimi K2.5", recommended: true },
-      { value: "accounts/fireworks/models/kimi-k2-thinking", label: "Kimi K2 Thinking (Reasoning)" },
-      { value: "accounts/fireworks/models/minimax-m2p5", label: "MiniMax M2.5" },
-      { value: "accounts/fireworks/models/glm-5", label: "GLM 5" },
+      { value: "accounts/fireworks/models/kimi-k2p5", label: "Kimi K2.5", recommended: true, input_cost: 1, output_cost: 4 },
+      { value: "accounts/fireworks/models/kimi-k2-thinking", label: "Kimi K2 Thinking (Reasoning)", input_cost: 1, output_cost: 4 },
+      { value: "accounts/fireworks/models/minimax-m2p5", label: "MiniMax M2.5", input_cost: 1, output_cost: 4 },
+      { value: "accounts/fireworks/models/glm-5", label: "GLM 5", input_cost: 1, output_cost: 4 },
     ],
   },
   moonshot: {
@@ -106,8 +106,24 @@ export const PROVIDERS = {
     docsUrl: "https://platform.moonshot.cn/console/api-keys",
     testEndpoint: "https://api.moonshot.cn/v1/models",
     models: [
-      { value: "moonshot-v1-128k", label: "Kimi 128K", recommended: true },
-      { value: "moonshot-v1-32k", label: "Kimi 32K (Fast)" },
+      { value: "moonshot-v1-128k", label: "Kimi 128K", recommended: true, input_cost: 1, output_cost: 4 },
+      { value: "moonshot-v1-32k", label: "Kimi 32K (Fast)", input_cost: 0.5, output_cost: 2 },
+    ],
+  },
+  venice: {
+    id: "venice",
+    name: "Venice",
+    displayName: "Venice AI",
+    type: "llm" as const,
+    envVar: "VENICE_API_KEY",
+    docsUrl: "https://docs.venice.ai/overview/pricing",
+    testEndpoint: "https://api.venice.ai/api/v1/models",
+    models: [
+      { value: "llama-3.3-70b", label: "Llama 3.3 70B", recommended: true, input_cost: 0.7, output_cost: 2.8 },
+      { value: "olafangensan-glm-4.7-flash-heretic", label: "GLM 4.7 Flash Heretic", input_cost: 0.14, output_cost: 0.8 },
+      { value: "qwen3-235b-a22b-instruct-2507", label: "Qwen 3 235B Instruct", input_cost: 0.15, output_cost: 0.75 },
+      { value: "deepseek-v3.2", label: "DeepSeek V3.2", input_cost: 0.4, output_cost: 1 },
+      { value: "venice-uncensored", label: "Venice Uncensored 1.1", input_cost: 0.2, output_cost: 0.9 },
     ],
   },
   ollama: {
@@ -122,11 +138,11 @@ export const PROVIDERS = {
     defaultBaseUrl: "http://localhost:11434",
     models: [
       // Default models - actual list fetched dynamically from Ollama
-      { value: "llama3.3", label: "Llama 3.3 (70B)", recommended: true },
-      { value: "llama3.2", label: "Llama 3.2 (3B)" },
-      { value: "qwen2.5", label: "Qwen 2.5" },
-      { value: "mistral", label: "Mistral" },
-      { value: "deepseek-r1", label: "DeepSeek R1" },
+      { value: "llama3.3", label: "Llama 3.3 (70B)", recommended: true, input_cost: 0, output_cost: 0 },
+      { value: "llama3.2", label: "Llama 3.2 (3B)", input_cost: 0, output_cost: 0 },
+      { value: "qwen2.5", label: "Qwen 2.5", input_cost: 0, output_cost: 0 },
+      { value: "mistral", label: "Mistral", input_cost: 0, output_cost: 0 },
+      { value: "deepseek-r1", label: "DeepSeek R1", input_cost: 0, output_cost: 0 },
     ],
   },
   // Browser Providers
@@ -216,6 +232,16 @@ export const PROVIDERS = {
 } as const;
 
 export type ProviderId = keyof typeof PROVIDERS;
+
+/** Get cost per 1M tokens for a given provider + model. Returns { input_cost, output_cost } in USD. */
+export function getModelCost(provider: string, model: string): { input_cost: number; output_cost: number } {
+  const providerDef = PROVIDERS[provider as ProviderId];
+  if (!providerDef || !("models" in providerDef)) return { input_cost: 0, output_cost: 0 };
+  const modelDef = (providerDef.models as ReadonlyArray<{ value: string; input_cost?: number; output_cost?: number }>)
+    .find(m => m.value === model);
+  if (!modelDef) return { input_cost: 0, output_cost: 0 };
+  return { input_cost: modelDef.input_cost ?? 0, output_cost: modelDef.output_cost ?? 0 };
+}
 
 // Provider Keys Management
 export const ProviderKeys = {

@@ -863,6 +863,12 @@ function runMigrations() {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_unique ON provider_keys(provider_id, COALESCE(project_id, ''));
       `,
     },
+    {
+      name: "035_add_telemetry_cost",
+      sql: `
+        ALTER TABLE telemetry_events ADD COLUMN cost REAL DEFAULT 0;
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -1986,12 +1992,13 @@ export const TelemetryDB = {
     metadata?: Record<string, unknown>;
     duration_ms?: number;
     error?: string;
+    cost?: number;
   }>): number {
     const now = new Date().toISOString();
     const stmt = db.prepare(`
       INSERT OR IGNORE INTO telemetry_events
-      (id, agent_id, timestamp, category, type, level, trace_id, span_id, thread_id, data, metadata, duration_ms, error, received_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, agent_id, timestamp, category, type, level, trace_id, span_id, thread_id, data, metadata, duration_ms, error, received_at, cost)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Wrap in transaction for massive speedup (single fsync instead of one per row)
@@ -2012,7 +2019,8 @@ export const TelemetryDB = {
           event.metadata ? JSON.stringify(event.metadata) : null,
           event.duration_ms || null,
           event.error || null,
-          now
+          now,
+          event.cost || 0
         );
         if (result.changes > 0) inserted++;
       }
@@ -2104,6 +2112,7 @@ export const TelemetryDB = {
     llm_calls: number;
     tool_calls: number;
     errors: number;
+    cost: number;
   }> {
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -2154,7 +2163,8 @@ export const TelemetryDB = {
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.output_tokens') ELSE 0 END), 0) as output_tokens,
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN 1 ELSE 0 END), 0) as llm_calls,
         COALESCE(SUM(CASE WHEN t.category = 'TOOL' THEN 1 ELSE 0 END), 0) as tool_calls,
-        COALESCE(SUM(CASE WHEN t.level = 'error' THEN 1 ELSE 0 END), 0) as errors
+        COALESCE(SUM(CASE WHEN t.level = 'error' THEN 1 ELSE 0 END), 0) as errors,
+        COALESCE(SUM(t.cost), 0) as cost
       ${fromClause}
       ${where}
       ${groupBy}
@@ -2168,6 +2178,7 @@ export const TelemetryDB = {
       llm_calls: number;
       tool_calls: number;
       errors: number;
+      cost: number;
     }>;
   },
 
@@ -2179,6 +2190,7 @@ export const TelemetryDB = {
     total_errors: number;
     total_input_tokens: number;
     total_output_tokens: number;
+    total_cost: number;
   } {
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -2209,7 +2221,8 @@ export const TelemetryDB = {
         COALESCE(SUM(CASE WHEN t.category = 'TOOL' THEN 1 ELSE 0 END), 0) as total_tool_calls,
         COALESCE(SUM(CASE WHEN t.level = 'error' THEN 1 ELSE 0 END), 0) as total_errors,
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.input_tokens') ELSE 0 END), 0) as total_input_tokens,
-        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.output_tokens') ELSE 0 END), 0) as total_output_tokens
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.output_tokens') ELSE 0 END), 0) as total_output_tokens,
+        COALESCE(SUM(t.cost), 0) as total_cost
       ${fromClause}
       ${where}
     `;
@@ -2221,6 +2234,7 @@ export const TelemetryDB = {
       total_errors: number;
       total_input_tokens: number;
       total_output_tokens: number;
+      total_cost: number;
     };
   },
 

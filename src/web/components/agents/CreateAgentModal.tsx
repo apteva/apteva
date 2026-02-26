@@ -143,7 +143,7 @@ export function CreateAgentModal({
                 type="text"
                 value={form.name}
                 onChange={(e) => onFormChange({ ...form, name: e.target.value })}
-                className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] text-[#e0e0e0]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]"
                 placeholder="My Agent"
               />
             </FormField>
@@ -170,10 +170,10 @@ export function CreateAgentModal({
 
             <FormField label="Model">
               {loadingOllamaModels ? (
-                <div className="text-sm text-[#666] py-2">Loading Ollama models...</div>
+                <div className="text-sm text-[var(--color-text-muted)] py-2">Loading Ollama models...</div>
               ) : form.provider === "ollama" && modelOptions.length === 0 ? (
                 <div className="text-sm text-yellow-400/80 py-2">
-                  No models found. Run <code className="bg-[#1a1a1a] px-1 rounded">ollama pull llama3.3</code> to download a model.
+                  No models found. Run <code className="bg-[var(--color-surface-raised)] px-1 rounded">ollama pull llama3.3</code> to download a model.
                 </div>
               ) : (
                 <Select
@@ -189,7 +189,7 @@ export function CreateAgentModal({
               <textarea
                 value={form.systemPrompt}
                 onChange={(e) => onFormChange({ ...form, systemPrompt: e.target.value })}
-                className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 h-24 resize-none focus:outline-none focus:border-[#f97316] text-[#e0e0e0]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 h-24 resize-none focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]"
               />
             </FormField>
 
@@ -204,16 +204,16 @@ export function CreateAgentModal({
                       onClick={() => toggleFeature(key)}
                       className={`flex items-center gap-3 p-3 rounded border text-left transition ${
                         isEnabled
-                          ? "border-[#f97316] bg-[#f97316]/10"
-                          : "border-[#222] hover:border-[#333]"
+                          ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
+                          : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)]"
                       }`}
                     >
-                      <Icon className={`w-5 h-5 flex-shrink-0 ${isEnabled ? "text-[#f97316]" : "text-[#666]"}`} />
+                      <Icon className={`w-5 h-5 flex-shrink-0 ${isEnabled ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)]"}`} />
                       <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium ${isEnabled ? "text-[#f97316]" : ""}`}>
+                        <div className={`text-sm font-medium ${isEnabled ? "text-[var(--color-accent)]" : ""}`}>
                           {label}
                         </div>
-                        <div className="text-xs text-[#666]">{description}</div>
+                        <div className="text-xs text-[var(--color-text-muted)]">{description}</div>
                       </div>
                     </button>
                   );
@@ -239,8 +239,8 @@ export function CreateAgentModal({
                   })}
                   className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
                     form.features.builtinTools?.webSearch
-                      ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
-                      : "border-[#222] hover:border-[#333] text-[#888]"
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
+                      : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
                   }`}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -262,8 +262,8 @@ export function CreateAgentModal({
                   })}
                   className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
                     form.features.builtinTools?.webFetch
-                      ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
-                      : "border-[#222] hover:border-[#333] text-[#888]"
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
+                      : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
                   }`}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -272,7 +272,7 @@ export function CreateAgentModal({
                   <span className="text-sm">Web Fetch</span>
                 </button>
               </div>
-              <p className="text-xs text-[#555] mt-2">
+              <p className="text-xs text-[var(--color-text-faint)] mt-2">
                 Provider-native tools for real-time web access
               </p>
             </FormField>
@@ -282,14 +282,14 @@ export function CreateAgentModal({
           <div className="flex gap-3 mt-6">
             <button
               onClick={onClose}
-              className="flex-1 border border-[#333] hover:border-[#f97316] hover:text-[#f97316] px-4 py-2 rounded font-medium transition"
+              className="flex-1 border border-[var(--color-border-light)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] px-4 py-2 rounded font-medium transition"
             >
               Cancel
             </button>
             <button
               onClick={onCreate}
               disabled={!form.name}
-              className="flex-1 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+              className="flex-1 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
             >
               Create
             </button>
@@ -303,7 +303,7 @@ export function CreateAgentModal({
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm text-[#666] mb-1">{label}</label>
+      <label className="block text-sm text-[var(--color-text-muted)] mb-1">{label}</label>
       {children}
     </div>
   );
@@ -312,10 +312,10 @@ function FormField({ label, children }: { label: string; children: React.ReactNo
 function NoProvidersMessage({ onGoToSettings }: { onGoToSettings: () => void }) {
   return (
     <div className="text-center py-6">
-      <p className="text-[#666] mb-4">No API keys configured. Add a provider key first.</p>
+      <p className="text-[var(--color-text-muted)] mb-4">No API keys configured. Add a provider key first.</p>
       <button
         onClick={onGoToSettings}
-        className="bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition"
+        className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition"
       >
         Go to Settings
       </button>

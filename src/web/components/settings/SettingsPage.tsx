@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { CheckIcon, CloseIcon, PlusIcon } from "../common/Icons";
 import { Modal, useConfirm } from "../common/Modal";
 import { Select } from "../common/Select";
-import { useProjects, useAuth, type Project } from "../../context";
+import { useProjects, useAuth, useTheme, type Project } from "../../context";
+import type { ThemeMode } from "../../themes";
 import type { Provider } from "../../types";
 
 type SettingsTab = "general" | "providers" | "projects" | "channels" | "api-keys" | "account" | "updates" | "data" | "assistant";
@@ -26,7 +27,7 @@ export function SettingsPage() {
   return (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
       {/* Mobile: Horizontal scrolling tabs */}
-      <div className="md:hidden border-b border-[#1a1a1a] bg-[#0a0a0a]">
+      <div className="md:hidden border-b border-[var(--color-border)] bg-[var(--color-bg)]">
         <div className="flex overflow-x-auto" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           {tabs.map(tab => (
             <button
@@ -34,8 +35,8 @@ export function SettingsPage() {
               onClick={() => setActiveTab(tab.key)}
               className={`flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition ${
                 activeTab === tab.key
-                  ? "border-[#f97316] text-[#f97316]"
-                  : "border-transparent text-[#666] hover:text-[#888]"
+                  ? "border-[var(--color-accent)] text-[var(--color-accent)]"
+                  : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               {tab.label}
@@ -45,8 +46,8 @@ export function SettingsPage() {
       </div>
 
       {/* Desktop: Settings Sidebar */}
-      <div className="hidden md:block w-48 border-r border-[#1a1a1a] p-4 flex-shrink-0">
-        <h2 className="text-sm font-medium text-[#666] uppercase tracking-wider mb-3">Settings</h2>
+      <div className="hidden md:block w-48 border-r border-[var(--color-border)] p-4 flex-shrink-0">
+        <h2 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider mb-3">Settings</h2>
         <nav className="space-y-1">
           {tabs.map(tab => (
             <SettingsNavItem
@@ -89,8 +90,8 @@ function SettingsNavItem({
       onClick={onClick}
       className={`w-full text-left px-3 py-2 rounded text-sm transition ${
         active
-          ? "bg-[#1a1a1a] text-[#e0e0e0]"
-          : "text-[#666] hover:bg-[#111] hover:text-[#888]"
+          ? "bg-[var(--color-surface-raised)] text-[var(--color-text)]"
+          : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text-secondary)]"
       }`}
     >
       {label}
@@ -100,6 +101,7 @@ function SettingsNavItem({
 
 function GeneralSettings() {
   const { authFetch } = useAuth();
+  const { mode, setMode } = useTheme();
   const [instanceUrl, setInstanceUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -141,21 +143,58 @@ function GeneralSettings() {
     setSaving(false);
   };
 
+  const themeOptions: { value: ThemeMode; label: string; description: string }[] = [
+    { value: "auto", label: "Auto", description: "Follow system preference" },
+    { value: "dark", label: "Dark", description: "Dark background" },
+    { value: "light", label: "Light", description: "Light background" },
+  ];
+
   return (
     <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">General</h1>
-        <p className="text-[#666]">Instance configuration.</p>
+        <p className="text-[var(--color-text-muted)]">Instance configuration and appearance.</p>
       </div>
 
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+      {/* Theme */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 mb-4">
+        <h3 className="font-medium mb-2">Theme</h3>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">
+          Choose your preferred color scheme. Auto follows your operating system setting.
+        </p>
+        <div className="flex gap-3">
+          {themeOptions.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setMode(opt.value)}
+              className={`flex-1 max-w-[160px] px-4 py-3 rounded-lg border text-left transition ${
+                mode === opt.value
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
+                  : "border-[var(--color-border-light)] bg-[var(--color-bg)] hover:border-[var(--color-scrollbar)]"
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                  mode === opt.value ? "border-[var(--color-accent)]" : "border-[var(--color-scrollbar)]"
+                }`}>
+                  {mode === opt.value && <div className="w-2 h-2 rounded-full bg-[var(--color-accent)]" />}
+                </div>
+                <span className="text-sm font-medium">{opt.label}</span>
+              </div>
+              <p className="text-xs text-[var(--color-text-muted)] ml-6">{opt.description}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
         <h3 className="font-medium mb-2">Instance URL</h3>
-        <p className="text-sm text-[#666] mb-4">
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">
           The public HTTPS URL for this instance. Used for webhook callbacks from external services like Composio.
         </p>
 
         {loading ? (
-          <div className="text-[#666] text-sm">Loading...</div>
+          <div className="text-[var(--color-text-muted)] text-sm">Loading...</div>
         ) : (
           <div className="space-y-3 max-w-lg">
             <input
@@ -163,7 +202,7 @@ function GeneralSettings() {
               value={instanceUrl}
               onChange={e => setInstanceUrl(e.target.value)}
               placeholder="https://your-domain.com"
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] font-mono text-sm"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] font-mono text-sm"
             />
 
             {message && (
@@ -179,7 +218,7 @@ function GeneralSettings() {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black rounded text-sm font-medium transition"
+              className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black rounded text-sm font-medium transition"
             >
               {saving ? "Saving..." : "Save"}
             </button>
@@ -320,7 +359,7 @@ function ProvidersSettings() {
       <div>
         <div className="mb-6">
           <h1 className="text-2xl font-semibold mb-1">AI Providers</h1>
-          <p className="text-[#666]">
+          <p className="text-[var(--color-text-muted)]">
             Manage your API keys for AI providers. {llmConfiguredCount} of {llmProviders.length} configured.
           </p>
         </div>
@@ -358,7 +397,7 @@ function ProvidersSettings() {
       <div>
         <div className="mb-6">
           <h2 className="text-xl font-semibold mb-1">MCP Integrations</h2>
-          <p className="text-[#666]">
+          <p className="text-[var(--color-text-muted)]">
             Connect to MCP gateways for tool integrations. {intConfiguredCount} of {integrations.length} configured.
           </p>
         </div>
@@ -399,7 +438,7 @@ function ProvidersSettings() {
       <div>
         <div className="mb-6">
           <h2 className="text-xl font-semibold mb-1">Browser Providers</h2>
-          <p className="text-[#666]">
+          <p className="text-[var(--color-text-muted)]">
             Configure browser environments for operator mode (computer use). {browserConfiguredCount} of {browserProviders.length} configured.
           </p>
         </div>
@@ -485,13 +524,13 @@ function ProjectsSettings() {
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold mb-1">Projects</h1>
-          <p className="text-[#666]">
+          <p className="text-[var(--color-text-muted)]">
             Organize agents into projects for better management.
           </p>
         </div>
         <button
           onClick={openCreate}
-          className="flex items-center gap-2 bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition flex-shrink-0"
+          className="flex items-center gap-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition flex-shrink-0"
         >
           <PlusIcon className="w-4 h-4" />
           New Project
@@ -500,7 +539,7 @@ function ProjectsSettings() {
 
       {/* Project List */}
       {projects.length === 0 ? (
-        <div className="text-center py-12 text-[#666]">
+        <div className="text-center py-12 text-[var(--color-text-muted)]">
           <p className="text-lg mb-2">No projects yet</p>
           <p className="text-sm">Create a project to organize your agents.</p>
         </div>
@@ -509,7 +548,7 @@ function ProjectsSettings() {
           {projects.map(project => (
             <div
               key={project.id}
-              className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 flex items-center gap-4"
+              className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 flex items-center gap-4"
             >
               <div
                 className="w-4 h-4 rounded-full flex-shrink-0"
@@ -518,16 +557,16 @@ function ProjectsSettings() {
               <div className="flex-1 min-w-0">
                 <h3 className="font-medium">{project.name}</h3>
                 {project.description && (
-                  <p className="text-sm text-[#666] truncate">{project.description}</p>
+                  <p className="text-sm text-[var(--color-text-muted)] truncate">{project.description}</p>
                 )}
-                <p className="text-xs text-[#666] mt-1">
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
                   {project.agentCount} agent{project.agentCount !== 1 ? "s" : ""}
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => openEdit(project)}
-                  className="text-sm text-[#888] hover:text-[#e0e0e0] px-2 py-1"
+                  className="text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text)] px-2 py-1"
                 >
                   Edit
                 </button>
@@ -601,30 +640,30 @@ function ProjectModal({ project, onSave, onClose }: ProjectModalProps) {
 
       <div className="space-y-4">
         <div>
-          <label className="block text-sm text-[#666] mb-1">Name</label>
+          <label className="block text-sm text-[var(--color-text-muted)] mb-1">Name</label>
           <input
             type="text"
             value={name}
             onChange={e => setName(e.target.value)}
-            className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             placeholder="My Project"
             autoFocus
           />
         </div>
 
         <div>
-          <label className="block text-sm text-[#666] mb-1">Description (optional)</label>
+          <label className="block text-sm text-[var(--color-text-muted)] mb-1">Description (optional)</label>
           <input
             type="text"
             value={description}
             onChange={e => setDescription(e.target.value)}
-            className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             placeholder="A short description"
           />
         </div>
 
         <div>
-          <label className="block text-sm text-[#666] mb-1">Color</label>
+          <label className="block text-sm text-[var(--color-text-muted)] mb-1">Color</label>
           <div className="flex gap-3 flex-wrap">
             {DEFAULT_PROJECT_COLORS.map(c => (
               <button
@@ -646,14 +685,14 @@ function ProjectModal({ project, onSave, onClose }: ProjectModalProps) {
       <div className="flex gap-3 mt-6">
         <button
           onClick={onClose}
-          className="flex-1 border border-[#333] hover:border-[#f97316] hover:text-[#f97316] px-4 py-2 rounded font-medium transition"
+          className="flex-1 border border-[var(--color-border-light)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] px-4 py-2 rounded font-medium transition"
         >
           Cancel
         </button>
         <button
           onClick={handleSubmit}
           disabled={saving || !name.trim()}
-          className="flex-1 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+          className="flex-1 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
         >
           {saving ? "Saving..." : project ? "Update" : "Create"}
         </button>
@@ -754,13 +793,13 @@ function UpdatesSettings() {
     <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Updates</h1>
-        <p className="text-[#666]">
+        <p className="text-[var(--color-text-muted)]">
           Check for new versions of apteva and the agent binary.
         </p>
       </div>
 
       {checking && !versions ? (
-        <div className="text-[#666]">Checking version info...</div>
+        <div className="text-[var(--color-text-muted)]">Checking version info...</div>
       ) : error && !versions ? (
         <div className="text-red-400">{error}</div>
       ) : versions?.isDocker ? (
@@ -773,17 +812,17 @@ function UpdatesSettings() {
               </svg>
               <span className="font-medium">Docker Environment</span>
             </div>
-            <p className="text-sm text-[#888]">
+            <p className="text-sm text-[var(--color-text-secondary)]">
               Updates are automatic when you pull a new image version.
             </p>
           </div>
 
           {/* Current Version */}
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-5">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-medium text-lg">Current Version</h3>
-                <p className="text-sm text-[#666]">apteva + agent binary</p>
+                <p className="text-sm text-[var(--color-text-muted)]">apteva + agent binary</p>
               </div>
               <div className="text-right">
                 <div className="text-xl font-mono">v{versions.apteva.installed || "?"}</div>
@@ -791,15 +830,15 @@ function UpdatesSettings() {
             </div>
 
             {hasAnyUpdate ? (
-              <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
-                <p className="text-sm text-[#888] mb-3">
+              <div className="bg-[var(--color-accent-10)] border border-[var(--color-accent-30)] rounded-lg p-4">
+                <p className="text-sm text-[var(--color-text-secondary)] mb-3">
                   A newer version (v{versions.apteva.latest}) is available. To update:
                 </p>
                 <div className="space-y-2">
-                  <code className="block bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#888]">
+                  <code className="block bg-[var(--color-bg)] px-3 py-2 rounded font-mono text-sm text-[var(--color-text-secondary)]">
                     docker pull apteva/apteva:latest
                   </code>
-                  <code className="block bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#888]">
+                  <code className="block bg-[var(--color-bg)] px-3 py-2 rounded font-mono text-sm text-[var(--color-text-secondary)]">
                     docker compose up -d
                   </code>
                 </div>
@@ -809,7 +848,7 @@ function UpdatesSettings() {
                     setCopied("docker");
                     setTimeout(() => setCopied(null), 2000);
                   }}
-                  className="mt-3 px-3 py-1.5 bg-[#1a1a1a] hover:bg-[#222] rounded text-sm"
+                  className="mt-3 px-3 py-1.5 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] rounded text-sm"
                 >
                   {copied === "docker" ? "Copied!" : "Copy commands"}
                 </button>
@@ -822,7 +861,7 @@ function UpdatesSettings() {
             )}
           </div>
 
-          <p className="text-xs text-[#555]">
+          <p className="text-xs text-[var(--color-text-faint)]">
             Your data is stored in a Docker volume and persists across updates.
           </p>
         </div>
@@ -842,32 +881,32 @@ function UpdatesSettings() {
           )}
 
           {/* Apteva App Version */}
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-5">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-medium text-lg">apteva</h3>
-                <p className="text-sm text-[#666]">The app you're running</p>
+                <p className="text-sm text-[var(--color-text-muted)]">The app you're running</p>
               </div>
               <div className="text-right">
                 <div className="text-xl font-mono">v{versions.apteva.installed || "?"}</div>
                 {versions.apteva.updateAvailable && (
-                  <div className="text-sm text-[#f97316]">→ v{versions.apteva.latest}</div>
+                  <div className="text-sm text-[var(--color-accent)]">→ v{versions.apteva.latest}</div>
                 )}
               </div>
             </div>
 
             {versions.apteva.updateAvailable ? (
-              <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
-                <p className="text-sm text-[#888] mb-3">
+              <div className="bg-[var(--color-accent-10)] border border-[var(--color-accent-30)] rounded-lg p-4">
+                <p className="text-sm text-[var(--color-text-secondary)] mb-3">
                   Update by running:
                 </p>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#888]">
+                  <code className="flex-1 bg-[var(--color-bg)] px-3 py-2 rounded font-mono text-sm text-[var(--color-text-secondary)]">
                     npx apteva@latest
                   </code>
                   <button
                     onClick={() => copyCommand("npx apteva@latest", "apteva")}
-                    className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded text-sm"
+                    className="px-3 py-2 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] rounded text-sm"
                   >
                     {copied === "apteva" ? "Copied!" : "Copy"}
                   </button>
@@ -882,30 +921,30 @@ function UpdatesSettings() {
           </div>
 
           {/* Agent Binary Version */}
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-5">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-medium text-lg">Agent Binary</h3>
-                <p className="text-sm text-[#666]">The Go binary that runs agents</p>
+                <p className="text-sm text-[var(--color-text-muted)]">The Go binary that runs agents</p>
               </div>
               <div className="text-right">
                 <div className="text-xl font-mono">v{versions.agent.installed || "?"}</div>
                 {versions.agent.updateAvailable && (
-                  <div className="text-sm text-[#f97316]">→ v{versions.agent.latest}</div>
+                  <div className="text-sm text-[var(--color-accent)]">→ v{versions.agent.latest}</div>
                 )}
               </div>
             </div>
 
             {versions.agent.updateAvailable ? (
-              <div className="bg-[#f97316]/10 border border-[#f97316]/30 rounded-lg p-4">
-                <p className="text-sm text-[#888] mb-3">
+              <div className="bg-[var(--color-accent-10)] border border-[var(--color-accent-30)] rounded-lg p-4">
+                <p className="text-sm text-[var(--color-text-secondary)] mb-3">
                   A new version is available. Stop all agents before updating.
                 </p>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={updateAgent}
                     disabled={updatingAgent}
-                    className="px-4 py-2 bg-[#f97316] text-black rounded font-medium text-sm disabled:opacity-50"
+                    className="px-4 py-2 bg-[var(--color-accent)] text-black rounded font-medium text-sm disabled:opacity-50"
                   >
                     {updatingAgent ? "Updating..." : "Update Agent"}
                   </button>
@@ -929,7 +968,7 @@ function UpdatesSettings() {
           <button
             onClick={checkForUpdates}
             disabled={checking}
-            className="text-sm text-[#666] hover:text-[#888] disabled:opacity-50"
+            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] disabled:opacity-50"
           >
             {checking ? "Checking..." : "Check for updates"}
           </button>
@@ -999,13 +1038,13 @@ function ProviderKeyCard({
   };
 
   return (
-    <div className={`bg-[#111] border rounded-lg p-4 ${
-      provider.hasKey ? 'border-green-500/20' : 'border-[#1a1a1a]'
+    <div className={`bg-[var(--color-surface)] border rounded-lg p-4 ${
+      provider.hasKey ? 'border-green-500/20' : 'border-[var(--color-border)]'
     }`}>
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="min-w-0">
           <h3 className="font-medium">{provider.name}</h3>
-          <p className="text-sm text-[#666] truncate">
+          <p className="text-sm text-[var(--color-text-muted)] truncate">
             {isBrowser
               ? (provider.description || "Browser automation")
               : provider.type === "integration"
@@ -1036,36 +1075,36 @@ function ProviderKeyCard({
             )}
           </span>
         ) : (
-          <span className="text-[#666] text-xs bg-[#1a1a1a] px-2 py-1 rounded whitespace-nowrap flex-shrink-0">
+          <span className="text-[var(--color-text-muted)] text-xs bg-[var(--color-surface-raised)] px-2 py-1 rounded whitespace-nowrap flex-shrink-0">
             Not configured
           </span>
         )}
       </div>
 
-      <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
+      <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
         {isEditing ? (
           <div className="space-y-3">
             {isMultiField ? (
               <>
                 <div>
-                  <label className="block text-xs text-[#888] mb-1">API Key</label>
+                  <label className="block text-xs text-[var(--color-text-secondary)] mb-1">API Key</label>
                   <input
                     type="password"
                     value={apiKey}
                     onChange={e => onApiKeyChange(e.target.value)}
                     placeholder={provider.hasKey ? "Enter new API key..." : "Enter API key..."}
                     autoFocus
-                    className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-[#888] mb-1">Project ID</label>
+                  <label className="block text-xs text-[var(--color-text-secondary)] mb-1">Project ID</label>
                   <input
                     type="text"
                     value={extraField || ""}
                     onChange={e => onExtraFieldChange?.(e.target.value)}
                     placeholder="Enter your Browserbase project ID..."
-                    className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
                   />
                 </div>
               </>
@@ -1079,11 +1118,11 @@ function ProviderKeyCard({
                   : isCDP ? "ws://localhost:9222"
                   : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
                 autoFocus
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
               />
             )}
             {isUrlBased && (
-              <p className="text-xs text-[#666]">
+              <p className="text-xs text-[var(--color-text-muted)]">
                 {isCDP
                   ? "Enter the CDP URL of your browser (e.g., ws://localhost:9222)"
                   : "Enter your Ollama server URL. Default is http://localhost:11434"}
@@ -1094,14 +1133,14 @@ function ProviderKeyCard({
             <div className="flex gap-2">
               <button
                 onClick={onCancelEdit}
-                className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
+                className="flex-1 px-3 py-1.5 border border-[var(--color-border-light)] rounded text-sm hover:border-[var(--color-text-muted)]"
               >
                 Cancel
               </button>
               <button
                 onClick={onSave}
                 disabled={!apiKey || saving}
-                className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+                className="flex-1 px-3 py-1.5 bg-[var(--color-accent)] text-black rounded text-sm font-medium disabled:opacity-50"
               >
                 {testing ? "Validating..." : saving ? "Saving..." : isUrlBased ? "Connect" : "Save"}
               </button>
@@ -1141,7 +1180,7 @@ function ProviderKeyCard({
             <div className="flex items-center gap-3">
               <button
                 onClick={onStartEdit}
-                className="text-sm text-[#888] hover:text-[#e0e0e0]"
+                className="text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
               >
                 {isUrlBased ? "Change URL" : "Update key"}
               </button>
@@ -1187,7 +1226,7 @@ function ProviderKeyCard({
               )}
               <button
                 onClick={onStartEdit}
-                className="text-sm text-[#f97316] hover:text-[#fb923c]"
+                className="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
               >
                 {isUrlBased ? "Configure" : "+ Add key"}
               </button>
@@ -1332,27 +1371,27 @@ function IntegrationKeyCard({
   // Simple view when projects not enabled
   if (!projectsEnabled) {
     return (
-      <div className={`bg-[#111] border rounded-lg p-4 ${
-        provider.hasKey ? 'border-[#f97316]/20' : 'border-[#1a1a1a]'
+      <div className={`bg-[var(--color-surface)] border rounded-lg p-4 ${
+        provider.hasKey ? 'border-[var(--color-accent-20)]' : 'border-[var(--color-border)]'
       }`}>
         <div className="flex items-center justify-between mb-2">
           <div>
             <h3 className="font-medium">{provider.name}</h3>
-            <p className="text-sm text-[#666]">{provider.description || "MCP integration"}</p>
+            <p className="text-sm text-[var(--color-text-muted)]">{provider.description || "MCP integration"}</p>
           </div>
           {provider.hasKey ? (
-            <span className="text-[#f97316] text-xs flex items-center gap-1 bg-[#f97316]/10 px-2 py-1 rounded">
+            <span className="text-[var(--color-accent)] text-xs flex items-center gap-1 bg-[var(--color-accent-10)] px-2 py-1 rounded">
               <CheckIcon className="w-3 h-3" />
               {provider.keyHint}
             </span>
           ) : (
-            <span className="text-[#666] text-xs bg-[#1a1a1a] px-2 py-1 rounded">
+            <span className="text-[var(--color-text-muted)] text-xs bg-[var(--color-surface-raised)] px-2 py-1 rounded">
               Not configured
             </span>
           )}
         </div>
 
-        <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
+        <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
           {isEditing ? (
             <div className="space-y-3">
               <input
@@ -1361,21 +1400,21 @@ function IntegrationKeyCard({
                 onChange={e => onApiKeyChange(e.target.value)}
                 placeholder={provider.hasKey ? `Enter new ${isUrlBased ? "URL" : "API key"}...` : inputPlaceholder}
                 autoFocus
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
               />
               {error && <p className="text-red-400 text-sm">{error}</p>}
               {success && <p className="text-green-400 text-sm">{success}</p>}
               <div className="flex gap-2">
                 <button
                   onClick={onCancelEdit}
-                  className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
+                  className="flex-1 px-3 py-1.5 border border-[var(--color-border-light)] rounded text-sm hover:border-[var(--color-text-muted)]"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={onSave}
                   disabled={!apiKey || saving}
-                  className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+                  className="flex-1 px-3 py-1.5 bg-[var(--color-accent)] text-black rounded text-sm font-medium disabled:opacity-50"
                 >
                   {testing ? "Validating..." : saving ? "Saving..." : "Save"}
                 </button>
@@ -1394,7 +1433,7 @@ function IntegrationKeyCard({
               <div className="flex items-center gap-3">
                 <button
                   onClick={onStartEdit}
-                  className="text-sm text-[#888] hover:text-[#e0e0e0]"
+                  className="text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
                 >
                   Update key
                 </button>
@@ -1418,7 +1457,7 @@ function IntegrationKeyCard({
               </a>
               <button
                 onClick={onStartEdit}
-                className="text-sm text-[#f97316] hover:text-[#fb923c]"
+                className="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
               >
                 + Add key
               </button>
@@ -1440,21 +1479,21 @@ function IntegrationKeyCard({
   return (
     <>
     {ConfirmDialog}
-    <div className={`bg-[#111] border rounded-lg p-4 ${
-      keys.length > 0 ? 'border-[#f97316]/20' : 'border-[#1a1a1a]'
+    <div className={`bg-[var(--color-surface)] border rounded-lg p-4 ${
+      keys.length > 0 ? 'border-[var(--color-accent-20)]' : 'border-[var(--color-border)]'
     }`}>
       <div className="flex items-center justify-between mb-2">
         <div>
           <h3 className="font-medium">{provider.name}</h3>
-          <p className="text-sm text-[#666]">{provider.description || "MCP integration"}</p>
+          <p className="text-sm text-[var(--color-text-muted)]">{provider.description || "MCP integration"}</p>
         </div>
         {keys.length > 0 ? (
-          <span className="text-[#f97316] text-xs flex items-center gap-1 bg-[#f97316]/10 px-2 py-1 rounded">
+          <span className="text-[var(--color-accent)] text-xs flex items-center gap-1 bg-[var(--color-accent-10)] px-2 py-1 rounded">
             <CheckIcon className="w-3 h-3" />
             {keys.length} key{keys.length !== 1 ? "s" : ""}
           </span>
         ) : (
-          <span className="text-[#666] text-xs bg-[#1a1a1a] px-2 py-1 rounded">
+          <span className="text-[var(--color-text-muted)] text-xs bg-[var(--color-surface-raised)] px-2 py-1 rounded">
             Not configured
           </span>
         )}
@@ -1465,11 +1504,11 @@ function IntegrationKeyCard({
         <div className="mt-3 space-y-2">
           {/* Global Key */}
           {globalKey && (
-            <div className="flex items-center justify-between text-sm bg-[#0a0a0a] rounded px-3 py-2">
+            <div className="flex items-center justify-between text-sm bg-[var(--color-bg)] rounded px-3 py-2">
               <div className="flex items-center gap-2">
-                <span className="text-[#888]">Global</span>
-                <span className="text-[#555]">·</span>
-                <span className="text-[#666] font-mono text-xs">{globalKey.key_hint}</span>
+                <span className="text-[var(--color-text-secondary)]">Global</span>
+                <span className="text-[var(--color-text-faint)]">·</span>
+                <span className="text-[var(--color-text-muted)] font-mono text-xs">{globalKey.key_hint}</span>
               </div>
               <button
                 onClick={() => handleDeleteKey(globalKey.id, "Global")}
@@ -1482,15 +1521,15 @@ function IntegrationKeyCard({
 
           {/* Project Keys - show first 2, expand for more */}
           {projectKeys.slice(0, expanded ? undefined : 2).map(key => (
-            <div key={key.id} className="flex items-center justify-between text-sm bg-[#0a0a0a] rounded px-3 py-2">
+            <div key={key.id} className="flex items-center justify-between text-sm bg-[var(--color-bg)] rounded px-3 py-2">
               <div className="flex items-center gap-2 min-w-0">
                 <span
                   className="w-2 h-2 rounded-full flex-shrink-0"
                   style={{ backgroundColor: getProjectColor(key.project_id!) }}
                 />
-                <span className="text-[#888] truncate">{key.name || getProjectName(key.project_id!)}</span>
-                <span className="text-[#555]">·</span>
-                <span className="text-[#666] font-mono text-xs">{key.key_hint}</span>
+                <span className="text-[var(--color-text-secondary)] truncate">{key.name || getProjectName(key.project_id!)}</span>
+                <span className="text-[var(--color-text-faint)]">·</span>
+                <span className="text-[var(--color-text-muted)] font-mono text-xs">{key.key_hint}</span>
               </div>
               <button
                 onClick={() => handleDeleteKey(key.id, key.name || getProjectName(key.project_id!))}
@@ -1504,7 +1543,7 @@ function IntegrationKeyCard({
           {projectKeys.length > 2 && !expanded && (
             <button
               onClick={() => setExpanded(true)}
-              className="text-xs text-[#666] hover:text-[#888] w-full text-center py-1"
+              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] w-full text-center py-1"
             >
               Show {projectKeys.length - 2} more...
             </button>
@@ -1512,7 +1551,7 @@ function IntegrationKeyCard({
         </div>
       )}
 
-      <div className="mt-3 pt-3 border-t border-[#1a1a1a]">
+      <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
         {isEditing ? (
           <div className="space-y-3">
             <input
@@ -1521,7 +1560,7 @@ function IntegrationKeyCard({
               onChange={e => onApiKeyChange(e.target.value)}
               placeholder={inputPlaceholder}
               autoFocus
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
 
             {isBrowserbase && (
@@ -1530,7 +1569,7 @@ function IntegrationKeyCard({
                 value={bbProjectId}
                 onChange={e => setBbProjectId(e.target.value)}
                 placeholder="Browserbase Project ID (optional)"
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] text-sm"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] text-sm"
               />
             )}
 
@@ -1553,14 +1592,14 @@ function IntegrationKeyCard({
                   setSelectedProjectId("");
                   setLocalError(null);
                 }}
-                className="flex-1 px-3 py-1.5 border border-[#333] rounded text-sm hover:border-[#666]"
+                className="flex-1 px-3 py-1.5 border border-[var(--color-border-light)] rounded text-sm hover:border-[var(--color-text-muted)]"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveWithProject}
                 disabled={!apiKey || localSaving}
-                className="flex-1 px-3 py-1.5 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+                className="flex-1 px-3 py-1.5 bg-[var(--color-accent)] text-black rounded text-sm font-medium disabled:opacity-50"
               >
                 {localSaving ? "Saving..." : "Save"}
               </button>
@@ -1578,7 +1617,7 @@ function IntegrationKeyCard({
             </a>
             <button
               onClick={onStartEdit}
-              className="text-sm text-[#f97316] hover:text-[#fb923c]"
+              className="text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
             >
               + Add key
             </button>
@@ -1697,14 +1736,14 @@ function ApiKeysSettings() {
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold mb-1">API Keys</h1>
-          <p className="text-[#666]">
-            Create personal API keys for programmatic access. Use them with the <code className="text-[#888] bg-[#1a1a1a] px-1 rounded text-xs">X-API-Key</code> header.
+          <p className="text-[var(--color-text-muted)]">
+            Create personal API keys for programmatic access. Use them with the <code className="text-[var(--color-text-secondary)] bg-[var(--color-surface-raised)] px-1 rounded text-xs">X-API-Key</code> header.
           </p>
         </div>
         {!showCreate && !newKey && (
           <button
             onClick={() => { setShowCreate(true); setError(null); }}
-            className="flex items-center gap-2 bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-2 rounded font-medium transition flex-shrink-0"
+            className="flex items-center gap-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition flex-shrink-0"
           >
             <PlusIcon className="w-4 h-4" />
             New Key
@@ -1719,23 +1758,23 @@ function ApiKeysSettings() {
             <CheckIcon className="w-5 h-5" />
             <span className="font-medium">API key created</span>
           </div>
-          <p className="text-sm text-[#888] mb-3">
+          <p className="text-sm text-[var(--color-text-secondary)] mb-3">
             Copy this key now. You won't be able to see it again.
           </p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 bg-[#0a0a0a] px-3 py-2 rounded font-mono text-sm text-[#e0e0e0] break-all select-all">
+            <code className="flex-1 bg-[var(--color-bg)] px-3 py-2 rounded font-mono text-sm text-[var(--color-text)] break-all select-all">
               {newKey}
             </code>
             <button
               onClick={copyKey}
-              className="px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded text-sm flex-shrink-0"
+              className="px-3 py-2 bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] rounded text-sm flex-shrink-0"
             >
               {copied ? "Copied!" : "Copy"}
             </button>
           </div>
           <button
             onClick={() => { setNewKey(null); setShowCreate(false); }}
-            className="mt-3 text-sm text-[#666] hover:text-[#888]"
+            className="mt-3 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
           >
             Done
           </button>
@@ -1744,26 +1783,26 @@ function ApiKeysSettings() {
 
       {/* Create Form */}
       {showCreate && !newKey && (
-        <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 mb-6">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 mb-6">
           <h3 className="font-medium mb-4">Create new API key</h3>
           <div className="space-y-4 max-w-md">
             <div>
-              <label className="block text-sm text-[#666] mb-1">Name</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
                 placeholder="e.g. CI Pipeline, My Script"
                 autoFocus
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
               />
             </div>
             <div>
-              <label className="block text-sm text-[#666] mb-1">Expiration</label>
+              <label className="block text-sm text-[var(--color-text-muted)] mb-1">Expiration</label>
               <select
                 value={expiresInDays}
                 onChange={e => setExpiresInDays(e.target.value)}
-                className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
               >
                 <option value="30">30 days</option>
                 <option value="90">90 days</option>
@@ -1778,14 +1817,14 @@ function ApiKeysSettings() {
             <div className="flex gap-2">
               <button
                 onClick={() => { setShowCreate(false); setError(null); setName(""); }}
-                className="flex-1 px-3 py-2 border border-[#333] rounded text-sm hover:border-[#666]"
+                className="flex-1 px-3 py-2 border border-[var(--color-border-light)] rounded text-sm hover:border-[var(--color-text-muted)]"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreate}
                 disabled={creating || !name.trim()}
-                className="flex-1 px-3 py-2 bg-[#f97316] text-black rounded text-sm font-medium disabled:opacity-50"
+                className="flex-1 px-3 py-2 bg-[var(--color-accent)] text-black rounded text-sm font-medium disabled:opacity-50"
               >
                 {creating ? "Creating..." : "Create Key"}
               </button>
@@ -1796,7 +1835,7 @@ function ApiKeysSettings() {
 
       {/* Keys List */}
       {keys.length === 0 ? (
-        <div className="text-center py-12 text-[#666]">
+        <div className="text-center py-12 text-[var(--color-text-muted)]">
           <p className="text-lg mb-2">No API keys yet</p>
           <p className="text-sm">Create an API key to access apteva programmatically.</p>
         </div>
@@ -1805,8 +1844,8 @@ function ApiKeysSettings() {
           {keys.map(key => (
             <div
               key={key.id}
-              className={`bg-[#111] border rounded-lg p-4 flex items-center gap-4 ${
-                !key.is_active || isExpired(key.expires_at) ? "border-[#1a1a1a] opacity-60" : "border-[#1a1a1a]"
+              className={`bg-[var(--color-surface)] border rounded-lg p-4 flex items-center gap-4 ${
+                !key.is_active || isExpired(key.expires_at) ? "border-[var(--color-border)] opacity-60" : "border-[var(--color-border)]"
               }`}
             >
               <div className="flex-1 min-w-0">
@@ -1819,8 +1858,8 @@ function ApiKeysSettings() {
                     <span className="text-xs text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded">Expired</span>
                   )}
                 </div>
-                <div className="flex items-center gap-3 text-sm text-[#666]">
-                  <code className="font-mono text-xs bg-[#0a0a0a] px-2 py-0.5 rounded">{key.prefix}...</code>
+                <div className="flex items-center gap-3 text-sm text-[var(--color-text-muted)]">
+                  <code className="font-mono text-xs bg-[var(--color-bg)] px-2 py-0.5 rounded">{key.prefix}...</code>
                   <span>Created {formatDate(key.created_at)}</span>
                   {key.expires_at && <span>Expires {formatDate(key.expires_at)}</span>}
                   {key.last_used_at && <span>Last used {formatDate(key.last_used_at)}</span>}
@@ -1841,9 +1880,9 @@ function ApiKeysSettings() {
 
       {/* Usage Info */}
       {keys.length > 0 && (
-        <div className="mt-6 bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+        <div className="mt-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
           <h3 className="font-medium mb-2 text-sm">Usage</h3>
-          <code className="block bg-[#0a0a0a] px-3 py-2 rounded font-mono text-xs text-[#888]">
+          <code className="block bg-[var(--color-bg)] px-3 py-2 rounded font-mono text-xs text-[var(--color-text-secondary)]">
             curl -H "X-API-Key: apt_..." http://localhost:4280/api/agents
           </code>
         </div>
@@ -1909,26 +1948,26 @@ function AccountSettings() {
     <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Account Settings</h1>
-        <p className="text-[#666]">Manage your account and security.</p>
+        <p className="text-[var(--color-text-muted)]">Manage your account and security.</p>
       </div>
 
       {/* User Info */}
       {user && (
-        <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 mb-6">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 mb-6">
           <h3 className="font-medium mb-3">Profile</h3>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-[#666]">Username</span>
+              <span className="text-[var(--color-text-muted)]">Username</span>
               <span>{user.username}</span>
             </div>
             {user.email && (
               <div className="flex justify-between">
-                <span className="text-[#666]">Email</span>
+                <span className="text-[var(--color-text-muted)]">Email</span>
                 <span>{user.email}</span>
               </div>
             )}
             <div className="flex justify-between">
-              <span className="text-[#666]">Role</span>
+              <span className="text-[var(--color-text-muted)]">Role</span>
               <span className="capitalize">{user.role}</span>
             </div>
           </div>
@@ -1936,37 +1975,37 @@ function AccountSettings() {
       )}
 
       {/* Change Password */}
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
         <h3 className="font-medium mb-4">Change Password</h3>
 
         <div className="space-y-4 max-w-md">
           <div>
-            <label className="block text-sm text-[#666] mb-1">Current Password</label>
+            <label className="block text-sm text-[var(--color-text-muted)] mb-1">Current Password</label>
             <input
               type="password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
 
           <div>
-            <label className="block text-sm text-[#666] mb-1">New Password</label>
+            <label className="block text-sm text-[var(--color-text-muted)] mb-1">New Password</label>
             <input
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
 
           <div>
-            <label className="block text-sm text-[#666] mb-1">Confirm New Password</label>
+            <label className="block text-sm text-[var(--color-text-muted)] mb-1">Confirm New Password</label>
             <input
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-3 py-2 focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
 
@@ -1983,7 +2022,7 @@ function AccountSettings() {
           <button
             onClick={handleChangePassword}
             disabled={saving || !currentPassword || !newPassword || !confirmPassword}
-            className="px-4 py-2 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded text-sm font-medium transition"
+            className="px-4 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded text-sm font-medium transition"
           >
             {saving ? "Updating..." : "Update Password"}
           </button>
@@ -2044,12 +2083,12 @@ function DataSettings() {
     <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Data Management</h1>
-        <p className="text-[#666]">Manage stored data and telemetry.</p>
+        <p className="text-[var(--color-text-muted)]">Manage stored data and telemetry.</p>
       </div>
 
-      <div className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
         <h3 className="font-medium mb-2">Telemetry Data</h3>
-        <p className="text-sm text-[#666] mb-4">
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">
           {eventCount !== null
             ? `${eventCount.toLocaleString()} events stored`
             : "Loading..."}
@@ -2197,7 +2236,7 @@ function ChannelsSettings() {
 
   const statusColors: Record<string, string> = {
     running: "bg-green-500/20 text-green-400",
-    stopped: "bg-[#333] text-[#666]",
+    stopped: "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]",
     error: "bg-red-500/20 text-red-400",
   };
 
@@ -2212,11 +2251,11 @@ function ChannelsSettings() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-semibold mb-1">Channels</h2>
-          <p className="text-sm text-[#666]">Connect agents to external messaging platforms</p>
+          <p className="text-sm text-[var(--color-text-muted)]">Connect agents to external messaging platforms</p>
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 bg-[#f97316] hover:bg-[#fb923c] text-black px-3 py-1.5 rounded text-sm font-medium transition"
+          className="flex items-center gap-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-3 py-1.5 rounded text-sm font-medium transition"
         >
           <PlusIcon /> Add Channel
         </button>
@@ -2233,22 +2272,22 @@ function ChannelsSettings() {
 
       {/* Create form */}
       {showForm && (
-        <div className="mb-6 bg-[#111] border border-[#1a1a1a] rounded-lg p-4 space-y-3">
-          <h3 className="text-sm font-medium text-[#888] mb-2">New Telegram Channel</h3>
+        <div className="mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 space-y-3">
+          <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2">New Telegram Channel</h3>
 
           <div>
-            <label className="block text-xs text-[#666] mb-1">Channel Name</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Channel Name</label>
             <input
               type="text"
               value={formData.name}
               onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
               placeholder="e.g. My Telegram Bot"
-              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-[#666] mb-1">Agent</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Agent</label>
             <Select
               value={formData.agent_id}
               options={agents.map(a => ({ value: a.id, label: a.name }))}
@@ -2258,16 +2297,16 @@ function ChannelsSettings() {
           </div>
 
           <div>
-            <label className="block text-xs text-[#666] mb-1">Bot Token</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Bot Token</label>
             <input
               type="password"
               value={formData.botToken}
               onChange={e => setFormData(prev => ({ ...prev, botToken: e.target.value }))}
               placeholder="From @BotFather on Telegram"
-              className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#f97316]"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
             />
-            <p className="text-xs text-[#555] mt-1">
-              Create a bot via <a href="https://t.me/BotFather" target="_blank" className="text-[#f97316] hover:underline">@BotFather</a> on Telegram to get a token.
+            <p className="text-xs text-[var(--color-text-faint)] mt-1">
+              Create a bot via <a href="https://t.me/BotFather" target="_blank" className="text-[var(--color-accent)] hover:underline">@BotFather</a> on Telegram to get a token.
             </p>
           </div>
 
@@ -2275,13 +2314,13 @@ function ChannelsSettings() {
             <button
               onClick={createChannel}
               disabled={creating || !formData.name || !formData.agent_id || !formData.botToken}
-              className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-4 py-1.5 rounded text-sm font-medium transition"
+              className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-1.5 rounded text-sm font-medium transition"
             >
               {creating ? "Creating..." : "Create"}
             </button>
             <button
               onClick={() => { setShowForm(false); setFormData({ name: "", agent_id: "", botToken: "" }); }}
-              className="border border-[#333] hover:border-[#444] px-4 py-1.5 rounded text-sm transition"
+              className="border border-[var(--color-border-light)] hover:border-[var(--color-scrollbar)] px-4 py-1.5 rounded text-sm transition"
             >
               Cancel
             </button>
@@ -2291,16 +2330,16 @@ function ChannelsSettings() {
 
       {/* Channel list */}
       {loading ? (
-        <p className="text-[#666] text-sm">Loading channels...</p>
+        <p className="text-[var(--color-text-muted)] text-sm">Loading channels...</p>
       ) : channels.length === 0 ? (
-        <div className="text-center py-12 text-[#666]">
+        <div className="text-center py-12 text-[var(--color-text-muted)]">
           <p className="text-lg mb-2">No channels configured</p>
           <p className="text-sm">Add a Telegram channel to let users message your agents directly.</p>
         </div>
       ) : (
         <div className="space-y-3">
           {channels.map(channel => (
-            <div key={channel.id} className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4">
+            <div key={channel.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
@@ -2309,7 +2348,7 @@ function ChannelsSettings() {
                       {channel.status}
                     </span>
                   </div>
-                  <p className="text-sm text-[#666]">
+                  <p className="text-sm text-[var(--color-text-muted)]">
                     {channel.type === "telegram" ? "Telegram" : channel.type} → {getAgentName(channel.agent_id)}
                   </p>
                   {channel.status === "error" && channel.error && (
@@ -2321,7 +2360,7 @@ function ChannelsSettings() {
                     onClick={() => toggleChannel(channel)}
                     className={`px-3 py-1 rounded text-xs font-medium transition ${
                       channel.status === "running"
-                        ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
+                        ? "bg-[var(--color-accent-20)] text-[var(--color-accent)] hover:bg-[var(--color-accent-30)]"
                         : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
                     }`}
                   >
@@ -2329,7 +2368,7 @@ function ChannelsSettings() {
                   </button>
                   <button
                     onClick={() => deleteChannel(channel)}
-                    className="text-[#666] hover:text-red-400 transition text-sm"
+                    className="text-[var(--color-text-muted)] hover:text-red-400 transition text-sm"
                   >
                     ×
                   </button>
@@ -2449,13 +2488,13 @@ function AssistantSettings() {
   };
 
   if (loading) {
-    return <div className="text-[#666]">Loading assistant settings...</div>;
+    return <div className="text-[var(--color-text-muted)]">Loading assistant settings...</div>;
   }
 
   return (
     <div className="max-w-2xl">
       <h2 className="text-lg font-medium mb-1">Apteva Assistant</h2>
-      <p className="text-sm text-[#666] mb-6">Configure the built-in AI assistant that manages your agents and platform.</p>
+      <p className="text-sm text-[var(--color-text-muted)] mb-6">Configure the built-in AI assistant that manages your agents and platform.</p>
 
       {message && (
         <div className={`mb-4 px-3 py-2 rounded text-sm ${
@@ -2467,9 +2506,9 @@ function AssistantSettings() {
 
       {/* Status */}
       <div className="mb-6 flex items-center gap-3">
-        <span className="text-sm text-[#666]">Status:</span>
+        <span className="text-sm text-[var(--color-text-muted)]">Status:</span>
         <span className={`px-2 py-1 rounded text-xs font-medium ${
-          status === "running" ? "bg-[#3b82f6]/20 text-[#3b82f6]" : "bg-[#333] text-[#666]"
+          status === "running" ? "bg-[#3b82f6]/20 text-[#3b82f6]" : "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"
         }`}>
           {status}
         </span>
@@ -2478,7 +2517,7 @@ function AssistantSettings() {
           disabled={starting}
           className={`px-3 py-1.5 rounded text-sm font-medium transition ${
             status === "running"
-              ? "bg-[#f97316]/20 text-[#f97316] hover:bg-[#f97316]/30"
+              ? "bg-[var(--color-accent-20)] text-[var(--color-accent)] hover:bg-[var(--color-accent-30)]"
               : "bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30"
           } disabled:opacity-50`}
         >
@@ -2488,7 +2527,7 @@ function AssistantSettings() {
 
       {/* Provider */}
       <div className="mb-4">
-        <label className="block text-sm text-[#666] mb-1">Provider</label>
+        <label className="block text-sm text-[var(--color-text-muted)] mb-1">Provider</label>
         <Select
           value={provider}
           onChange={handleProviderChange}
@@ -2499,7 +2538,7 @@ function AssistantSettings() {
 
       {/* Model */}
       <div className="mb-4">
-        <label className="block text-sm text-[#666] mb-1">Model</label>
+        <label className="block text-sm text-[var(--color-text-muted)] mb-1">Model</label>
         <Select
           value={model}
           onChange={setModel}
@@ -2511,15 +2550,15 @@ function AssistantSettings() {
       {/* Built-in Tools - Anthropic only */}
       {provider === "anthropic" && (
         <div className="mb-4">
-          <label className="block text-sm text-[#666] mb-1">Built-in Tools</label>
+          <label className="block text-sm text-[var(--color-text-muted)] mb-1">Built-in Tools</label>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => setWebSearch(!webSearch)}
               className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
                 webSearch
-                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
-                  : "border-[#222] hover:border-[#333] text-[#888]"
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
+                  : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
               }`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2532,8 +2571,8 @@ function AssistantSettings() {
               onClick={() => setWebFetch(!webFetch)}
               className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
                 webFetch
-                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
-                  : "border-[#222] hover:border-[#333] text-[#888]"
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
+                  : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
               }`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2542,18 +2581,18 @@ function AssistantSettings() {
               <span className="text-sm">Web Fetch</span>
             </button>
           </div>
-          <p className="text-xs text-[#555] mt-2">Provider-native tools for real-time web access</p>
+          <p className="text-xs text-[var(--color-text-faint)] mt-2">Provider-native tools for real-time web access</p>
         </div>
       )}
 
       {/* System Prompt */}
       <div className="mb-6">
-        <label className="block text-sm text-[#666] mb-1">System Prompt</label>
+        <label className="block text-sm text-[var(--color-text-muted)] mb-1">System Prompt</label>
         <textarea
           value={systemPrompt}
           onChange={e => setSystemPrompt(e.target.value)}
           rows={12}
-          className="w-full bg-[#111] border border-[#1a1a1a] rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#f97316] resize-y"
+          className="w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-[var(--color-accent)] resize-y"
         />
       </div>
 
@@ -2561,13 +2600,13 @@ function AssistantSettings() {
       <button
         onClick={handleSave}
         disabled={!hasChanges || saving}
-        className="bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
+        className="bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
       >
         {saving ? "Saving..." : "Save Changes"}
       </button>
 
       {status === "running" && hasChanges && (
-        <p className="text-xs text-[#666] mt-2">Changes will be applied to the running assistant</p>
+        <p className="text-xs text-[var(--color-text-muted)] mt-2">Changes will be applied to the running assistant</p>
       )}
     </div>
   );

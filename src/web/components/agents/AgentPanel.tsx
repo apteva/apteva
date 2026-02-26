@@ -4,7 +4,7 @@ import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, Re
 import { formatCron, formatRelativeTime, TrajectoryView } from "../tasks/TasksPage";
 import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
-import { useTelemetry } from "../../context";
+import { useTelemetry, useTheme } from "../../context";
 import { useAuth } from "../../context";
 import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, MultiAgentConfig, OperatorConfig, Task } from "../../types";
 import { getMultiAgentConfig, getOperatorConfig } from "../../types";
@@ -35,9 +35,9 @@ export function AgentPanel({ agent, providers, onClose, onStartAgent, onUpdateAg
   const [activeTab, setActiveTab] = useState<Tab>("chat");
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-[#0a0a0a] border-l border-[#1a1a1a]">
+    <div className="w-full h-full flex flex-col overflow-hidden bg-[var(--color-bg)] border-l border-[var(--color-border)]">
       {/* Header with tabs */}
-      <div className="border-b border-[#1a1a1a] flex items-center">
+      <div className="border-b border-[var(--color-border)] flex items-center">
         {/* Scrollable tabs */}
         <div className="flex-1 overflow-x-auto scrollbar-hide px-2 md:px-4">
           <div className="flex gap-1">
@@ -65,7 +65,7 @@ export function AgentPanel({ agent, providers, onClose, onStartAgent, onUpdateAg
         {/* Close button - fixed on right */}
         <button
           onClick={onClose}
-          className="text-[#666] hover:text-[#e0e0e0] transition p-2 flex-shrink-0 mr-2"
+          className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition p-2 flex-shrink-0 mr-2"
         >
           <CloseIcon />
         </button>
@@ -102,8 +102,8 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
       onClick={onClick}
       className={`px-4 py-3 text-sm font-medium border-b-2 transition ${
         active
-          ? "border-[#f97316] text-[#e0e0e0]"
-          : "border-transparent text-[#666] hover:text-[#888]"
+          ? "border-[var(--color-accent)] text-[var(--color-text)]"
+          : "border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
       }`}
     >
       {children}
@@ -112,6 +112,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 }
 
 function ChatTab({ agent, onStartAgent }: { agent: Agent; onStartAgent: (e?: React.MouseEvent) => void }) {
+  const { theme } = useTheme();
   if (agent.status === "running" && agent.port) {
     return (
       <Chat
@@ -120,13 +121,14 @@ function ChatTab({ agent, onStartAgent }: { agent: Agent; onStartAgent: (e?: Rea
         placeholder="Message this agent..."
         context={agent.systemPrompt}
         variant="terminal"
+        theme={theme.id as "light" | "dark"}
         headerTitle={agent.name}
       />
     );
   }
 
   return (
-    <div className="flex-1 flex items-center justify-center text-[#666]">
+    <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
       <div className="text-center">
         <p className="text-lg mb-2">Agent is not running</p>
         <button
@@ -149,6 +151,7 @@ interface Thread {
 }
 
 function ThreadsTab({ agent }: { agent: Agent }) {
+  const { theme: themeObj } = useTheme();
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -223,7 +226,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
 
   if (agent.status !== "running") {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Start the agent to view threads</p>
       </div>
     );
@@ -231,7 +234,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Loading threads...</p>
       </div>
     );
@@ -252,7 +255,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
       {ConfirmDialog}
       <div className="flex-1 flex flex-col overflow-hidden">
         {loadingMessages ? (
-          <div className="flex-1 flex items-center justify-center text-[#666]">Loading messages...</div>
+          <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">Loading messages...</div>
         ) : (
           <Chat
             key={selectedThread}
@@ -263,6 +266,7 @@ function ThreadsTab({ agent }: { agent: Agent }) {
             placeholder="Continue this conversation..."
             context={agent.systemPrompt}
             variant="terminal"
+            theme={themeObj.id as "light" | "dark"}
             showHeader={true}
             onHeaderBack={() => { setSelectedThread(null); setInitialMessages([]); }}
           />
@@ -278,29 +282,29 @@ function ThreadsTab({ agent }: { agent: Agent }) {
     {ConfirmDialog}
     <div className="flex-1 overflow-auto">
       {threads.length === 0 ? (
-        <div className="flex items-center justify-center h-full text-[#666]">
+        <div className="flex items-center justify-center h-full text-[var(--color-text-muted)]">
           <p>No conversation threads yet</p>
         </div>
       ) : (
-        <div className="divide-y divide-[#1a1a1a]">
+        <div className="divide-y divide-[var(--color-border)]">
           {threads.map(thread => (
             <div
               key={thread.id}
               onClick={() => openThread(thread.id)}
-              className="p-4 cursor-pointer hover:bg-[#111] transition flex items-center justify-between"
+              className="p-4 cursor-pointer hover:bg-[var(--color-surface)] transition flex items-center justify-between"
             >
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">
                   {thread.title || `Thread ${thread.id.slice(0, 8)}`}
                 </p>
-                <p className="text-xs text-[#666] mt-1">
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
                   {new Date(thread.updated_at || thread.created_at).toLocaleString()}
                   {thread.message_count !== undefined && ` • ${thread.message_count} messages`}
                 </p>
               </div>
               <button
                 onClick={(e) => deleteThread(thread.id, e)}
-                className="text-[#666] hover:text-red-400 text-lg ml-4"
+                className="text-[var(--color-text-muted)] hover:text-red-400 text-lg ml-4"
               >
                 ×
               </button>
@@ -321,6 +325,10 @@ function TasksTab({ agent }: { agent: Agent }) {
   const [filter, setFilter] = useState<string>("all");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [loadingTask, setLoadingTask] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [executing, setExecuting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
   const { events } = useTelemetry({ agent_id: agent.id, category: "task" });
 
   // Reset state when agent changes
@@ -368,6 +376,58 @@ function TasksTab({ agent }: { agent: Agent }) {
     }
   };
 
+  const handleExecuteTask = async () => {
+    if (!selectedTask || executing) return;
+    setExecuting(true);
+    try {
+      await authFetch(`/api/tasks/${agent.id}/${selectedTask.id}/execute`, { method: "POST" });
+      setSelectedTask(null);
+      fetchTasks();
+    } catch (e) {
+      console.error("Failed to execute task:", e);
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  const handleDeleteTask = async () => {
+    if (!selectedTask || deleting) return;
+    const ok = await confirm(`Are you sure you want to delete "${selectedTask.title}"?`, {
+      title: "Delete Task",
+      confirmText: "Delete",
+      confirmVariant: "danger",
+    });
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await authFetch(`/api/tasks/${agent.id}/${selectedTask.id}`, { method: "DELETE" });
+      setSelectedTask(null);
+      fetchTasks();
+    } catch (e) {
+      console.error("Failed to delete task:", e);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleCreateTask = async (data: { title: string; description: string; type: string; priority: number; execute_at?: string; recurrence?: string }) => {
+    try {
+      const body: Record<string, unknown> = { ...data };
+      if (data.execute_at) body.execute_at = new Date(data.execute_at).toISOString();
+      const res = await authFetch(`/api/tasks/${agent.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setShowCreateForm(false);
+        fetchTasks();
+      }
+    } catch (e) {
+      console.error("Failed to create task:", e);
+    }
+  };
+
   // Refetch when agent changes, filter changes, or task telemetry arrives
   useEffect(() => {
     setLoading(true);
@@ -384,7 +444,7 @@ function TasksTab({ agent }: { agent: Agent }) {
 
   if (agent.status !== "running") {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Start the agent to view tasks</p>
       </div>
     );
@@ -392,7 +452,7 @@ function TasksTab({ agent }: { agent: Agent }) {
 
   if (!agent.features?.tasks) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <div className="text-center">
           <p className="mb-2">Tasks feature is not enabled</p>
           <p className="text-sm">Enable it in Settings to schedule tasks</p>
@@ -403,7 +463,7 @@ function TasksTab({ agent }: { agent: Agent }) {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Loading tasks...</p>
       </div>
     );
@@ -429,14 +489,35 @@ function TasksTab({ agent }: { agent: Agent }) {
   if (selectedTask) {
     return (
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Back button */}
-        <div className="px-4 pt-3 pb-2 border-b border-[#1a1a1a] shrink-0">
+        {ConfirmDialog}
+        {/* Back button + actions */}
+        <div className="px-4 pt-3 pb-2 border-b border-[var(--color-border)] shrink-0 flex items-center justify-between">
           <button
             onClick={() => setSelectedTask(null)}
-            className="text-sm text-[#666] hover:text-[#e0e0e0] transition flex items-center gap-1"
+            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition flex items-center gap-1"
           >
             <span>←</span> Back to tasks
           </button>
+          <div className="flex items-center gap-2">
+            {(selectedTask.status === "pending" || selectedTask.status === "completed") && (
+              <button
+                onClick={handleExecuteTask}
+                disabled={executing}
+                title="Execute now"
+                className="text-[var(--color-accent)] hover:opacity-80 transition disabled:opacity-50"
+              >
+                <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </button>
+            )}
+            <button
+              onClick={handleDeleteTask}
+              disabled={deleting}
+              title="Delete task"
+              className="text-red-400 hover:text-red-300 transition disabled:opacity-50"
+            >
+              <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            </button>
+          </div>
         </div>
 
         {/* Task detail content */}
@@ -454,26 +535,26 @@ function TasksTab({ agent }: { agent: Agent }) {
           {/* Description */}
           {selectedTask.description && (
             <div>
-              <h4 className="text-xs text-[#666] uppercase tracking-wider mb-1">Description</h4>
-              <p className="text-sm text-[#888] whitespace-pre-wrap">{selectedTask.description}</p>
+              <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1">Description</h4>
+              <p className="text-sm text-[var(--color-text-secondary)] whitespace-pre-wrap">{selectedTask.description}</p>
             </div>
           )}
 
           {/* Metadata */}
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
-              <span className="text-[#666]">Type</span>
+              <span className="text-[var(--color-text-muted)]">Type</span>
               <p className="capitalize">{selectedTask.type}</p>
             </div>
             <div>
-              <span className="text-[#666]">Priority</span>
+              <span className="text-[var(--color-text-muted)]">Priority</span>
               <p>{selectedTask.priority}</p>
             </div>
             {selectedTask.recurrence && (
               <div>
-                <span className="text-[#666]">Recurrence</span>
+                <span className="text-[var(--color-text-muted)]">Recurrence</span>
                 <p>{formatCron(selectedTask.recurrence)}</p>
-                <p className="text-xs text-[#444] mt-0.5 font-mono">{selectedTask.recurrence}</p>
+                <p className="text-xs text-[var(--color-text-faint)] mt-0.5 font-mono">{selectedTask.recurrence}</p>
               </div>
             )}
           </div>
@@ -481,31 +562,31 @@ function TasksTab({ agent }: { agent: Agent }) {
           {/* Timestamps */}
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-[#666]">Created</span>
+              <span className="text-[var(--color-text-muted)]">Created</span>
               <span>{new Date(selectedTask.created_at).toLocaleString()}</span>
             </div>
             {selectedTask.execute_at && (
               <div className="flex justify-between">
-                <span className="text-[#666]">Scheduled</span>
-                <span className="text-[#f97316]">{formatRelativeTime(selectedTask.execute_at)}</span>
+                <span className="text-[var(--color-text-muted)]">Scheduled</span>
+                <span className="text-[var(--color-accent)]">{formatRelativeTime(selectedTask.execute_at)}</span>
               </div>
             )}
             {selectedTask.executed_at && (
               <div className="flex justify-between">
-                <span className="text-[#666]">Started</span>
+                <span className="text-[var(--color-text-muted)]">Started</span>
                 <span>{new Date(selectedTask.executed_at).toLocaleString()}</span>
               </div>
             )}
             {selectedTask.completed_at && (
               <div className="flex justify-between">
-                <span className="text-[#666]">Completed</span>
+                <span className="text-[var(--color-text-muted)]">Completed</span>
                 <span>{new Date(selectedTask.completed_at).toLocaleString()}</span>
               </div>
             )}
             {selectedTask.next_run && (
               <div className="flex justify-between">
-                <span className="text-[#666]">Next Run</span>
-                <span className="text-[#f97316]">{formatRelativeTime(selectedTask.next_run)}</span>
+                <span className="text-[var(--color-text-muted)]">Next Run</span>
+                <span className="text-[var(--color-accent)]">{formatRelativeTime(selectedTask.next_run)}</span>
               </div>
             )}
           </div>
@@ -535,13 +616,13 @@ function TasksTab({ agent }: { agent: Agent }) {
           {/* Trajectory */}
           {loadingTask && !selectedTask.trajectory && (
             <div>
-              <h4 className="text-xs text-[#666] uppercase tracking-wider mb-2">Trajectory</h4>
-              <div className="text-sm text-[#555]">Loading trajectory...</div>
+              <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Trajectory</h4>
+              <div className="text-sm text-[var(--color-text-faint)]">Loading trajectory...</div>
             </div>
           )}
           {selectedTask.trajectory && selectedTask.trajectory.length > 0 && (
             <div>
-              <h4 className="text-xs text-[#666] uppercase tracking-wider mb-2">
+              <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
                 Trajectory ({selectedTask.trajectory.length} steps)
               </h4>
               <TrajectoryView trajectory={selectedTask.trajectory} />
@@ -554,28 +635,45 @@ function TasksTab({ agent }: { agent: Agent }) {
 
   return (
     <div className="flex-1 overflow-auto p-4">
-      {/* Filter tabs */}
-      <div className="flex gap-2 mb-4">
-        {filterOptions.map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => setFilter(opt.value)}
+      {/* Create Task Button + Filter tabs */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex gap-2">
+          {filterOptions.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setFilter(opt.value)}
             className={`px-3 py-1.5 rounded text-sm transition ${
               filter === opt.value
-                ? "bg-[#f97316] text-black"
-                : "bg-[#1a1a1a] hover:bg-[#222]"
+                ? "bg-[var(--color-accent)] text-black"
+                : "bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)]"
             }`}
           >
             {opt.label}
           </button>
         ))}
+        </div>
+        <button
+          onClick={() => setShowCreateForm(!showCreateForm)}
+          className="px-3 py-1.5 rounded text-sm bg-[var(--color-accent)] text-black hover:opacity-90 transition flex items-center gap-1 flex-shrink-0"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+          New
+        </button>
       </div>
+
+      {/* Inline Create Form */}
+      {showCreateForm && (
+        <AgentCreateTaskForm
+          onSubmit={handleCreateTask}
+          onCancel={() => setShowCreateForm(false)}
+        />
+      )}
 
       {tasks.length === 0 ? (
         <div className="text-center py-10">
-          <TasksIcon className="w-10 h-10 mx-auto mb-3 text-[#333]" />
-          <p className="text-[#666]">No {filter === "all" ? "" : filter + " "}tasks</p>
-          <p className="text-sm text-[#444] mt-1">Tasks will appear here when created</p>
+          <TasksIcon className="w-10 h-10 mx-auto mb-3 text-[var(--color-border-light)]" />
+          <p className="text-[var(--color-text-muted)]">No {filter === "all" ? "" : filter + " "}tasks</p>
+          <p className="text-sm text-[var(--color-text-faint)] mt-1">Tasks will appear here when created</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -583,7 +681,7 @@ function TasksTab({ agent }: { agent: Agent }) {
             <div
               key={task.id}
               onClick={() => selectTask(task)}
-              className="bg-[#111] border border-[#1a1a1a] rounded-lg p-4 cursor-pointer hover:border-[#333] transition"
+              className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 cursor-pointer hover:border-[var(--color-border-light)] transition"
             >
               <div className="flex items-start justify-between mb-2">
                 <div className="flex-1 min-w-0">
@@ -595,10 +693,10 @@ function TasksTab({ agent }: { agent: Agent }) {
               </div>
 
               {task.description && (
-                <p className="text-sm text-[#888] mb-2 line-clamp-2">{task.description}</p>
+                <p className="text-sm text-[var(--color-text-secondary)] mb-2 line-clamp-2">{task.description}</p>
               )}
 
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#555]">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--color-text-faint)]">
                 <span className="flex items-center gap-1">
                   {task.type === "recurring"
                     ? <RecurringIcon className="w-3.5 h-3.5" />
@@ -612,10 +710,10 @@ function TasksTab({ agent }: { agent: Agent }) {
                   <span>Priority: {task.priority}</span>
                 )}
                 {task.next_run && (
-                  <span className="text-[#f97316]">{formatRelativeTime(task.next_run)}</span>
+                  <span className="text-[var(--color-accent)]">{formatRelativeTime(task.next_run)}</span>
                 )}
                 {!task.next_run && task.execute_at && (
-                  <span className="text-[#f97316]">{formatRelativeTime(task.execute_at)}</span>
+                  <span className="text-[var(--color-accent)]">{formatRelativeTime(task.execute_at)}</span>
                 )}
                 <span>Created: {new Date(task.created_at).toLocaleDateString()}</span>
               </div>
@@ -639,6 +737,82 @@ function TasksTab({ agent }: { agent: Agent }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function AgentCreateTaskForm({ onSubmit, onCancel }: {
+  onSubmit: (data: { title: string; description: string; type: string; priority: number; execute_at?: string; recurrence?: string }) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [type, setType] = useState("once");
+  const [priority, setPriority] = useState(5);
+  const [executeAt, setExecuteAt] = useState("");
+  const [recurrence, setRecurrence] = useState("");
+
+  return (
+    <div className="bg-[var(--color-surface)] border border-[var(--color-accent)]/30 rounded-lg p-3 mb-4 space-y-3">
+      <input
+        type="text"
+        value={title}
+        onChange={e => setTitle(e.target.value)}
+        className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
+        placeholder="Task title..."
+        autoFocus
+      />
+      <textarea
+        value={description}
+        onChange={e => setDescription(e.target.value)}
+        className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-1.5 text-sm resize-none"
+        rows={2}
+        placeholder="Description (optional)..."
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <select
+          value={type}
+          onChange={e => setType(e.target.value)}
+          className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-2 py-1.5 text-sm"
+        >
+          <option value="once">One-time</option>
+          <option value="recurring">Recurring</option>
+        </select>
+        <input
+          type="number"
+          min={1}
+          max={10}
+          value={priority}
+          onChange={e => setPriority(Number(e.target.value))}
+          className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-2 py-1.5 text-sm"
+          placeholder="Priority"
+        />
+      </div>
+      {type === "once" && (
+        <input
+          type="datetime-local"
+          value={executeAt}
+          onChange={e => setExecuteAt(e.target.value)}
+          className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
+        />
+      )}
+      {type === "recurring" && (
+        <input
+          type="text"
+          value={recurrence}
+          onChange={e => setRecurrence(e.target.value)}
+          className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-1.5 text-sm font-mono"
+          placeholder="*/30 * * * * (cron)"
+        />
+      )}
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="px-3 py-1.5 rounded text-sm bg-[var(--color-surface-raised)] hover:bg-[var(--color-border)] transition">Cancel</button>
+        <button
+          onClick={() => title.trim() && onSubmit({ title: title.trim(), description: description.trim(), type, priority, execute_at: executeAt || undefined, recurrence: recurrence || undefined })}
+          disabled={!title.trim()}
+          className="px-3 py-1.5 rounded text-sm bg-[var(--color-accent)] text-black hover:opacity-90 transition disabled:opacity-50"
+        >Create</button>
+      </div>
     </div>
   );
 }
@@ -712,7 +886,7 @@ function MemoryTab({ agent }: { agent: Agent }) {
 
   if (!agent.features?.memory) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <div className="text-center">
           <p className="mb-2">Memory feature is not enabled</p>
           <p className="text-sm">Enable it in Settings to persist knowledge</p>
@@ -723,7 +897,7 @@ function MemoryTab({ agent }: { agent: Agent }) {
 
   if (agent.status !== "running") {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Start the agent to view memories</p>
       </div>
     );
@@ -731,7 +905,7 @@ function MemoryTab({ agent }: { agent: Agent }) {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Loading memories...</p>
       </div>
     );
@@ -747,7 +921,7 @@ function MemoryTab({ agent }: { agent: Agent }) {
 
   if (!enabled) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <div className="text-center">
           <p className="mb-2">Memory system not initialized</p>
           <p className="text-sm">Check OPENAI_API_KEY for embeddings</p>
@@ -761,7 +935,7 @@ function MemoryTab({ agent }: { agent: Agent }) {
     {ConfirmDialog}
     <div className="flex-1 overflow-auto p-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-medium text-[#888]">Stored Memories ({memories.length})</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)]">Stored Memories ({memories.length})</h3>
         {memories.length > 0 && (
           <button
             onClick={clearAllMemories}
@@ -773,19 +947,19 @@ function MemoryTab({ agent }: { agent: Agent }) {
       </div>
 
       {memories.length === 0 ? (
-        <div className="text-center py-10 text-[#666]">
+        <div className="text-center py-10 text-[var(--color-text-muted)]">
           <p>No memories stored yet</p>
           <p className="text-sm mt-1">The agent will remember important information from conversations</p>
         </div>
       ) : (
         <div className="space-y-3">
           {memories.map(memory => (
-            <div key={memory.id} className="bg-[#111] border border-[#1a1a1a] rounded p-3">
+            <div key={memory.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-3">
               <div className="flex items-start justify-between gap-2">
-                <p className="text-sm text-[#e0e0e0] flex-1">{memory.content}</p>
+                <p className="text-sm text-[var(--color-text)] flex-1">{memory.content}</p>
                 <button
                   onClick={() => deleteMemory(memory.id)}
-                  className="text-[#666] hover:text-red-400 text-sm flex-shrink-0"
+                  className="text-[var(--color-text-muted)] hover:text-red-400 text-sm flex-shrink-0"
                 >
                   ×
                 </button>
@@ -800,11 +974,11 @@ function MemoryTab({ agent }: { agent: Agent }) {
                 }`}>
                   {memory.type}
                 </span>
-                <span className="text-xs text-[#666]">
+                <span className="text-xs text-[var(--color-text-muted)]">
                   {new Date(memory.created_at).toLocaleString()}
                 </span>
                 {memory.importance && (
-                  <span className="text-xs text-[#555]">
+                  <span className="text-xs text-[var(--color-text-faint)]">
                     importance: {memory.importance.toFixed(1)}
                   </span>
                 )}
@@ -961,7 +1135,7 @@ function FilesTab({ agent }: { agent: Agent }) {
 
   if (!agent.features?.files) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <div className="text-center">
           <p className="mb-2">Files feature is not enabled</p>
           <p className="text-sm">Enable it in Settings to manage files</p>
@@ -972,7 +1146,7 @@ function FilesTab({ agent }: { agent: Agent }) {
 
   if (agent.status !== "running") {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Start the agent to view files</p>
       </div>
     );
@@ -980,7 +1154,7 @@ function FilesTab({ agent }: { agent: Agent }) {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[#666]">
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         <p>Loading files...</p>
       </div>
     );
@@ -998,7 +1172,7 @@ function FilesTab({ agent }: { agent: Agent }) {
     <>
     {ConfirmDialog}
     <div
-      className={`flex-1 overflow-auto p-4 transition ${dragOver ? "bg-[#f97316]/5" : ""}`}
+      className={`flex-1 overflow-auto p-4 transition ${dragOver ? "bg-[var(--color-accent-5)]" : ""}`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -1012,18 +1186,18 @@ function FilesTab({ agent }: { agent: Agent }) {
       />
 
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-medium text-[#888]">Agent Files ({files.length})</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)]">Agent Files ({files.length})</h3>
         <div className="flex items-center gap-2">
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="text-xs bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 text-black px-3 py-1 rounded font-medium transition"
+            className="text-xs bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-3 py-1 rounded font-medium transition"
           >
             {uploading ? "Uploading..." : "Upload"}
           </button>
           <button
             onClick={fetchFiles}
-            className="text-xs text-[#666] hover:text-[#888]"
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
           >
             Refresh
           </button>
@@ -1037,17 +1211,17 @@ function FilesTab({ agent }: { agent: Agent }) {
       )}
 
       {dragOver && (
-        <div className="mb-4 border-2 border-dashed border-[#f97316] rounded-lg p-8 text-center">
-          <p className="text-[#f97316]">Drop file to upload</p>
+        <div className="mb-4 border-2 border-dashed border-[var(--color-accent)] rounded-lg p-8 text-center">
+          <p className="text-[var(--color-accent)]">Drop file to upload</p>
         </div>
       )}
 
       {files.length === 0 && !dragOver && (
-        <div className="text-center py-10 text-[#666]">
+        <div className="text-center py-10 text-[var(--color-text-muted)]">
           <p>No files stored yet</p>
           <p className="text-sm mt-1">Drop files here, click Upload, or attach files in Chat</p>
           {agent.features?.memory && (
-            <p className="text-xs mt-2 text-[#555]">Files will be auto-ingested into memory</p>
+            <p className="text-xs mt-2 text-[var(--color-text-faint)]">Files will be auto-ingested into memory</p>
           )}
         </div>
       )}
@@ -1055,13 +1229,13 @@ function FilesTab({ agent }: { agent: Agent }) {
       {files.length > 0 && (
         <div className="space-y-2">
           {files.map(file => (
-            <div key={file.id} className="bg-[#111] border border-[#1a1a1a] rounded p-3 flex items-center gap-3">
-              <div className="w-10 h-10 bg-[#1a1a1a] rounded flex items-center justify-center text-[#666]">
+            <div key={file.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-3 flex items-center gap-3">
+              <div className="w-10 h-10 bg-[var(--color-surface-raised)] rounded flex items-center justify-center text-[var(--color-text-muted)]">
                 {getFileIcon(file.mime_type)}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-[#e0e0e0] truncate">{file.filename}</p>
-                <p className="text-xs text-[#666]">
+                <p className="text-sm text-[var(--color-text)] truncate">{file.filename}</p>
+                <p className="text-xs text-[var(--color-text-muted)]">
                   {formatSize(file.size_bytes)} • {new Date(file.created_at).toLocaleString()}
                   {file.source && file.source !== "upload" && ` • ${file.source}`}
                 </p>
@@ -1069,13 +1243,13 @@ function FilesTab({ agent }: { agent: Agent }) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => downloadFile(file.id, file.filename)}
-                  className="text-xs text-[#666] hover:text-[#f97316] px-2 py-1"
+                  className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] px-2 py-1"
                 >
                   ↓
                 </button>
                 <button
                   onClick={() => deleteFile(file.id)}
-                  className="text-[#666] hover:text-red-400 text-sm"
+                  className="text-[var(--color-text-muted)] hover:text-red-400 text-sm"
                 >
                   ×
                 </button>
@@ -1356,7 +1530,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             type="text"
             value={form.name}
             onChange={(e) => setForm(prev => ({ ...prev, name: e.target.value }))}
-            className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 focus:outline-none focus:border-[#f97316] text-[#e0e0e0]"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]"
           />
         </FormField>
 
@@ -1380,7 +1554,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
           <textarea
             value={form.systemPrompt}
             onChange={(e) => setForm(prev => ({ ...prev, systemPrompt: e.target.value }))}
-            className="w-full bg-[#0a0a0a] border border-[#222] rounded px-3 py-2 h-24 resize-none focus:outline-none focus:border-[#f97316] text-[#e0e0e0]"
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 h-24 resize-none focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]"
           />
         </FormField>
 
@@ -1398,16 +1572,16 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                   onClick={() => toggleFeature(key)}
                   className={`flex items-center gap-3 p-3 rounded border text-left transition ${
                     isEnabled
-                      ? "border-[#f97316] bg-[#f97316]/10"
-                      : "border-[#222] hover:border-[#333]"
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
+                      : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)]"
                   }`}
                 >
-                  <Icon className={`w-5 h-5 flex-shrink-0 ${isEnabled ? "text-[#f97316]" : "text-[#666]"}`} />
+                  <Icon className={`w-5 h-5 flex-shrink-0 ${isEnabled ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)]"}`} />
                   <div className="flex-1 min-w-0">
-                    <div className={`text-sm font-medium ${isEnabled ? "text-[#f97316]" : ""}`}>
+                    <div className={`text-sm font-medium ${isEnabled ? "text-[var(--color-accent)]" : ""}`}>
                       {label}
                     </div>
-                    <div className="text-xs text-[#666]">{description}</div>
+                    <div className="text-xs text-[var(--color-text-muted)]">{description}</div>
                   </div>
                 </button>
               );
@@ -1431,7 +1605,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                 onChange={(value) => setOperatorBrowserProvider(value)}
               />
             ) : (
-              <p className="text-sm text-[#666] p-3 border border-[#222] rounded bg-[#0a0a0a]">
+              <p className="text-sm text-[var(--color-text-muted)] p-3 border border-[var(--color-border-light)] rounded bg-[var(--color-bg)]">
                 No browser providers configured. Go to Settings &rarr; Providers to add one.
               </p>
             )}
@@ -1456,8 +1630,8 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
               }))}
               className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
                 form.features.builtinTools?.webSearch
-                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
-                  : "border-[#222] hover:border-[#333] text-[#888]"
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
+                  : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
               }`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1479,8 +1653,8 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
               }))}
               className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
                 form.features.builtinTools?.webFetch
-                  ? "border-[#f97316] bg-[#f97316]/10 text-[#f97316]"
-                  : "border-[#222] hover:border-[#333] text-[#888]"
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
+                  : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
               }`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1489,7 +1663,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
               <span className="text-sm">Web Fetch</span>
             </button>
           </div>
-          <p className="text-xs text-[#555] mt-2">
+          <p className="text-xs text-[var(--color-text-faint)] mt-2">
             Provider-native tools for real-time web access
           </p>
         </FormField>
@@ -1499,7 +1673,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
         {form.features.mcp && (
           <FormField label="MCP Servers">
             {availableMcpServers.length === 0 ? (
-              <p className="text-sm text-[#666]">
+              <p className="text-sm text-[var(--color-text-muted)]">
                 No MCP servers configured. Add servers in the MCP page first.
               </p>
             ) : (
@@ -1519,35 +1693,35 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                       onClick={() => toggleMcpServer(server.id)}
                       className={`w-full flex items-center gap-3 p-3 rounded border text-left transition ${
                         form.mcpServers.includes(server.id)
-                          ? "border-[#f97316] bg-[#f97316]/10"
-                          : "border-[#222] hover:border-[#333]"
+                          ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
+                          : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)]"
                       }`}
                     >
                       <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                        isAvailable ? "bg-green-400" : "bg-[#444]"
+                        isAvailable ? "bg-green-400" : "bg-[var(--color-scrollbar)]"
                       }`} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className={`text-sm font-medium ${form.mcpServers.includes(server.id) ? "text-[#f97316]" : ""}`}>
+                          <span className={`text-sm font-medium ${form.mcpServers.includes(server.id) ? "text-[var(--color-accent)]" : ""}`}>
                             {server.name}
                           </span>
                           {server.project_id === null && (
-                            <span className="text-[10px] text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">Global</span>
+                            <span className="text-[10px] text-[var(--color-text-muted)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 rounded">Global</span>
                           )}
                         </div>
-                        <div className="text-xs text-[#666]">{serverInfo}</div>
+                        <div className="text-xs text-[var(--color-text-muted)]">{serverInfo}</div>
                       </div>
                       <div className={`text-xs px-2 py-0.5 rounded ${
                         isAvailable
                           ? "bg-green-500/20 text-green-400"
-                          : "bg-[#222] text-[#666]"
+                          : "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"
                       }`}>
                         {isRemote ? "remote" : server.status}
                       </div>
                     </button>
                   );
                 })}
-                <p className="text-xs text-[#666] mt-2">
+                <p className="text-xs text-[var(--color-text-muted)] mt-2">
                   Remote servers are always available. Local servers must be running.
                 </p>
               </div>
@@ -1558,7 +1732,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
         {/* Skills Selection */}
         <FormField label="Skills">
           {availableSkills.length === 0 ? (
-            <p className="text-sm text-[#666]">
+            <p className="text-sm text-[var(--color-text-muted)]">
               No skills configured. Add skills in the Skills page first.
             </p>
           ) : (
@@ -1572,27 +1746,27 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                   onClick={() => toggleSkill(skill.id)}
                   className={`w-full flex items-center gap-3 p-3 rounded border text-left transition ${
                     form.skills.includes(skill.id)
-                      ? "border-[#f97316] bg-[#f97316]/10"
-                      : "border-[#222] hover:border-[#333]"
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
+                      : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)]"
                   }`}
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`text-sm font-medium ${form.skills.includes(skill.id) ? "text-[#f97316]" : ""}`}>
+                      <span className={`text-sm font-medium ${form.skills.includes(skill.id) ? "text-[var(--color-accent)]" : ""}`}>
                         {skill.name}
                       </span>
                       {skill.project_id === null && (
-                        <span className="text-[10px] text-[#666] bg-[#1a1a1a] px-1.5 py-0.5 rounded">Global</span>
+                        <span className="text-[10px] text-[var(--color-text-muted)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 rounded">Global</span>
                       )}
                     </div>
-                    <div className="text-xs text-[#666]">{skill.description}</div>
+                    <div className="text-xs text-[var(--color-text-muted)]">{skill.description}</div>
                   </div>
-                  <div className="text-xs px-2 py-0.5 rounded bg-[#222] text-[#666]">
+                  <div className="text-xs px-2 py-0.5 rounded bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]">
                     v{skill.version}
                   </div>
                 </button>
               ))}
-              <p className="text-xs text-[#666] mt-2">
+              <p className="text-xs text-[var(--color-text-muted)] mt-2">
                 Skills provide reusable instructions for the agent.
               </p>
             </div>
@@ -1612,31 +1786,31 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
         <button
           onClick={handleSave}
           disabled={!hasChanges || saving || !form.name}
-          className="w-full bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
+          className="w-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-2 rounded font-medium transition"
         >
           {saving ? "Saving..." : "Save Changes"}
         </button>
 
         {agent.status === "running" && hasChanges && (
-          <p className="text-xs text-[#666] text-center">
+          <p className="text-xs text-[var(--color-text-muted)] text-center">
             Changes will be applied to the running agent
           </p>
         )}
 
         {/* Subscriptions */}
-        <div className="mt-8 pt-6 border-t border-[#222]">
-          <p className="text-sm text-[#666] mb-3">Subscriptions</p>
+        <div className="mt-8 pt-6 border-t border-[var(--color-border-light)]">
+          <p className="text-sm text-[var(--color-text-muted)] mb-3">Subscriptions</p>
           {subscriptions.length === 0 ? (
-            <p className="text-xs text-[#555]">No subscriptions. Set up triggers in Connections to have this agent listen to external events.</p>
+            <p className="text-xs text-[var(--color-text-faint)]">No subscriptions. Set up triggers in Connections to have this agent listen to external events.</p>
           ) : (
             <div className="space-y-2">
               {subscriptions.map(sub => (
-                <div key={sub.id} className="flex items-center gap-2 px-3 py-2 bg-[#111] rounded border border-[#1a1a1a]">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${sub.enabled ? "bg-cyan-400" : "bg-[#444]"}`} />
-                  <span className={`text-sm flex-1 ${sub.enabled ? "text-cyan-400" : "text-[#666]"}`}>
+                <div key={sub.id} className="flex items-center gap-2 px-3 py-2 bg-[var(--color-surface)] rounded border border-[var(--color-border)]">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${sub.enabled ? "bg-cyan-400" : "bg-[var(--color-scrollbar)]"}`} />
+                  <span className={`text-sm flex-1 ${sub.enabled ? "text-cyan-400" : "text-[var(--color-text-muted)]"}`}>
                     {sub.trigger_slug.replace(/_/g, " ")}
                   </span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${sub.enabled ? "bg-cyan-500/10 text-cyan-400" : "bg-[#222] text-[#555]"}`}>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${sub.enabled ? "bg-cyan-500/10 text-cyan-400" : "bg-[var(--color-surface-raised)] text-[var(--color-text-faint)]"}`}>
                     {sub.enabled ? "active" : "disabled"}
                   </span>
                 </div>
@@ -1647,35 +1821,35 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
 
         {/* Developer Info (dev mode only) */}
         {apiKey && (
-          <div className="mt-8 pt-6 border-t border-[#222]">
-            <p className="text-sm text-[#666] mb-3">Developer Info</p>
+          <div className="mt-8 pt-6 border-t border-[var(--color-border-light)]">
+            <p className="text-sm text-[var(--color-text-muted)] mb-3">Developer Info</p>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-[#666]">Agent ID</span>
-                <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888]">{agent.id}</code>
+                <span className="text-xs text-[var(--color-text-muted)]">Agent ID</span>
+                <code className="text-xs bg-[var(--color-surface-raised)] px-2 py-1 rounded text-[var(--color-text-secondary)]">{agent.id}</code>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs text-[#666]">Port</span>
-                <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888]">{agent.port || "N/A"}</code>
+                <span className="text-xs text-[var(--color-text-muted)]">Port</span>
+                <code className="text-xs bg-[var(--color-surface-raised)] px-2 py-1 rounded text-[var(--color-text-secondary)]">{agent.port || "N/A"}</code>
               </div>
               <div className="flex flex-col gap-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-[#666]">API Key</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">API Key</span>
                   <button
                     onClick={() => setShowApiKey(!showApiKey)}
-                    className="text-xs text-[#f97316] hover:text-[#fb923c]"
+                    className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
                   >
                     {showApiKey ? "Hide" : "Show"}
                   </button>
                 </div>
-                <code className="text-xs bg-[#1a1a1a] px-2 py-1 rounded text-[#888] break-all">
+                <code className="text-xs bg-[var(--color-surface-raised)] px-2 py-1 rounded text-[var(--color-text-secondary)] break-all">
                   {showApiKey ? (apiKeyFull || apiKey) : apiKey}
                 </code>
               </div>
               {agent.status === "running" && agent.port && (
                 <div className="flex flex-col gap-1 mt-2">
-                  <span className="text-xs text-[#666]">Test with curl</span>
-                  <code className="text-xs bg-[#1a1a1a] px-2 py-1.5 rounded text-[#666] break-all">
+                  <span className="text-xs text-[var(--color-text-muted)]">Test with curl</span>
+                  <code className="text-xs bg-[var(--color-surface-raised)] px-2 py-1.5 rounded text-[var(--color-text-muted)] break-all">
                     curl -H "X-API-Key: {showApiKey ? (apiKeyFull || apiKey) : "***"}" http://localhost:{agent.port}/config
                   </code>
                 </div>
@@ -1686,13 +1860,13 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
 
         {/* Share Link */}
         {shareToken && (
-          <div className="mt-8 pt-6 border-t border-[#222]">
-            <p className="text-sm text-[#666] mb-3">Share Link</p>
-            <p className="text-xs text-[#555] mb-3">
+          <div className="mt-8 pt-6 border-t border-[var(--color-border-light)]">
+            <p className="text-sm text-[var(--color-text-muted)] mb-3">Share Link</p>
+            <p className="text-xs text-[var(--color-text-faint)] mb-3">
               Anyone with this link can chat with this agent. No login required. Regenerate the API key to invalidate.
             </p>
             <div className="flex gap-2">
-              <code className="flex-1 text-xs bg-[#1a1a1a] px-3 py-2 rounded text-[#888] break-all border border-[#222]">
+              <code className="flex-1 text-xs bg-[var(--color-surface-raised)] px-3 py-2 rounded text-[var(--color-text-secondary)] break-all border border-[var(--color-border-light)]">
                 {`${window.location.origin}/share/${shareToken}`}
               </code>
               <button
@@ -1701,14 +1875,14 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
                   setShareCopied(true);
                   setTimeout(() => setShareCopied(false), 2000);
                 }}
-                className="px-3 py-2 text-xs bg-[#1a1a1a] hover:bg-[#222] border border-[#222] rounded text-[#888] hover:text-[#e0e0e0] transition flex-shrink-0"
+                className="px-3 py-2 text-xs bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] border border-[var(--color-border-light)] rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition flex-shrink-0"
               >
                 {shareCopied ? "Copied!" : "Copy"}
               </button>
             </div>
             <div className="mt-3">
-              <p className="text-xs text-[#555] mb-1">Embed</p>
-              <code className="block text-xs bg-[#1a1a1a] px-3 py-2 rounded text-[#666] break-all border border-[#222]">
+              <p className="text-xs text-[var(--color-text-faint)] mb-1">Embed</p>
+              <code className="block text-xs bg-[var(--color-surface-raised)] px-3 py-2 rounded text-[var(--color-text-muted)] break-all border border-[var(--color-border-light)]">
                 {`<iframe src="${window.location.origin}/share/${shareToken}" width="400" height="600" style="border:none; border-radius:12px;" />`}
               </code>
             </div>
@@ -1716,13 +1890,13 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
         )}
 
         {/* Danger Zone */}
-        <div className="mt-8 pt-6 border-t border-[#222]">
-          <p className="text-sm text-[#666] mb-3">Danger Zone</p>
+        <div className="mt-8 pt-6 border-t border-[var(--color-border-light)]">
+          <p className="text-sm text-[var(--color-text-muted)] mb-3">Danger Zone</p>
           {confirmDelete ? (
             <div className="flex gap-2">
               <button
                 onClick={() => setConfirmDelete(false)}
-                className="flex-1 border border-[#333] hover:border-[#444] px-4 py-2 rounded font-medium transition"
+                className="flex-1 border border-[var(--color-border-light)] hover:border-[var(--color-scrollbar)] px-4 py-2 rounded font-medium transition"
               >
                 Cancel
               </button>
@@ -1750,7 +1924,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm text-[#666] mb-1">{label}</label>
+      <label className="block text-sm text-[var(--color-text-muted)] mb-1">{label}</label>
       {children}
     </div>
   );

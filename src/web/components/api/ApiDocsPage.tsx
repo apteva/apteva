@@ -159,16 +159,16 @@ function TryItOut({
   const hasBody = ["post", "put", "patch"].includes(method) && requestBody;
 
   return (
-    <div style={{ marginTop: 16, padding: 16, background: "#0a0a14", borderRadius: 6, border: "1px solid #222" }}>
-      <h4 style={{ fontSize: 13, color: "#f97316", marginBottom: 12, fontWeight: 600 }}>Try it out</h4>
+    <div style={{ marginTop: 16, padding: 16, background: "var(--color-bg)", borderRadius: 6, border: "1px solid var(--color-border-light)" }}>
+      <h4 style={{ fontSize: 13, color: "var(--color-accent)", marginBottom: 12, fontWeight: 600 }}>Try it out</h4>
 
       {/* Path Parameters */}
       {pathParams.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>Path Parameters</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 6 }}>Path Parameters</div>
           {pathParams.map((param) => (
             <div key={param.name} style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 4 }}>
+              <label style={{ fontSize: 12, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>
                 {param.name} {param.required && <span style={{ color: "#f66" }}>*</span>}
               </label>
               <input
@@ -179,10 +179,10 @@ function TryItOut({
                 style={{
                   width: "100%",
                   padding: "8px 12px",
-                  background: "#111",
-                  border: "1px solid #333",
+                  background: "var(--color-surface)",
+                  border: "1px solid var(--color-border-light)",
                   borderRadius: 4,
-                  color: "#fff",
+                  color: "var(--color-text)",
                   fontSize: 13,
                   fontFamily: "monospace",
                 }}
@@ -195,10 +195,10 @@ function TryItOut({
       {/* Query Parameters */}
       {queryParams.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>Query Parameters</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 6 }}>Query Parameters</div>
           {queryParams.map((param) => (
             <div key={param.name} style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 4 }}>
+              <label style={{ fontSize: 12, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>
                 {param.name} {param.required && <span style={{ color: "#f66" }}>*</span>}
               </label>
               <input
@@ -209,10 +209,10 @@ function TryItOut({
                 style={{
                   width: "100%",
                   padding: "8px 12px",
-                  background: "#111",
-                  border: "1px solid #333",
+                  background: "var(--color-surface)",
+                  border: "1px solid var(--color-border-light)",
                   borderRadius: 4,
-                  color: "#fff",
+                  color: "var(--color-text)",
                   fontSize: 13,
                   fontFamily: "monospace",
                 }}
@@ -225,7 +225,7 @@ function TryItOut({
       {/* Request Body */}
       {hasBody && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>Request Body (JSON)</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 6 }}>Request Body (JSON)</div>
           <textarea
             value={bodyValue}
             onChange={(e) => setBodyValue(e.target.value)}
@@ -233,10 +233,10 @@ function TryItOut({
             style={{
               width: "100%",
               padding: "8px 12px",
-              background: "#111",
-              border: "1px solid #333",
+              background: "var(--color-surface)",
+              border: "1px solid var(--color-border-light)",
               borderRadius: 4,
-              color: "#fff",
+              color: "var(--color-text)",
               fontSize: 12,
               fontFamily: "monospace",
               resize: "vertical",
@@ -251,8 +251,8 @@ function TryItOut({
         disabled={loading}
         style={{
           padding: "10px 20px",
-          background: loading ? "#333" : "#f97316",
-          color: loading ? "#666" : "#000",
+          background: loading ? "var(--color-border-light)" : "var(--color-accent)",
+          color: loading ? "var(--color-text-muted)" : "#000",
           border: "none",
           borderRadius: 4,
           cursor: loading ? "not-allowed" : "pointer",
@@ -273,7 +273,7 @@ function TryItOut({
       {/* Response */}
       {response && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 6 }}>
             Response{" "}
             <span style={{ color: response.status >= 200 && response.status < 300 ? "#49cc90" : "#f66" }}>
               {response.status}
@@ -282,9 +282,9 @@ function TryItOut({
           <pre
             style={{
               padding: 12,
-              background: "#111",
+              background: "var(--color-surface)",
               borderRadius: 4,
-              color: "#888",
+              color: "var(--color-text-secondary)",
               fontSize: 11,
               fontFamily: "monospace",
               overflow: "auto",
@@ -390,7 +390,7 @@ export function ApiDocsPage() {
   if (loading) {
     return (
       <div style={{ padding: 24 }}>
-        <p style={{ color: "#888" }}>Loading API documentation...</p>
+        <p style={{ color: "var(--color-text-secondary)" }}>Loading API documentation...</p>
       </div>
     );
   }
@@ -469,9 +469,9 @@ export function ApiDocsPage() {
               style={{
                 padding: "8px 16px",
                 borderRadius: 4,
-                border: "1px solid #333",
-                background: copied ? "#49cc90" : "#1a1a2e",
-                color: copied ? "#000" : "#fff",
+                border: "1px solid var(--color-border-light)",
+                background: copied ? "#49cc90" : "var(--color-surface-raised)",
+                color: copied ? "#000" : "var(--color-text)",
                 cursor: "pointer",
                 fontSize: 12,
                 fontFamily: "inherit",
@@ -484,9 +484,9 @@ export function ApiDocsPage() {
               style={{
                 padding: "8px 16px",
                 borderRadius: 4,
-                border: "1px solid #333",
-                background: "#1a1a2e",
-                color: "#fff",
+                border: "1px solid var(--color-border-light)",
+                background: "var(--color-surface-raised)",
+                color: "var(--color-text)",
                 cursor: "pointer",
                 fontSize: 12,
                 fontFamily: "inherit",
@@ -496,23 +496,23 @@ export function ApiDocsPage() {
             </button>
           </div>
         </div>
-        <p style={{ color: "#888", marginBottom: 8 }}>
+        <p style={{ color: "var(--color-text-secondary)", marginBottom: 8 }}>
           {spec.info.description.split("\n")[0]}
         </p>
-        <p style={{ color: "#666", fontSize: 12 }}>Version: {spec.info.version}</p>
+        <p style={{ color: "var(--color-text-muted)", fontSize: 12 }}>Version: {spec.info.version}</p>
       </div>
 
       {/* Base URL */}
       <div
         style={{
-          background: "#1a1a2e",
+          background: "var(--color-surface-raised)",
           padding: 12,
           borderRadius: 6,
           marginBottom: 24,
           fontFamily: "monospace",
         }}
       >
-        <span style={{ color: "#888" }}>Base URL: </span>
+        <span style={{ color: "var(--color-text-secondary)" }}>Base URL: </span>
         <span style={{ color: "#61affe" }}>
           {window.location.origin}/api
         </span>
@@ -525,9 +525,9 @@ export function ApiDocsPage() {
           style={{
             padding: "6px 12px",
             borderRadius: 4,
-            border: "1px solid #333",
-            background: selectedTag === null ? "#333" : "transparent",
-            color: selectedTag === null ? "#fff" : "#888",
+            border: "1px solid var(--color-border-light)",
+            background: selectedTag === null ? "var(--color-border-light)" : "transparent",
+            color: selectedTag === null ? "var(--color-text)" : "var(--color-text-secondary)",
             cursor: "pointer",
             fontSize: 12,
           }}
@@ -541,9 +541,9 @@ export function ApiDocsPage() {
             style={{
               padding: "6px 12px",
               borderRadius: 4,
-              border: "1px solid #333",
-              background: selectedTag === tag.name ? "#333" : "transparent",
-              color: selectedTag === tag.name ? "#fff" : "#888",
+              border: "1px solid var(--color-border-light)",
+              background: selectedTag === tag.name ? "var(--color-border-light)" : "transparent",
+              color: selectedTag === tag.name ? "var(--color-text)" : "var(--color-text-secondary)",
               cursor: "pointer",
               fontSize: 12,
             }}
@@ -563,13 +563,13 @@ export function ApiDocsPage() {
               const pathKey = `${method}:${path}`;
               const isExpanded = expandedPaths.has(pathKey);
               const methodUpper = method.toUpperCase();
-              const color = METHOD_COLORS[method] || "#888";
+              const color = METHOD_COLORS[method] || "var(--color-text-secondary)";
 
               return (
                 <div
                   key={pathKey}
                   style={{
-                    border: "1px solid #333",
+                    border: "1px solid var(--color-border-light)",
                     borderRadius: 6,
                     overflow: "hidden",
                   }}
@@ -582,7 +582,7 @@ export function ApiDocsPage() {
                       alignItems: "center",
                       gap: 12,
                       padding: "12px 16px",
-                      background: isExpanded ? "#1a1a2e" : "transparent",
+                      background: isExpanded ? "var(--color-surface-raised)" : "transparent",
                       cursor: "pointer",
                     }}
                   >
@@ -600,13 +600,13 @@ export function ApiDocsPage() {
                     >
                       {methodUpper}
                     </span>
-                    <span style={{ fontFamily: "monospace", color: "#fff" }}>
+                    <span style={{ fontFamily: "monospace", color: "var(--color-text)" }}>
                       {path}
                     </span>
-                    <span style={{ color: "#888", flex: 1, fontSize: 13 }}>
+                    <span style={{ color: "var(--color-text-secondary)", flex: 1, fontSize: 13 }}>
                       {details.summary}
                     </span>
-                    <span style={{ color: "#666", fontSize: 12 }}>
+                    <span style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
                       {isExpanded ? "[-]" : "[+]"}
                     </span>
                   </div>
@@ -616,12 +616,12 @@ export function ApiDocsPage() {
                     <div
                       style={{
                         padding: 16,
-                        background: "#0d0d1a",
-                        borderTop: "1px solid #333",
+                        background: "var(--color-bg)",
+                        borderTop: "1px solid var(--color-border-light)",
                       }}
                     >
                       {details.description && (
-                        <p style={{ color: "#888", marginBottom: 16, fontSize: 13 }}>
+                        <p style={{ color: "var(--color-text-secondary)", marginBottom: 16, fontSize: 13 }}>
                           {details.description}
                         </p>
                       )}
@@ -629,12 +629,12 @@ export function ApiDocsPage() {
                       {/* Parameters */}
                       {details.parameters && details.parameters.length > 0 && (
                         <div style={{ marginBottom: 16 }}>
-                          <h4 style={{ fontSize: 13, color: "#888", marginBottom: 8 }}>
+                          <h4 style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 8 }}>
                             Parameters
                           </h4>
                           <div
                             style={{
-                              background: "#1a1a2e",
+                              background: "var(--color-surface-raised)",
                               borderRadius: 4,
                               padding: 12,
                             }}
@@ -655,12 +655,12 @@ export function ApiDocsPage() {
                                     <span style={{ color: "#f66" }}>*</span>
                                   )}
                                 </span>
-                                <span style={{ color: "#666" }}>({param.in})</span>
-                                <span style={{ color: "#888" }}>
+                                <span style={{ color: "var(--color-text-muted)" }}>({param.in})</span>
+                                <span style={{ color: "var(--color-text-secondary)" }}>
                                   {param.schema?.type || "string"}
                                 </span>
                                 {param.description && (
-                                  <span style={{ color: "#666" }}>
+                                  <span style={{ color: "var(--color-text-muted)" }}>
                                     - {param.description}
                                   </span>
                                 )}
@@ -673,7 +673,7 @@ export function ApiDocsPage() {
                       {/* Request Body */}
                       {details.requestBody && (
                         <div style={{ marginBottom: 16 }}>
-                          <h4 style={{ fontSize: 13, color: "#888", marginBottom: 8 }}>
+                          <h4 style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 8 }}>
                             Request Body
                             {details.requestBody.required && (
                               <span style={{ color: "#f66" }}> (required)</span>
@@ -681,7 +681,7 @@ export function ApiDocsPage() {
                           </h4>
                           <div
                             style={{
-                              background: "#1a1a2e",
+                              background: "var(--color-surface-raised)",
                               borderRadius: 4,
                               padding: 12,
                               fontFamily: "monospace",
@@ -692,7 +692,7 @@ export function ApiDocsPage() {
                             {Object.entries(details.requestBody.content || {}).map(
                               ([mediaType, content]) => (
                                 <div key={mediaType}>
-                                  <span style={{ color: "#666" }}>{mediaType}: </span>
+                                  <span style={{ color: "var(--color-text-muted)" }}>{mediaType}: </span>
                                   {getSchemaPreview(content.schema)}
                                 </div>
                               )
@@ -704,12 +704,12 @@ export function ApiDocsPage() {
                       {/* Responses */}
                       {details.responses && (
                         <div>
-                          <h4 style={{ fontSize: 13, color: "#888", marginBottom: 8 }}>
+                          <h4 style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 8 }}>
                             Responses
                           </h4>
                           <div
                             style={{
-                              background: "#1a1a2e",
+                              background: "var(--color-surface-raised)",
                               borderRadius: 4,
                               padding: 12,
                             }}
@@ -737,14 +737,14 @@ export function ApiDocsPage() {
                                     >
                                       {code}
                                     </span>
-                                    <span style={{ color: "#888" }}>{resp.description}</span>
+                                    <span style={{ color: "var(--color-text-secondary)" }}>{resp.description}</span>
                                   </div>
                                   {respContent && (
                                     <div
                                       style={{
                                         marginLeft: 52,
                                         padding: "8px 12px",
-                                        background: "#0d0d1a",
+                                        background: "var(--color-bg)",
                                         borderRadius: 4,
                                         fontFamily: "monospace",
                                       }}
@@ -754,9 +754,9 @@ export function ApiDocsPage() {
                                       ) : schemaType === "array" && schemaItems ? (
                                         <span style={{ color: "#61affe" }}>{schemaItems}[]</span>
                                       ) : schemaType === "array" ? (
-                                        <span style={{ color: "#888" }}>array</span>
+                                        <span style={{ color: "var(--color-text-secondary)" }}>array</span>
                                       ) : (
-                                        <span style={{ color: "#888" }}>{getSchemaPreview(respContent)}</span>
+                                        <span style={{ color: "var(--color-text-secondary)" }}>{getSchemaPreview(respContent)}</span>
                                       )}
                                     </div>
                                   )}
@@ -787,7 +787,7 @@ export function ApiDocsPage() {
       {spec.components?.schemas && getFilteredSchemas().length > 0 && (
         <div style={{ marginTop: 32 }}>
           <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
-            Schemas {selectedTag && <span style={{ color: "#666", fontSize: 14 }}>({selectedTag})</span>}
+            Schemas {selectedTag && <span style={{ color: "var(--color-text-muted)", fontSize: 14 }}>({selectedTag})</span>}
           </h2>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {getFilteredSchemas().map((name) => {
@@ -797,7 +797,7 @@ export function ApiDocsPage() {
                 <div
                   key={name}
                   style={{
-                    border: "1px solid #333",
+                    border: "1px solid var(--color-border-light)",
                     borderRadius: 6,
                     padding: 12,
                   }}
@@ -817,13 +817,13 @@ export function ApiDocsPage() {
                             fontFamily: "monospace",
                           }}
                         >
-                          <span style={{ color: "#fff", minWidth: 120 }}>{prop}</span>
-                          <span style={{ color: "#888" }}>
+                          <span style={{ color: "var(--color-text)", minWidth: 120 }}>{prop}</span>
+                          <span style={{ color: "var(--color-text-secondary)" }}>
                             {propSchema.type || (propSchema.$ref ? propSchema.$ref.split("/").pop() : "any")}
                             {propSchema.nullable && " | null"}
                           </span>
                           {propSchema.enum && (
-                            <span style={{ color: "#666" }}>
+                            <span style={{ color: "var(--color-text-muted)" }}>
                               [{propSchema.enum.join(" | ")}]
                             </span>
                           )}

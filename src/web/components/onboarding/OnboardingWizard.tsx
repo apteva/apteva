@@ -125,31 +125,31 @@ export function OnboardingWizard({ onComplete, needsAccount = false }: Onboardin
   const currentStep = needsAccount ? step : step - 1;
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-mono flex items-center justify-center p-8">
+    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] font-mono flex items-center justify-center p-8">
       <div className="w-full max-w-2xl">
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-2 mb-2">
-            <span className="text-[#f97316] text-3xl">&gt;_</span>
+            <span className="text-[var(--color-accent)] text-3xl">&gt;_</span>
             <span className="text-3xl tracking-wider">apteva</span>
           </div>
-          <p className="text-[#666]">Run AI agents locally</p>
+          <p className="text-[var(--color-text-muted)]">Run AI agents locally</p>
         </div>
 
         {/* Progress */}
         <div className="flex items-center justify-center gap-2 mb-8">
           {needsAccount && (
             <>
-              <div className={`w-3 h-3 rounded-full ${step >= 0 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
-              <div className={`w-16 h-0.5 ${step >= 1 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
+              <div className={`w-3 h-3 rounded-full ${step >= 0 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-surface-raised)]'}`} />
+              <div className={`w-16 h-0.5 ${step >= 1 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-surface-raised)]'}`} />
             </>
           )}
-          <div className={`w-3 h-3 rounded-full ${step >= 1 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
-          <div className={`w-16 h-0.5 ${step >= 2 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
-          <div className={`w-3 h-3 rounded-full ${step >= 2 ? 'bg-[#f97316]' : 'bg-[#333]'}`} />
+          <div className={`w-3 h-3 rounded-full ${step >= 1 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-surface-raised)]'}`} />
+          <div className={`w-16 h-0.5 ${step >= 2 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-surface-raised)]'}`} />
+          <div className={`w-3 h-3 rounded-full ${step >= 2 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-surface-raised)]'}`} />
         </div>
 
-        <div className="bg-[#111] rounded-lg border border-[#1a1a1a] p-8">
+        <div className="bg-[var(--color-surface)] rounded-lg border border-[var(--color-border)] p-8">
           {step === 0 && needsAccount && (
             <CreateAccountStep onComplete={handleAccountCreated} />
           )}
@@ -220,16 +220,16 @@ function Step1AddKeys({
     return (
       <>
         <h2 className="text-2xl font-semibold mb-2">Add {selectedProviderData.name} Key</h2>
-        <p className="text-[#666] mb-6">
+        <p className="text-[var(--color-text-muted)] mb-6">
           Enter your API key below. It will be encrypted and stored locally.
         </p>
 
         <div className="mb-6">
-          <div className="p-4 rounded border border-[#f97316] bg-[#f97316]/5 mb-4">
+          <div className="p-4 rounded border border-[var(--color-accent)] bg-[var(--color-accent-5)] mb-4">
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">{selectedProviderData.name}</p>
-                <p className="text-sm text-[#666]">
+                <p className="text-sm text-[var(--color-text-muted)]">
                   {selectedProviderData.models.length} models available
                 </p>
               </div>
@@ -251,7 +251,7 @@ function Step1AddKeys({
               onChange={e => onApiKeyChange(e.target.value)}
               placeholder="Enter your API key..."
               autoFocus
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded px-4 py-3 focus:outline-none focus:border-[#f97316] text-lg"
+              className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-4 py-3 focus:outline-none focus:border-[var(--color-accent)] text-lg"
             />
             {error && <p className="text-red-400 text-sm">{error}</p>}
             {success && <p className="text-green-400 text-sm">{success}</p>}
@@ -264,14 +264,14 @@ function Step1AddKeys({
               onSelectProvider(null);
               onApiKeyChange("");
             }}
-            className="flex-1 border border-[#333] hover:border-[#666] px-4 py-3 rounded font-medium transition"
+            className="flex-1 border border-[var(--color-border-light)] hover:border-[var(--color-text-muted)] px-4 py-3 rounded font-medium transition"
           >
             Back
           </button>
           <button
             onClick={onSaveKey}
             disabled={!apiKey || saving}
-            className="flex-1 bg-[#f97316] hover:bg-[#fb923c] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-3 rounded font-medium transition"
+            className="flex-1 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-black px-4 py-3 rounded font-medium transition"
           >
             {testing ? "Testing..." : saving ? "Saving..." : "Save API Key"}
           </button>
@@ -284,7 +284,7 @@ function Step1AddKeys({
   return (
     <>
       <h2 className="text-2xl font-semibold mb-2">Welcome to apteva</h2>
-      <p className="text-[#666] mb-6">
+      <p className="text-[var(--color-text-muted)] mb-6">
         To get started, you'll need to add at least one AI provider API key.
         Your keys are encrypted and stored locally.
       </p>
@@ -303,7 +303,7 @@ function Step1AddKeys({
       <button
         onClick={onContinue}
         disabled={configuredProviders.length === 0}
-        className="w-full bg-[#222] hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 rounded font-medium transition"
+        className="w-full bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 rounded font-medium transition"
       >
         {configuredProviders.length === 0
           ? "Add at least one API key to continue"
@@ -328,14 +328,14 @@ function ProviderCard({ provider, selected, onSelect }: ProviderCardProps) {
         provider.hasKey
           ? 'border-green-500/30 bg-green-500/5'
           : selected
-          ? 'border-[#f97316] bg-[#f97316]/5'
-          : 'border-[#222] hover:border-[#333]'
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent-5)]'
+          : 'border-[var(--color-border-light)] hover:border-[var(--color-border-light)]'
       }`}
     >
       <div className="flex items-center justify-between">
         <div>
           <p className="font-medium">{provider.name}</p>
-          <p className="text-sm text-[#666]">
+          <p className="text-sm text-[var(--color-text-muted)]">
             {provider.models.length} models available
           </p>
         </div>
@@ -370,17 +370,17 @@ function Step2Complete({ configuredProviders, onAddMore, onComplete }: Step2Prop
   return (
     <>
       <h2 className="text-2xl font-semibold mb-2">You're all set!</h2>
-      <p className="text-[#666] mb-6">
+      <p className="text-[var(--color-text-muted)] mb-6">
         You've configured {configuredProviders.length} provider{configuredProviders.length > 1 ? 's' : ''}.
         You can add more providers later in Settings.
       </p>
 
       <div className="space-y-2 mb-6">
         {configuredProviders.map(provider => (
-          <div key={provider.id} className="flex items-center gap-3 p-3 bg-[#0a0a0a] rounded">
+          <div key={provider.id} className="flex items-center gap-3 p-3 bg-[var(--color-bg)] rounded">
             <CheckIcon className="w-5 h-5 text-green-400" />
             <span>{provider.name}</span>
-            <span className="text-[#666] text-sm">({provider.keyHint})</span>
+            <span className="text-[var(--color-text-muted)] text-sm">({provider.keyHint})</span>
           </div>
         ))}
       </div>
@@ -388,13 +388,13 @@ function Step2Complete({ configuredProviders, onAddMore, onComplete }: Step2Prop
       <div className="flex gap-3">
         <button
           onClick={onAddMore}
-          className="flex-1 border border-[#333] hover:border-[#f97316] px-4 py-3 rounded font-medium transition"
+          className="flex-1 border border-[var(--color-border-light)] hover:border-[var(--color-accent)] px-4 py-3 rounded font-medium transition"
         >
           Add More
         </button>
         <button
           onClick={onComplete}
-          className="flex-1 bg-[#f97316] hover:bg-[#fb923c] text-black px-4 py-3 rounded font-medium transition"
+          className="flex-1 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-3 rounded font-medium transition"
         >
           Start Using apteva
         </button>
