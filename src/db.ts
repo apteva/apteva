@@ -67,8 +67,9 @@ export function getMultiAgentConfig(features: AgentFeatures, projectId?: string 
       group: projectId || undefined,
     };
   }
+  // Only keep known fields (strip legacy "mode" coordinator/worker)
   return {
-    ...agents,
+    enabled: agents.enabled,
     group: agents.group || projectId || undefined,
   };
 }
@@ -1359,6 +1360,11 @@ function rowToAgent(row: AgentRow): Agent {
   if (row.features) {
     try {
       features = { ...DEFAULT_FEATURES, ...JSON.parse(row.features) };
+      // Strip legacy "mode" from multi-agent config
+      if (features.agents && typeof features.agents === "object") {
+        const { mode, ...rest } = features.agents as any;
+        features.agents = rest;
+      }
     } catch {
       // Use defaults if parsing fails
     }
@@ -2103,12 +2109,16 @@ export const TelemetryDB = {
     project_id?: string | null;
     since?: string;
     until?: string;
-    group_by?: "agent" | "day";
+    group_by?: "agent" | "day" | "project";
   } = {}): Array<{
     agent_id?: string;
+    project_id?: string;
     date?: string;
     input_tokens: number;
     output_tokens: number;
+    cache_creation_tokens: number;
+    cache_read_tokens: number;
+    reasoning_tokens: number;
     llm_calls: number;
     tool_calls: number;
     errors: number;
@@ -2150,9 +2160,13 @@ export const TelemetryDB = {
     } else if (filters.group_by === "agent") {
       groupBy = "GROUP BY t.agent_id";
       selectFields = "t.agent_id as agent_id,";
+    } else if (filters.group_by === "project") {
+      groupBy = "GROUP BY a.project_id";
+      selectFields = "a.project_id as project_id,";
     }
 
-    const fromClause = needsJoin
+    const needsProjectJoin = needsJoin || filters.group_by === "project";
+    const fromClause = needsProjectJoin
       ? "FROM telemetry_events t JOIN agents a ON t.agent_id = a.id"
       : "FROM telemetry_events t";
 
@@ -2161,6 +2175,9 @@ export const TelemetryDB = {
         ${selectFields}
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.input_tokens') ELSE 0 END), 0) as input_tokens,
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.output_tokens') ELSE 0 END), 0) as output_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.cache_creation_tokens') ELSE 0 END), 0) as cache_creation_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.cache_read_tokens') ELSE 0 END), 0) as cache_read_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.reasoning_tokens') ELSE 0 END), 0) as reasoning_tokens,
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN 1 ELSE 0 END), 0) as llm_calls,
         COALESCE(SUM(CASE WHEN t.category = 'TOOL' THEN 1 ELSE 0 END), 0) as tool_calls,
         COALESCE(SUM(CASE WHEN t.level = 'error' THEN 1 ELSE 0 END), 0) as errors,
@@ -2172,9 +2189,13 @@ export const TelemetryDB = {
 
     return db.query(sql).all(...params) as Array<{
       agent_id?: string;
+      project_id?: string;
       date?: string;
       input_tokens: number;
       output_tokens: number;
+      cache_creation_tokens: number;
+      cache_read_tokens: number;
+      reasoning_tokens: number;
       llm_calls: number;
       tool_calls: number;
       errors: number;
@@ -2183,13 +2204,16 @@ export const TelemetryDB = {
   },
 
   // Get summary stats
-  getStats(filters: { agentId?: string; projectId?: string | null } = {}): {
+  getStats(filters: { agentId?: string; projectId?: string | null; since?: string; until?: string } = {}): {
     total_events: number;
     total_llm_calls: number;
     total_tool_calls: number;
     total_errors: number;
     total_input_tokens: number;
     total_output_tokens: number;
+    total_cache_creation_tokens: number;
+    total_cache_read_tokens: number;
+    total_reasoning_tokens: number;
     total_cost: number;
   } {
     const conditions: string[] = [];
@@ -2208,6 +2232,14 @@ export const TelemetryDB = {
         params.push(filters.projectId);
       }
     }
+    if (filters.since) {
+      conditions.push("t.timestamp >= ?");
+      params.push(filters.since);
+    }
+    if (filters.until) {
+      conditions.push("t.timestamp <= ?");
+      params.push(filters.until);
+    }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const fromClause = needsJoin
@@ -2222,6 +2254,9 @@ export const TelemetryDB = {
         COALESCE(SUM(CASE WHEN t.level = 'error' THEN 1 ELSE 0 END), 0) as total_errors,
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.input_tokens') ELSE 0 END), 0) as total_input_tokens,
         COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.output_tokens') ELSE 0 END), 0) as total_output_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.cache_creation_tokens') ELSE 0 END), 0) as total_cache_creation_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.cache_read_tokens') ELSE 0 END), 0) as total_cache_read_tokens,
+        COALESCE(SUM(CASE WHEN t.category = 'LLM' THEN json_extract(t.data, '$.reasoning_tokens') ELSE 0 END), 0) as total_reasoning_tokens,
         COALESCE(SUM(t.cost), 0) as total_cost
       ${fromClause}
       ${where}
@@ -2234,6 +2269,9 @@ export const TelemetryDB = {
       total_errors: number;
       total_input_tokens: number;
       total_output_tokens: number;
+      total_cache_creation_tokens: number;
+      total_cache_read_tokens: number;
+      total_reasoning_tokens: number;
       total_cost: number;
     };
   },

@@ -316,7 +316,7 @@ export function SkillsPage() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1 mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-1 w-fit">
+          <div className="flex gap-1 mb-6 bg-[var(--color-surface)] card p-1 w-fit">
             <button
               onClick={() => setActiveTab("installed")}
               className={`px-4 py-2 rounded text-sm font-medium transition ${
@@ -366,7 +366,7 @@ export function SkillsPage() {
                   </button>
                 </div>
               ) : filteredSkills.length === 0 ? (
-                <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center">
+                <div className="bg-[var(--color-surface)] card p-6 text-center">
                   <p className="text-[var(--color-text-muted)]">No skills match this filter.</p>
                 </div>
               ) : (
@@ -478,7 +478,7 @@ export function SkillsPage() {
 
               {/* Empty State */}
               {!githubLoading && !githubRepoInfo && !githubError && (
-                <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+                <div className="bg-[var(--color-surface)] card p-8 text-center">
                   <div className="text-4xl mb-4">📦</div>
                   <h3 className="text-lg font-medium mb-2">Browse Skills from GitHub</h3>
                   <p className="text-[var(--color-text-muted)] mb-6 max-w-md mx-auto">
@@ -563,7 +563,7 @@ export function SkillsPage() {
               )}
 
               {/* Info */}
-              <div className="p-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-muted)]">
+              <div className="p-4 bg-[var(--color-surface)] card text-sm text-[var(--color-text-muted)]">
                 <p>
                   Skills are sourced from GitHub repositories. Each skill should be in its own directory with a{" "}
                   <code className="text-[var(--color-text-secondary)] bg-[var(--color-bg)] px-1 rounded">SKILL.md</code> file containing instructions.
@@ -895,7 +895,7 @@ function CreateSkillModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-2xl max-h-[90vh] overflow-auto"
+        className="bg-[var(--color-surface)] card w-full max-w-2xl max-h-[90vh] overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6 border-b border-[var(--color-border)]">
@@ -1029,7 +1029,7 @@ function ImportSkillModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-2xl max-h-[90vh] overflow-auto"
+        className="bg-[var(--color-surface)] card w-full max-w-2xl max-h-[90vh] overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6 border-b border-[var(--color-border)]">
@@ -1129,7 +1129,7 @@ function ViewSkillModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-3xl max-h-[90vh] overflow-auto"
+        className="bg-[var(--color-surface)] card w-full max-w-3xl max-h-[90vh] overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6 border-b border-[var(--color-border)] flex items-center justify-between">

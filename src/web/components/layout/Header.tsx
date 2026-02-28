@@ -161,7 +161,7 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
             <div className="relative ml-2 md:ml-4">
               <button
                 onClick={() => setShowProjectMenu(!showProjectMenu)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded transition text-sm"
+                className="flex items-center gap-2 px-3 py-1.5 btn transition text-sm"
                 style={{ border: "1px solid var(--color-border-light)", backgroundColor: "var(--color-surface)" }}
               >
                 <span
@@ -174,7 +174,7 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
                 <ChevronDownIcon />
               </button>
               {showProjectMenu && (
-                <div className="absolute left-0 top-full mt-1 w-56 rounded-lg shadow-xl z-50" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border-light)" }}>
+                <div className="absolute left-0 top-full mt-1 w-56 card shadow-xl z-50" style={{ backgroundColor: "var(--color-surface)" }}>
                   <div className="py-1 max-h-64 overflow-y-auto">
                     <button
                       onClick={() => handleProjectSelect(null)}
@@ -262,7 +262,7 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
             {showNotifications && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
-                <div className="absolute right-0 top-full mt-1 w-80 rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border-light)" }}>
+                <div className="absolute right-0 top-full mt-1 w-80 card shadow-xl z-50 max-h-96 overflow-y-auto" style={{ backgroundColor: "var(--color-surface)" }}>
                   <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--color-border-light)" }}>
                     <span className="text-sm font-medium">Notifications</span>
                     {notifications.length > 0 && (

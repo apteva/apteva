@@ -357,7 +357,7 @@ const server = Bun.serve({
   development: false, // Suppress "Started server" message
   idleTimeout: 255, // Max value - prevents SSE connections from timing out
 
-  async fetch(req: Request): Promise<Response> {
+  async fetch(req: Request, bunServer: Server): Promise<Response | undefined> {
     const url = new URL(req.url);
     const path = url.pathname;
 
@@ -365,6 +365,19 @@ const server = Bun.serve({
     if (process.env.NODE_ENV !== "production" && path.startsWith("/api/")) {
       const params = url.search ? url.search : "";
       console.log(`[${req.method}] ${path}${params}`);
+    }
+
+    // WebSocket upgrade: /api/agents/:id/voice → proxy to agent binary
+    const voiceMatch = path.match(/^\/api\/agents\/([^/]+)\/voice$/);
+    if (voiceMatch && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      const agentId = voiceMatch[1];
+      const agent = AgentDB.findById(agentId);
+      if (!agent || agent.status !== "running" || !agent.port) {
+        return new Response("Agent not available", { status: 400 });
+      }
+      const upgraded = bunServer.upgrade(req, { data: { agentId: agent.id, agentPort: agent.port } });
+      if (upgraded) return undefined;
+      return new Response("WebSocket upgrade failed", { status: 500 });
     }
 
     // CORS headers - configurable origins
@@ -435,6 +448,44 @@ const server = Bun.serve({
 
     // Serve static files (React app)
     return serveStatic(req, path);
+  },
+
+  // WebSocket proxy for agent voice/realtime
+  websocket: {
+    open(ws: any) {
+      const { agentId, agentPort } = ws.data;
+      const agentWs = new WebSocket(`ws://localhost:${agentPort}/voice`);
+
+      agentWs.onopen = () => {
+        console.log(`[WS] Voice proxy connected: agent=${agentId} port=${agentPort}`);
+      };
+      agentWs.onmessage = (event: MessageEvent) => {
+        try { ws.send(event.data); } catch {}
+      };
+      agentWs.onclose = (event: CloseEvent) => {
+        console.log(`[WS] Agent disconnected: agent=${agentId} code=${event.code}`);
+        ws.close(event.code, event.reason);
+      };
+      agentWs.onerror = () => {
+        ws.close(1011, "Agent WebSocket error");
+      };
+
+      // Store agent WS on the client WS for message/close handlers
+      ws.data.agentWs = agentWs;
+    },
+    message(ws: any, message: string | Buffer) {
+      const agentWs = ws.data.agentWs as WebSocket;
+      if (agentWs?.readyState === WebSocket.OPEN) {
+        agentWs.send(message);
+      }
+    },
+    close(ws: any, code: number, reason: string) {
+      const agentWs = ws.data.agentWs as WebSocket;
+      if (agentWs && agentWs.readyState !== WebSocket.CLOSED) {
+        agentWs.close(code, reason);
+      }
+      console.log(`[WS] Client disconnected: agent=${ws.data.agentId} code=${code}`);
+    },
   },
 });
 

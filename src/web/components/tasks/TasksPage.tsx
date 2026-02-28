@@ -304,7 +304,62 @@ export interface TaskDetailPanelProps {
 export function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, loading, authFetch, onRefresh }: TaskDetailPanelProps) {
   const [executing, setExecuting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    title: task.title,
+    description: task.description || "",
+    type: task.type as "once" | "recurring",
+    priority: task.priority,
+    execute_at: task.execute_at ? new Date(task.execute_at).toISOString().slice(0, 16) : "",
+    recurrence: task.recurrence || "",
+  });
   const { confirm, ConfirmDialog } = useConfirm();
+
+  // Reset edit form when task changes
+  useEffect(() => {
+    setEditForm({
+      title: task.title,
+      description: task.description || "",
+      type: task.type as "once" | "recurring",
+      priority: task.priority,
+      execute_at: task.execute_at ? new Date(task.execute_at).toISOString().slice(0, 16) : "",
+      recurrence: task.recurrence || "",
+    });
+    setEditing(false);
+  }, [task.id, task.agentId]);
+
+  const handleSave = async () => {
+    if (!authFetch || saving) return;
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        title: editForm.title.trim(),
+        description: editForm.description.trim() || undefined,
+        type: editForm.type,
+        priority: editForm.priority,
+      };
+      if (editForm.type === "once" && editForm.execute_at) {
+        body.execute_at = new Date(editForm.execute_at).toISOString();
+      }
+      if (editForm.type === "recurring" && editForm.recurrence.trim()) {
+        body.recurrence = editForm.recurrence.trim();
+      }
+      const res = await authFetch(`/api/tasks/${task.agentId}/${task.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setEditing(false);
+        onRefresh?.();
+      }
+    } catch (e) {
+      console.error("Failed to update task:", e);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleExecute = async () => {
     if (!authFetch || executing) return;
@@ -338,14 +393,25 @@ export function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, lo
     }
   };
 
+  const inputClass = "w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]";
+
   return (
     <div className="w-full md:w-1/2 lg:w-1/3 border-l border-[var(--color-border)] bg-[var(--color-bg)] flex flex-col overflow-hidden">
       {ConfirmDialog}
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
-        <h2 className="font-medium truncate pr-2">Task Details</h2>
+        <h2 className="font-medium truncate pr-2">{editing ? "Edit Task" : "Task Details"}</h2>
         <div className="flex items-center gap-2">
-          {authFetch && (task.status === "pending" || task.status === "completed") && (
+          {authFetch && !editing && (task.status === "pending" || task.status === "completed" || task.status === "failed") && (
+            <button
+              onClick={() => setEditing(true)}
+              title="Edit task"
+              className="text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+            </button>
+          )}
+          {authFetch && !editing && (task.status === "pending" || task.status === "completed") && (
             <button
               onClick={handleExecute}
               disabled={executing}
@@ -355,7 +421,7 @@ export function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, lo
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
             </button>
           )}
-          {authFetch && (
+          {authFetch && !editing && (
             <button
               onClick={handleDelete}
               disabled={deleting}
@@ -365,9 +431,38 @@ export function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, lo
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
             </button>
           )}
-          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition">
-            <CloseIcon />
-          </button>
+          {editing && (
+            <>
+              <button
+                onClick={() => {
+                  setEditing(false);
+                  setEditForm({
+                    title: task.title,
+                    description: task.description || "",
+                    type: task.type as "once" | "recurring",
+                    priority: task.priority,
+                    execute_at: task.execute_at ? new Date(task.execute_at).toISOString().slice(0, 16) : "",
+                    recurrence: task.recurrence || "",
+                  });
+                }}
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-sm transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || !editForm.title.trim()}
+                className="px-3 py-1 rounded text-sm bg-[var(--color-accent)] text-black hover:opacity-90 transition disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </>
+          )}
+          {!editing && (
+            <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition">
+              <CloseIcon />
+            </button>
+          )}
         </div>
       </div>
 
@@ -376,51 +471,131 @@ export function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, lo
         {/* Title & Status */}
         <div>
           <div className="flex items-start justify-between gap-2 mb-2">
-            <h3 className="text-lg font-medium">{task.title}</h3>
-            <span className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${statusColors[task.status]}`}>
-              {task.status}
-            </span>
+            {editing ? (
+              <input
+                type="text"
+                value={editForm.title}
+                onChange={e => setEditForm({ ...editForm, title: e.target.value })}
+                className={`${inputClass} text-lg font-medium`}
+                placeholder="Task title"
+              />
+            ) : (
+              <h3 className="text-lg font-medium">{task.title}</h3>
+            )}
+            {!editing && (
+              <span className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${statusColors[task.status]}`}>
+                {task.status}
+              </span>
+            )}
           </div>
-          <button
-            onClick={() => onSelectAgent?.(task.agentId)}
-            className="text-sm text-[var(--color-accent)] hover:underline"
-          >
-            {task.agentName}
-          </button>
+          {!editing && (
+            <button
+              onClick={() => onSelectAgent?.(task.agentId)}
+              className="text-sm text-[var(--color-accent)] hover:underline"
+            >
+              {task.agentName}
+            </button>
+          )}
         </div>
 
         {/* Description */}
-        {task.description && (
+        {editing ? (
+          <div>
+            <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1">Description</h4>
+            <textarea
+              value={editForm.description}
+              onChange={e => setEditForm({ ...editForm, description: e.target.value })}
+              className={`${inputClass} resize-none`}
+              rows={3}
+              placeholder="Task description..."
+            />
+          </div>
+        ) : task.description ? (
           <div>
             <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1">Description</h4>
             <p className="text-sm text-[var(--color-text-secondary)] whitespace-pre-wrap">{task.description}</p>
           </div>
-        )}
+        ) : null}
 
         {/* Metadata */}
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <span className="text-[var(--color-text-muted)]">Type</span>
-            <p className="capitalize">{task.type}</p>
-          </div>
-          <div>
-            <span className="text-[var(--color-text-muted)]">Priority</span>
-            <p>{task.priority}</p>
-          </div>
-          <div>
-            <span className="text-[var(--color-text-muted)]">Source</span>
-            <p className="capitalize">{task.source}</p>
-          </div>
-          {task.recurrence && (
+        {editing ? (
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <span className="text-[var(--color-text-muted)]">Recurrence</span>
-              <p>{formatCron(task.recurrence)}</p>
-              <p className="text-xs text-[var(--color-text-faint)] mt-0.5 font-mono">{task.recurrence}</p>
+              <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Type</label>
+              <select
+                value={editForm.type}
+                onChange={e => setEditForm({ ...editForm, type: e.target.value as "once" | "recurring" })}
+                className={inputClass}
+              >
+                <option value="once">One-time</option>
+                <option value="recurring">Recurring</option>
+              </select>
             </div>
-          )}
-        </div>
+            <div>
+              <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Priority</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={editForm.priority}
+                onChange={e => setEditForm({ ...editForm, priority: Number(e.target.value) })}
+                className={inputClass}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-[var(--color-text-muted)]">Type</span>
+              <p className="capitalize">{task.type}</p>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-muted)]">Priority</span>
+              <p>{task.priority}</p>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-muted)]">Source</span>
+              <p className="capitalize">{task.source}</p>
+            </div>
+            {task.recurrence && (
+              <div>
+                <span className="text-[var(--color-text-muted)]">Recurrence</span>
+                <p>{formatCron(task.recurrence)}</p>
+                <p className="text-xs text-[var(--color-text-faint)] mt-0.5 font-mono">{task.recurrence}</p>
+              </div>
+            )}
+          </div>
+        )}
 
-        {/* Timestamps */}
+        {/* Schedule (edit mode) */}
+        {editing && editForm.type === "once" && (
+          <div>
+            <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Schedule</label>
+            <input
+              type="datetime-local"
+              value={editForm.execute_at}
+              onChange={e => setEditForm({ ...editForm, execute_at: e.target.value })}
+              className={inputClass}
+            />
+            <p className="text-xs text-[var(--color-text-faint)] mt-1">Leave empty for manual execution</p>
+          </div>
+        )}
+        {editing && editForm.type === "recurring" && (
+          <div>
+            <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Cron Schedule</label>
+            <input
+              type="text"
+              value={editForm.recurrence}
+              onChange={e => setEditForm({ ...editForm, recurrence: e.target.value })}
+              className={`${inputClass} font-mono`}
+              placeholder="*/30 * * * *"
+            />
+            <p className="text-xs text-[var(--color-text-faint)] mt-1">e.g. */30 * * * * = every 30 min</p>
+          </div>
+        )}
+
+        {/* Timestamps (view mode only) */}
+        {!editing && (
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-[var(--color-text-muted)]">Created</span>
@@ -451,6 +626,7 @@ export function TaskDetailPanel({ task, statusColors, onClose, onSelectAgent, lo
             </div>
           )}
         </div>
+        )}
 
         {/* Error */}
         {task.status === "failed" && task.error && (
@@ -707,7 +883,7 @@ function CreateTaskModal({ authFetch, currentProjectId, onClose, onCreated }: Cr
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-md" onClick={e => e.stopPropagation()}>
+      <div className="bg-[var(--color-surface)] card w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
           <h2 className="font-medium">Create Task</h2>
           <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition">

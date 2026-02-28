@@ -2,9 +2,56 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Style variables (classic vs professional) ── */
+:root, [data-style="classic"] {
+  --font-family: 'JetBrains Mono', monospace;
+  --radius-card: 8px;
+  --radius-button: 6px;
+  --radius-badge: 4px;
+  --shadow-card: none;
+  --shadow-card-hover: none;
+  --border-card: 1px solid var(--color-border);
+  --spacing-card: 1rem;
+}
+
+[data-style="professional"] {
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --radius-card: 14px;
+  --radius-button: 10px;
+  --radius-badge: 8px;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --border-card: 1px solid var(--color-border);
+  --spacing-card: 1.25rem;
+}
+
+/* Dark professional gets stronger shadows */
+[data-style="professional"][data-theme="professional-dark"] {
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.12);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Utility class for cards ── */
+.card {
+  border-radius: var(--radius-card);
+  border: var(--border-card);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+/* ── Utility for buttons ── */
+.btn {
+  border-radius: var(--radius-button);
+}
+
 html, body {
   background-color: var(--color-bg, #0a0a0a);
   color: var(--color-text, #e0e0e0);
+  font-family: var(--font-family, 'JetBrains Mono', monospace);
   min-height: 100%;
   margin: 0;
   -webkit-font-smoothing: antialiased;

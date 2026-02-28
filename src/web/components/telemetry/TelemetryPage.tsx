@@ -13,6 +13,9 @@ interface TelemetryStats {
   total_errors: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  total_cache_creation_tokens: number;
+  total_cache_read_tokens: number;
+  total_reasoning_tokens: number;
   total_cost: number;
 }
 
@@ -20,6 +23,22 @@ interface UsageByAgent {
   agent_id: string;
   input_tokens: number;
   output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  reasoning_tokens: number;
+  llm_calls: number;
+  tool_calls: number;
+  errors: number;
+  cost: number;
+}
+
+interface UsageByProject {
+  project_id: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  reasoning_tokens: number;
   llm_calls: number;
   tool_calls: number;
   errors: number;
@@ -42,12 +61,18 @@ function extractEventStats(event: TelemetryEvent): {
   errors: number;
   input_tokens: number;
   output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  reasoning_tokens: number;
 } {
   const isLlm = event.category === "LLM";
   const isTool = event.category === "TOOL";
   const isError = event.level === "error";
   const inputTokens = (event.data?.input_tokens as number) || 0;
   const outputTokens = (event.data?.output_tokens as number) || 0;
+  const cacheCreationTokens = (event.data?.cache_creation_tokens as number) || 0;
+  const cacheReadTokens = (event.data?.cache_read_tokens as number) || 0;
+  const reasoningTokens = (event.data?.reasoning_tokens as number) || 0;
 
   return {
     llm_calls: isLlm ? 1 : 0,
@@ -55,17 +80,21 @@ function extractEventStats(event: TelemetryEvent): {
     errors: isError ? 1 : 0,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
+    cache_creation_tokens: cacheCreationTokens,
+    cache_read_tokens: cacheReadTokens,
+    reasoning_tokens: reasoningTokens,
   };
 }
 
 export function TelemetryPage() {
   const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
-  const { currentProjectId, currentProject, costTrackingEnabled } = useProjects();
+  const { currentProjectId, currentProject, costTrackingEnabled, projectsEnabled, projects } = useProjects();
   const { authFetch } = useAuth();
   const [fetchedStats, setFetchedStats] = useState<TelemetryStats | null>(null);
   const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
   const [fetchedUsage, setFetchedUsage] = useState<UsageByAgent[]>([]);
   const [dailyUsage, setDailyUsage] = useState<DailyUsage[]>([]);
+  const [projectUsage, setProjectUsage] = useState<UsageByProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({
     level: "",
@@ -76,8 +105,11 @@ export function TelemetryPage() {
   const [agents, setAgents] = useState<Array<{ id: string; name: string; projectId: string | null }>>([]);
   const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
 
+  // Time range filter
+  const [timeRange, setTimeRange] = useState<string>("all");
+
   // Sort state for usage table
-  type SortKey = "agent" | "llm_calls" | "tool_calls" | "input_tokens" | "output_tokens" | "errors" | "cost";
+  type SortKey = "agent" | "llm_calls" | "tool_calls" | "input_tokens" | "output_tokens" | "cache_creation_tokens" | "cache_read_tokens" | "reasoning_tokens" | "errors" | "cost";
   const [sortKey, setSortKey] = useState<SortKey>("cost");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -87,6 +119,20 @@ export function TelemetryPage() {
     } else {
       setSortKey(key);
       setSortDir("desc");
+    }
+  };
+
+  // Sort state for project usage table
+  type ProjectSortKey = "project" | "llm_calls" | "tool_calls" | "input_tokens" | "output_tokens" | "cache_creation_tokens" | "cache_read_tokens" | "reasoning_tokens" | "errors" | "cost";
+  const [projectSortKey, setProjectSortKey] = useState<ProjectSortKey>("cost");
+  const [projectSortDir, setProjectSortDir] = useState<"asc" | "desc">("desc");
+
+  const handleProjectSort = (key: ProjectSortKey) => {
+    if (projectSortKey === key) {
+      setProjectSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setProjectSortKey(key);
+      setProjectSortDir("desc");
     }
   };
 
@@ -121,16 +167,35 @@ export function TelemetryPage() {
   // Get agent IDs for the current project
   const projectAgentIds = useMemo(() => new Set(filteredAgents.map(a => a.id)), [filteredAgents]);
 
+  // Compute `since` ISO string from selected time range
+  const getSince = useCallback((): string | undefined => {
+    if (timeRange === "all") return undefined;
+    const now = new Date();
+    const ms: Record<string, number> = {
+      "1h": 3600000,
+      "6h": 6 * 3600000,
+      "24h": 24 * 3600000,
+      "7d": 7 * 24 * 3600000,
+      "30d": 30 * 24 * 3600000,
+    };
+    if (ms[timeRange]) {
+      return new Date(now.getTime() - ms[timeRange]).toISOString();
+    }
+    return undefined;
+  }, [timeRange]);
+
   // Fetch stats and historical data (less frequently now since we have real-time)
   const fetchData = async () => {
     setLoading(true);
     try {
       // Build project filter param
       const projectParam = currentProjectId === "unassigned" ? "null" : currentProjectId || "";
+      const since = getSince();
 
       // Fetch stats
       const statsParams = new URLSearchParams();
       if (projectParam) statsParams.set("project_id", projectParam);
+      if (since) statsParams.set("since", since);
       const statsRes = await authFetch(`/api/telemetry/stats${statsParams.toString() ? `?${statsParams}` : ""}`);
       const statsData = await statsRes.json();
       setFetchedStats(statsData.stats);
@@ -140,6 +205,7 @@ export function TelemetryPage() {
       if (filter.level) params.set("level", filter.level);
       if (filter.agent_id) params.set("agent_id", filter.agent_id);
       if (projectParam) params.set("project_id", projectParam);
+      if (since) params.set("since", since);
       params.set("limit", "100"); // Fetch more since we filter client-side
 
       const eventsRes = await authFetch(`/api/telemetry/events?${params}`);
@@ -154,6 +220,7 @@ export function TelemetryPage() {
       const usageParams = new URLSearchParams();
       usageParams.set("group_by", "agent");
       if (projectParam) usageParams.set("project_id", projectParam);
+      if (since) usageParams.set("since", since);
       const usageRes = await authFetch(`/api/telemetry/usage?${usageParams}`);
       const usageData = await usageRes.json();
       setFetchedUsage(usageData.usage || []);
@@ -162,6 +229,7 @@ export function TelemetryPage() {
       const dailyParams = new URLSearchParams();
       dailyParams.set("group_by", "day");
       if (projectParam) dailyParams.set("project_id", projectParam);
+      if (since) dailyParams.set("since", since);
       const dailyRes = await authFetch(`/api/telemetry/usage?${dailyParams}`);
       const dailyData = await dailyRes.json();
       // Sort by date ascending for charts
@@ -169,6 +237,18 @@ export function TelemetryPage() {
         a.date.localeCompare(b.date)
       );
       setDailyUsage(sorted);
+
+      // Fetch usage by project (only when viewing all projects and feature is enabled)
+      if (projectsEnabled && currentProjectId === null) {
+        const projParams = new URLSearchParams();
+        projParams.set("group_by", "project");
+        if (since) projParams.set("since", since);
+        const projRes = await authFetch(`/api/telemetry/usage?${projParams}`);
+        const projData = await projRes.json();
+        setProjectUsage(projData.usage || []);
+      } else {
+        setProjectUsage([]);
+      }
     } catch (e) {
       console.error("Failed to fetch telemetry:", e);
     }
@@ -177,7 +257,7 @@ export function TelemetryPage() {
 
   useEffect(() => {
     fetchData();
-  }, [filter, currentProjectId, authFetch, statusChangeCounter]);
+  }, [filter, timeRange, currentProjectId, authFetch, statusChangeCounter]);
 
   // Compute real-time stats from new events (not already counted in fetched stats)
   const stats = useMemo(() => {
@@ -190,6 +270,9 @@ export function TelemetryPage() {
     let deltaErrors = 0;
     let deltaInputTokens = 0;
     let deltaOutputTokens = 0;
+    let deltaCacheCreationTokens = 0;
+    let deltaCacheReadTokens = 0;
+    let deltaReasoningTokens = 0;
 
     for (const event of realtimeEvents) {
       if (!countedEventIdsRef.current.has(event.id)) {
@@ -200,6 +283,9 @@ export function TelemetryPage() {
         deltaErrors += eventStats.errors;
         deltaInputTokens += eventStats.input_tokens;
         deltaOutputTokens += eventStats.output_tokens;
+        deltaCacheCreationTokens += eventStats.cache_creation_tokens;
+        deltaCacheReadTokens += eventStats.cache_read_tokens;
+        deltaReasoningTokens += eventStats.reasoning_tokens;
       }
     }
 
@@ -210,6 +296,9 @@ export function TelemetryPage() {
       total_errors: fetchedStats.total_errors + deltaErrors,
       total_input_tokens: fetchedStats.total_input_tokens + deltaInputTokens,
       total_output_tokens: fetchedStats.total_output_tokens + deltaOutputTokens,
+      total_cache_creation_tokens: (fetchedStats.total_cache_creation_tokens || 0) + deltaCacheCreationTokens,
+      total_cache_read_tokens: (fetchedStats.total_cache_read_tokens || 0) + deltaCacheReadTokens,
+      total_reasoning_tokens: (fetchedStats.total_reasoning_tokens || 0) + deltaReasoningTokens,
       total_cost: fetchedStats.total_cost || 0,
     };
   }, [fetchedStats, realtimeEvents]);
@@ -233,6 +322,9 @@ export function TelemetryPage() {
           existing.errors += eventStats.errors;
           existing.input_tokens += eventStats.input_tokens;
           existing.output_tokens += eventStats.output_tokens;
+          existing.cache_creation_tokens += eventStats.cache_creation_tokens;
+          existing.cache_read_tokens += eventStats.cache_read_tokens;
+          existing.reasoning_tokens += eventStats.reasoning_tokens;
         } else {
           usageMap.set(event.agent_id, {
             agent_id: event.agent_id,
@@ -241,6 +333,9 @@ export function TelemetryPage() {
             errors: eventStats.errors,
             input_tokens: eventStats.input_tokens,
             output_tokens: eventStats.output_tokens,
+            cache_creation_tokens: eventStats.cache_creation_tokens,
+            cache_read_tokens: eventStats.cache_read_tokens,
+            reasoning_tokens: eventStats.reasoning_tokens,
             cost: 0,
           });
         }
@@ -265,6 +360,33 @@ export function TelemetryPage() {
     });
     return sorted;
   }, [usage, sortKey, sortDir, agents]);
+
+  // Sorted project usage for the table
+  const sortedProjectUsage = useMemo(() => {
+    const sorted = [...projectUsage];
+    sorted.sort((a, b) => {
+      if (projectSortKey === "project") {
+        const aName = (a.project_id ? projects.find(p => p.id === a.project_id)?.name || a.project_id : "Unassigned").toLowerCase();
+        const bName = (b.project_id ? projects.find(p => p.id === b.project_id)?.name || b.project_id : "Unassigned").toLowerCase();
+        return projectSortDir === "asc" ? (aName < bName ? -1 : 1) : (aName > bName ? -1 : 1);
+      }
+      const aVal = a[projectSortKey] as number;
+      const bVal = b[projectSortKey] as number;
+      return projectSortDir === "asc" ? aVal - bVal : bVal - aVal;
+    });
+    return sorted;
+  }, [projectUsage, projectSortKey, projectSortDir, projects]);
+
+  const getProjectName = (projectId: string | null) => {
+    if (!projectId) return "Unassigned";
+    const project = projects.find(p => p.id === projectId);
+    return project?.name || projectId;
+  };
+
+  const getProjectColor = (projectId: string | null) => {
+    if (!projectId) return undefined;
+    return projects.find(p => p.id === projectId)?.color;
+  };
 
   // Merge real-time events with historical, filtering and deduping
   const allEvents = React.useMemo(() => {
@@ -419,15 +541,48 @@ export function TelemetryPage() {
           </p>
         </div>
 
+        {/* Time Range Selector */}
+        <div className="flex gap-2 mb-6">
+          {[
+            { value: "1h", label: "Last hour" },
+            { value: "6h", label: "Last 6h" },
+            { value: "24h", label: "Last 24h" },
+            { value: "7d", label: "Last 7 days" },
+            { value: "30d", label: "Last 30 days" },
+            { value: "all", label: "All time" },
+          ].map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setTimeRange(opt.value)}
+              className={`px-3 py-1.5 rounded text-sm transition ${
+                timeRange === opt.value
+                  ? "bg-[var(--color-accent)] text-black"
+                  : "bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface-raised)] text-[var(--color-text-secondary)]"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         {/* Stats Cards */}
         {stats && (
-          <div className={`grid grid-cols-2 md:grid-cols-3 ${costTrackingEnabled ? "lg:grid-cols-7" : "lg:grid-cols-6"} gap-4 mb-6`}>
+          <div className="flex flex-wrap gap-4 mb-6">
             <StatCard label="Events" value={formatNumber(stats.total_events)} />
             <StatCard label="LLM Calls" value={formatNumber(stats.total_llm_calls)} />
             <StatCard label="Tool Calls" value={formatNumber(stats.total_tool_calls)} />
             <StatCard label="Errors" value={formatNumber(stats.total_errors)} color="red" />
             <StatCard label="Input Tokens" value={formatNumber(stats.total_input_tokens)} />
             <StatCard label="Output Tokens" value={formatNumber(stats.total_output_tokens)} />
+            {(stats.total_cache_creation_tokens > 0 || stats.total_cache_read_tokens > 0) && (
+              <>
+                <StatCard label="Cache Write" value={formatNumber(stats.total_cache_creation_tokens)} />
+                <StatCard label="Cache Read" value={formatNumber(stats.total_cache_read_tokens)} />
+              </>
+            )}
+            {stats.total_reasoning_tokens > 0 && (
+              <StatCard label="Reasoning" value={formatNumber(stats.total_reasoning_tokens)} />
+            )}
             {costTrackingEnabled && (
               <StatCard label="Total Cost" value={`$${stats.total_cost.toFixed(4)}`} color="orange" />
             )}
@@ -464,7 +619,7 @@ export function TelemetryPage() {
           return (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
             {/* Activity Chart */}
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+            <div className="bg-[var(--color-surface)] card p-4">
               <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-4">{chartLabel} Activity</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={chartData}>
@@ -506,6 +661,7 @@ export function TelemetryPage() {
                     fill="var(--color-accent)"
                     fillOpacity={0.15}
                     strokeWidth={1.5}
+
                   />
                   <Area
                     type="monotone"
@@ -515,6 +671,7 @@ export function TelemetryPage() {
                     fill="var(--color-accent-hover)"
                     fillOpacity={0.08}
                     strokeWidth={1.5}
+
                   />
                   <Area
                     type="monotone"
@@ -524,13 +681,14 @@ export function TelemetryPage() {
                     fill="#ef4444"
                     fillOpacity={0.1}
                     strokeWidth={1.5}
+
                   />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
 
             {/* Token Usage Chart */}
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+            <div className="bg-[var(--color-surface)] card p-4">
               <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-4">{chartLabel} Token Usage</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={chartData}>
@@ -578,12 +736,14 @@ export function TelemetryPage() {
                     name="Input Tokens"
                     fill="var(--color-accent)"
                     radius={[2, 2, 0, 0]}
+
                   />
                   <Bar
                     dataKey="output_tokens"
                     name="Output Tokens"
                     fill="var(--color-accent-hover)"
                     radius={[2, 2, 0, 0]}
+
                   />
                 </BarChart>
               </ResponsiveContainer>
@@ -595,6 +755,8 @@ export function TelemetryPage() {
         {/* Usage by Agent */}
         {usage.length > 0 && (() => {
           const maxCost = Math.max(...sortedUsage.map(u => u.cost), 0.0001);
+          const hasCacheTokens = sortedUsage.some(u => (u.cache_creation_tokens || 0) > 0 || (u.cache_read_tokens || 0) > 0);
+          const hasReasoningTokens = sortedUsage.some(u => (u.reasoning_tokens || 0) > 0);
           const SortHeader = ({ label, field, align = "right" }: { label: string; field: SortKey; align?: string }) => (
             <th
               className={`${align === "left" ? "text-left" : "text-right"} p-3 cursor-pointer hover:text-[var(--color-text-secondary)] select-none transition-colors`}
@@ -615,7 +777,7 @@ export function TelemetryPage() {
           return (
           <div className="mb-6">
             <h2 className="text-lg font-medium mb-3">Usage by Agent</h2>
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg overflow-hidden">
+            <div className="bg-[var(--color-surface)] card overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
@@ -624,6 +786,9 @@ export function TelemetryPage() {
                     <SortHeader label="Tool Calls" field="tool_calls" />
                     <SortHeader label="Input Tokens" field="input_tokens" />
                     <SortHeader label="Output Tokens" field="output_tokens" />
+                    {hasCacheTokens && <SortHeader label="Cache Write" field="cache_creation_tokens" />}
+                    {hasCacheTokens && <SortHeader label="Cache Read" field="cache_read_tokens" />}
+                    {hasReasoningTokens && <SortHeader label="Reasoning" field="reasoning_tokens" />}
                     <SortHeader label="Errors" field="errors" />
                     {costTrackingEnabled && <SortHeader label="Est. Cost" field="cost" />}
                   </tr>
@@ -636,6 +801,15 @@ export function TelemetryPage() {
                       <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.tool_calls)}</td>
                       <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.input_tokens)}</td>
                       <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.output_tokens)}</td>
+                      {hasCacheTokens && (
+                        <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_creation_tokens || 0)}</td>
+                      )}
+                      {hasCacheTokens && (
+                        <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_read_tokens || 0)}</td>
+                      )}
+                      {hasReasoningTokens && (
+                        <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.reasoning_tokens || 0)}</td>
+                      )}
                       <td className="p-3 text-right">
                         {u.errors > 0 ? (
                           <span className="text-red-400">{u.errors}</span>
@@ -658,6 +832,101 @@ export function TelemetryPage() {
                       )}
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          );
+        })()}
+
+        {/* Usage by Project */}
+        {projectsEnabled && currentProjectId === null && sortedProjectUsage.length > 0 && (() => {
+          const maxCost = Math.max(...sortedProjectUsage.map(u => u.cost), 0.0001);
+          const hasProjCacheTokens = sortedProjectUsage.some(u => (u.cache_creation_tokens || 0) > 0 || (u.cache_read_tokens || 0) > 0);
+          const hasProjReasoningTokens = sortedProjectUsage.some(u => (u.reasoning_tokens || 0) > 0);
+          const PSortHeader = ({ label, field, align = "right" }: { label: string; field: ProjectSortKey; align?: string }) => (
+            <th
+              className={`${align === "left" ? "text-left" : "text-right"} p-3 cursor-pointer hover:text-[var(--color-text-secondary)] select-none transition-colors`}
+              onClick={() => handleProjectSort(field)}
+            >
+              <span className="inline-flex items-center gap-1">
+                {align === "right" && projectSortKey === field && (
+                  <span className="text-orange-400">{projectSortDir === "asc" ? "\u25b2" : "\u25bc"}</span>
+                )}
+                {label}
+                {align === "left" && projectSortKey === field && (
+                  <span className="text-orange-400">{projectSortDir === "asc" ? "\u25b2" : "\u25bc"}</span>
+                )}
+              </span>
+            </th>
+          );
+
+          return (
+          <div className="mb-6">
+            <h2 className="text-lg font-medium mb-3">Usage by Project</h2>
+            <div className="bg-[var(--color-surface)] card overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
+                    <PSortHeader label="Project" field="project" align="left" />
+                    <PSortHeader label="LLM Calls" field="llm_calls" />
+                    <PSortHeader label="Tool Calls" field="tool_calls" />
+                    <PSortHeader label="Input Tokens" field="input_tokens" />
+                    <PSortHeader label="Output Tokens" field="output_tokens" />
+                    {hasProjCacheTokens && <PSortHeader label="Cache Write" field="cache_creation_tokens" />}
+                    {hasProjCacheTokens && <PSortHeader label="Cache Read" field="cache_read_tokens" />}
+                    {hasProjReasoningTokens && <PSortHeader label="Reasoning" field="reasoning_tokens" />}
+                    <PSortHeader label="Errors" field="errors" />
+                    {costTrackingEnabled && <PSortHeader label="Est. Cost" field="cost" />}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedProjectUsage.map((u) => {
+                    const color = getProjectColor(u.project_id);
+                    return (
+                    <tr key={u.project_id || "_unassigned"} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg)]">
+                      <td className="p-3 font-medium">
+                        <span className="inline-flex items-center gap-2">
+                          {color && <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />}
+                          {getProjectName(u.project_id)}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.llm_calls)}</td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.tool_calls)}</td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.input_tokens)}</td>
+                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.output_tokens)}</td>
+                      {hasProjCacheTokens && (
+                        <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_creation_tokens || 0)}</td>
+                      )}
+                      {hasProjCacheTokens && (
+                        <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_read_tokens || 0)}</td>
+                      )}
+                      {hasProjReasoningTokens && (
+                        <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.reasoning_tokens || 0)}</td>
+                      )}
+                      <td className="p-3 text-right">
+                        {u.errors > 0 ? (
+                          <span className="text-red-400">{u.errors}</span>
+                        ) : (
+                          <span className="text-[var(--color-text-faint)]">0</span>
+                        )}
+                      </td>
+                      {costTrackingEnabled && (
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <div className="w-16 h-1.5 bg-[var(--color-surface-raised)] rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-orange-500 rounded-full"
+                                style={{ width: `${(u.cost / maxCost) * 100}%` }}
+                              />
+                            </div>
+                            <span className="text-[var(--color-text-secondary)] min-w-[60px] text-right">${u.cost.toFixed(4)}</span>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -714,7 +983,7 @@ export function TelemetryPage() {
         </div>
 
         {/* Events List */}
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg">
+        <div className="bg-[var(--color-surface)] card">
           <div className="p-3 border-b border-[var(--color-border)] flex items-center justify-between">
             <h2 className="font-medium">Recent Events</h2>
             {realtimeEvents.length > 0 && (
@@ -791,7 +1060,7 @@ export function TelemetryPage() {
 
 function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+    <div className="bg-[var(--color-surface)] card p-4 flex-1 min-w-[120px]">
       <div className="text-[var(--color-text-muted)] text-xs mb-1">{label}</div>
       <div className={`text-2xl font-semibold ${color === "red" ? "text-red-400" : color === "orange" ? "text-orange-400" : ""}`}>
         {value}

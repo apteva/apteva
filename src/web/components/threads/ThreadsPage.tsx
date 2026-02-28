@@ -163,7 +163,7 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
               <button
                 onClick={() => setShowAgentPicker(!showAgentPicker)}
                 disabled={runningAgents.length === 0}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent-10)] text-[var(--color-accent)] text-sm font-medium hover:bg-[var(--color-accent-20)] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 btn bg-[var(--color-accent-10)] text-[var(--color-accent)] text-sm font-medium hover:bg-[var(--color-accent-20)] transition disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -175,7 +175,7 @@ export function ThreadsPage({ agents, onNavigate }: ThreadsPageProps) {
               {showAgentPicker && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowAgentPicker(false)} />
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded-lg shadow-xl z-50 max-h-60 overflow-auto">
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--color-surface)] card shadow-xl z-50 max-h-60 overflow-auto">
                     {runningAgents.map(agent => (
                       <button
                         key={agent.id}

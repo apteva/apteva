@@ -3,7 +3,7 @@ import { CheckIcon, CloseIcon, PlusIcon } from "../common/Icons";
 import { Modal, useConfirm } from "../common/Modal";
 import { Select } from "../common/Select";
 import { useProjects, useAuth, useTheme, type Project } from "../../context";
-import type { ThemeMode } from "../../themes";
+import type { ThemeMode, ThemeStyle } from "../../themes";
 import type { Provider } from "../../types";
 
 type SettingsTab = "general" | "providers" | "projects" | "channels" | "api-keys" | "account" | "updates" | "data" | "assistant";
@@ -101,7 +101,7 @@ function SettingsNavItem({
 
 function GeneralSettings() {
   const { authFetch } = useAuth();
-  const { mode, setMode } = useTheme();
+  const { mode, style, setMode, setStyle } = useTheme();
   const [instanceUrl, setInstanceUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -149,6 +149,11 @@ function GeneralSettings() {
     { value: "light", label: "Light", description: "Light background" },
   ];
 
+  const styleOptions: { value: ThemeStyle; label: string; description: string }[] = [
+    { value: "classic", label: "Classic", description: "Terminal-inspired, sharp" },
+    { value: "professional", label: "Professional", description: "Polished, enterprise" },
+  ];
+
   return (
     <div className="max-w-4xl w-full">
       <div className="mb-6">
@@ -156,22 +161,23 @@ function GeneralSettings() {
         <p className="text-[var(--color-text-muted)]">Instance configuration and appearance.</p>
       </div>
 
-      {/* Theme */}
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 mb-4">
-        <h3 className="font-medium mb-2">Theme</h3>
-        <p className="text-sm text-[var(--color-text-muted)] mb-4">
-          Choose your preferred color scheme. Auto follows your operating system setting.
-        </p>
-        <div className="flex gap-3">
+      {/* Appearance */}
+      <div className="bg-[var(--color-surface)] card p-4 mb-4">
+        <h3 className="font-medium mb-4">Appearance</h3>
+
+        {/* Color scheme */}
+        <p className="text-sm text-[var(--color-text-secondary)] mb-2">Color scheme</p>
+        <div className="flex gap-3 mb-5">
           {themeOptions.map(opt => (
             <button
               key={opt.value}
               onClick={() => setMode(opt.value)}
-              className={`flex-1 max-w-[160px] px-4 py-3 rounded-lg border text-left transition ${
+              className={`flex-1 max-w-[160px] px-4 py-3 border text-left transition ${
                 mode === opt.value
                   ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
                   : "border-[var(--color-border-light)] bg-[var(--color-bg)] hover:border-[var(--color-scrollbar)]"
               }`}
+              style={{ borderRadius: "var(--radius-card)" }}
             >
               <div className="flex items-center gap-2 mb-1">
                 <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -185,9 +191,36 @@ function GeneralSettings() {
             </button>
           ))}
         </div>
+
+        {/* Style */}
+        <p className="text-sm text-[var(--color-text-secondary)] mb-2">Style</p>
+        <div className="flex gap-3">
+          {styleOptions.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setStyle(opt.value)}
+              className={`flex-1 max-w-[200px] px-4 py-3 border text-left transition ${
+                style === opt.value
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
+                  : "border-[var(--color-border-light)] bg-[var(--color-bg)] hover:border-[var(--color-scrollbar)]"
+              }`}
+              style={{ borderRadius: "var(--radius-card)" }}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                  style === opt.value ? "border-[var(--color-accent)]" : "border-[var(--color-scrollbar)]"
+                }`}>
+                  {style === opt.value && <div className="w-2 h-2 rounded-full bg-[var(--color-accent)]" />}
+                </div>
+                <span className="text-sm font-medium">{opt.label}</span>
+              </div>
+              <p className="text-xs text-[var(--color-text-muted)] ml-6">{opt.description}</p>
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+      <div className="bg-[var(--color-surface)] card p-4">
         <h3 className="font-medium mb-2">Instance URL</h3>
         <p className="text-sm text-[var(--color-text-muted)] mb-4">
           The public HTTPS URL for this instance. Used for webhook callbacks from external services like Composio.
@@ -548,7 +581,7 @@ function ProjectsSettings() {
           {projects.map(project => (
             <div
               key={project.id}
-              className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 flex items-center gap-4"
+              className="bg-[var(--color-surface)] card p-4 flex items-center gap-4"
             >
               <div
                 className="w-4 h-4 rounded-full flex-shrink-0"
@@ -818,7 +851,7 @@ function UpdatesSettings() {
           </div>
 
           {/* Current Version */}
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-5">
+          <div className="bg-[var(--color-surface)] card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-medium text-lg">Current Version</h3>
@@ -881,7 +914,7 @@ function UpdatesSettings() {
           )}
 
           {/* Apteva App Version */}
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-5">
+          <div className="bg-[var(--color-surface)] card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-medium text-lg">apteva</h3>
@@ -921,7 +954,7 @@ function UpdatesSettings() {
           </div>
 
           {/* Agent Binary Version */}
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-5">
+          <div className="bg-[var(--color-surface)] card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-medium text-lg">Agent Binary</h3>
@@ -1783,7 +1816,7 @@ function ApiKeysSettings() {
 
       {/* Create Form */}
       {showCreate && !newKey && (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 mb-6">
+        <div className="bg-[var(--color-surface)] card p-4 mb-6">
           <h3 className="font-medium mb-4">Create new API key</h3>
           <div className="space-y-4 max-w-md">
             <div>
@@ -1880,7 +1913,7 @@ function ApiKeysSettings() {
 
       {/* Usage Info */}
       {keys.length > 0 && (
-        <div className="mt-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+        <div className="mt-6 bg-[var(--color-surface)] card p-4">
           <h3 className="font-medium mb-2 text-sm">Usage</h3>
           <code className="block bg-[var(--color-bg)] px-3 py-2 rounded font-mono text-xs text-[var(--color-text-secondary)]">
             curl -H "X-API-Key: apt_..." http://localhost:4280/api/agents
@@ -1953,7 +1986,7 @@ function AccountSettings() {
 
       {/* User Info */}
       {user && (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 mb-6">
+        <div className="bg-[var(--color-surface)] card p-4 mb-6">
           <h3 className="font-medium mb-3">Profile</h3>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
@@ -1975,7 +2008,7 @@ function AccountSettings() {
       )}
 
       {/* Change Password */}
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+      <div className="bg-[var(--color-surface)] card p-4">
         <h3 className="font-medium mb-4">Change Password</h3>
 
         <div className="space-y-4 max-w-md">
@@ -2086,7 +2119,7 @@ function DataSettings() {
         <p className="text-[var(--color-text-muted)]">Manage stored data and telemetry.</p>
       </div>
 
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+      <div className="bg-[var(--color-surface)] card p-4">
         <h3 className="font-medium mb-2">Telemetry Data</h3>
         <p className="text-sm text-[var(--color-text-muted)] mb-4">
           {eventCount !== null
@@ -2272,7 +2305,7 @@ function ChannelsSettings() {
 
       {/* Create form */}
       {showForm && (
-        <div className="mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 space-y-3">
+        <div className="mb-6 bg-[var(--color-surface)] card p-4 space-y-3">
           <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2">New Telegram Channel</h3>
 
           <div>
@@ -2339,7 +2372,7 @@ function ChannelsSettings() {
       ) : (
         <div className="space-y-3">
           {channels.map(channel => (
-            <div key={channel.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+            <div key={channel.id} className="bg-[var(--color-surface)] card p-4">
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">

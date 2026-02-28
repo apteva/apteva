@@ -30,7 +30,7 @@ export function LoadingSpinner({ message = "Loading...", fullScreen = false }: L
 
   if (fullScreen) {
     return (
-      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] font-mono flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] flex items-center justify-center">
         {content}
       </div>
     );

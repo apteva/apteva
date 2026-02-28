@@ -34,10 +34,10 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
   return (
     <div
       onClick={onSelect}
-      className={`bg-[var(--color-surface)] rounded p-5 border transition cursor-pointer flex flex-col h-full ${
+      className={`bg-[var(--color-surface)] card p-5 transition cursor-pointer flex flex-col h-full ${
         selected
-          ? 'border-[var(--color-accent)]'
-          : 'border-[var(--color-border)] hover:border-[var(--color-border-light)]'
+          ? '!border-[var(--color-accent)]'
+          : 'hover:border-[var(--color-border-light)]'
       }`}
     >
       <div className="flex items-start justify-between mb-3">
@@ -62,7 +62,8 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
           {enabledFeatures.map(({ key, icon: Icon, label }) => (
             <span
               key={key}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--color-accent-10)] text-[var(--color-accent-70)] text-xs"
+              className="inline-flex items-center gap-1 px-2 py-0.5 bg-[var(--color-accent-10)] text-[var(--color-accent-70)] text-xs"
+              style={{ borderRadius: "var(--radius-badge)" }}
               title={label}
             >
               <Icon className="w-3 h-3" />
@@ -143,7 +144,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
       <button
         onClick={onToggle}
         disabled={agent.status === "starting" || agent.status === "stopping"}
-        className={`w-full px-3 py-1.5 rounded text-sm font-medium transition mt-auto ${
+        className={`w-full px-3 py-1.5 btn text-sm font-medium transition mt-auto ${
           agent.status === "starting" || agent.status === "stopping"
             ? "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)] cursor-wait"
             : agent.status === "running"
@@ -160,7 +161,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
 function StatusBadge({ status, isActive, activityLabel }: { status: Agent["status"]; isActive?: boolean; activityLabel?: string }) {
   if (status === "running" && isActive && activityLabel) {
     return (
-      <span className="px-2 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400 animate-pulse">
+      <span className="px-2 py-1 text-xs font-medium bg-green-500/20 text-green-400 animate-pulse" style={{ borderRadius: "var(--radius-badge)" }}>
         {activityLabel}
       </span>
     );
@@ -170,13 +171,14 @@ function StatusBadge({ status, isActive, activityLabel }: { status: Agent["statu
 
   return (
     <span
-      className={`px-2 py-1 rounded text-xs font-medium ${
+      className={`px-2 py-1 text-xs font-medium ${
         isTransitioning
           ? "bg-yellow-500/20 text-yellow-400 animate-pulse"
           : status === "running"
             ? "bg-[#3b82f6]/20 text-[#3b82f6]"
             : "bg-[var(--color-surface-raised)] text-[var(--color-text-muted)]"
       }`}
+      style={{ borderRadius: "var(--radius-badge)" }}
     >
       {status}
     </span>

@@ -202,7 +202,7 @@ export function CreateAgentModal({
                       key={key}
                       type="button"
                       onClick={() => toggleFeature(key)}
-                      className={`flex items-center gap-3 p-3 rounded border text-left transition ${
+                      className={`flex items-center gap-3 p-3 btn border text-left transition ${
                         isEnabled
                           ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
                           : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)]"
@@ -237,7 +237,7 @@ export function CreateAgentModal({
                       },
                     },
                   })}
-                  className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                  className={`flex items-center gap-2 px-3 py-2 btn border transition ${
                     form.features.builtinTools?.webSearch
                       ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
                       : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
@@ -260,7 +260,7 @@ export function CreateAgentModal({
                       },
                     },
                   })}
-                  className={`flex items-center gap-2 px-3 py-2 rounded border transition ${
+                  className={`flex items-center gap-2 px-3 py-2 btn border transition ${
                     form.features.builtinTools?.webFetch
                       ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]"
                       : "border-[var(--color-border-light)] hover:border-[var(--color-border-light)] text-[var(--color-text-secondary)]"
@@ -282,14 +282,14 @@ export function CreateAgentModal({
           <div className="flex gap-3 mt-6">
             <button
               onClick={onClose}
-              className="flex-1 border border-[var(--color-border-light)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] px-4 py-2 rounded font-medium transition"
+              className="flex-1 border border-[var(--color-border-light)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] px-4 py-2 btn font-medium transition"
             >
               Cancel
             </button>
             <button
               onClick={onCreate}
               disabled={!form.name}
-              className="flex-1 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 rounded font-medium transition"
+              className="flex-1 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-black px-4 py-2 btn font-medium transition"
             >
               Create
             </button>

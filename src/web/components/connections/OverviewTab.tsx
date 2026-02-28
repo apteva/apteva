@@ -75,7 +75,7 @@ export function OverviewTab() {
       <section>
         <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Subscriptions ({subscriptions.length})</h3>
         {subscriptions.length === 0 ? (
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
+          <div className="bg-[var(--color-surface)] card p-6 text-center text-[var(--color-text-muted)] text-sm">
             No subscriptions yet. Go to the Triggers tab to create one.
           </div>
         ) : (
@@ -83,7 +83,7 @@ export function OverviewTab() {
             {subscriptions.map(sub => {
               const agent = agentMap.get(sub.agent_id);
               return (
-                <div key={sub.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                <div key={sub.id} className="bg-[var(--color-surface)] card p-3 flex items-center gap-3">
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sub.enabled ? "bg-green-400" : "bg-[var(--color-text-faint)]"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
@@ -127,7 +127,7 @@ function StatCard({
   valueColor?: string;
 }) {
   return (
-    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+    <div className="bg-[var(--color-surface)] card p-4">
       <div className="text-xs text-[var(--color-text-muted)] mb-1">{label}</div>
       <div className={`text-2xl font-bold ${valueColor || "text-[var(--color-text)]"}`}>
         {value}

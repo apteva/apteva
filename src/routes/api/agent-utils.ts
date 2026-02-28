@@ -1,7 +1,7 @@
 import { spawn } from "bun";
 import { join } from "path";
 import { homedir } from "os";
-import { mkdirSync, existsSync, rmSync } from "fs";
+import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { agentProcesses, agentsStarting, getBinaryPathForAgent, getBinaryStatus, BIN_DIR, telemetryBroadcaster, isShuttingDown, type TelemetryEvent } from "../../server";
 import { AgentDB, McpServerDB, SkillDB, SubscriptionDB, TelemetryDB, generateId, getMultiAgentConfig, getOperatorConfig, type Agent, type Project } from "../../db";
 import { ProviderKeys, PROVIDERS, type ProviderId } from "../../providers";
@@ -544,7 +544,9 @@ export async function startAgentProcess(
 
     // Build environment with provider key and agent API key
     // CONFIG_PATH ensures each agent has its own config file (prevents sharing)
+    // Remove stale persisted config — platform is source of truth and pushes fresh config after boot
     const agentConfigPath = join(agentDataDir, "agent-config.json");
+    rmSync(agentConfigPath, { force: true });
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       PORT: String(port),
@@ -565,8 +567,19 @@ export async function startAgentProcess(
     // Get binary path dynamically (allows hot-reload of new binary versions)
     const binaryPath = getBinaryPathForAgent();
 
+    // Write VERSION file so the binary knows its version (ldflags not set in npm builds)
+    try {
+      const { dirname } = await import("path");
+      const pkgJsonPath = require.resolve("@apteva/agent-linux-x64/package.json");
+      const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+      if (pkg.version) {
+        writeFileSync(join(agentDataDir, "VERSION"), pkg.version);
+      }
+    } catch {}
+
     const proc = spawn({
       cmd: [binaryPath],
+      cwd: agentDataDir,
       env,
       stdout: "ignore",
       stderr: "ignore",
@@ -644,6 +657,15 @@ export async function startAgentProcess(
   }
 }
 
+// Strip legacy "mode" field from multi-agent config
+function cleanFeatures(features: Agent["features"]): Agent["features"] {
+  if (features.agents && typeof features.agents === "object") {
+    const { mode, ...rest } = features.agents as any;
+    return { ...features, agents: rest };
+  }
+  return features;
+}
+
 // Transform DB agent to API response format (camelCase for frontend compatibility)
 // Uses batch queries + light MCP loading (no decryption) for performance
 export function toApiAgent(agent: Agent) {
@@ -687,7 +709,7 @@ export function toApiAgent(agent: Agent) {
     systemPrompt: agent.system_prompt,
     status: agent.status,
     port: agent.port,
-    features: agent.features,
+    features: cleanFeatures(agent.features),
     mcpServers: agent.mcp_servers,
     mcpServerDetails,
     skills: agent.skills,
@@ -734,7 +756,7 @@ export function toApiAgentsBatch(agents: Agent[]) {
     return {
       id: agent.id, name: agent.name, model: agent.model, provider: agent.provider,
       systemPrompt: agent.system_prompt, status: agent.status, port: agent.port,
-      features: agent.features, mcpServers: agent.mcp_servers, mcpServerDetails,
+      features: cleanFeatures(agent.features), mcpServers: agent.mcp_servers, mcpServerDetails,
       skills: agent.skills, skillDetails, subscriptions, projectId: agent.project_id,
       createdAt: agent.created_at, updatedAt: agent.updated_at,
     };

@@ -125,7 +125,7 @@ export function OnboardingWizard({ onComplete, needsAccount = false }: Onboardin
   const currentStep = needsAccount ? step : step - 1;
 
   return (
-    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] font-mono flex items-center justify-center p-8">
+    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] flex items-center justify-center p-8">
       <div className="w-full max-w-2xl">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -149,7 +149,7 @@ export function OnboardingWizard({ onComplete, needsAccount = false }: Onboardin
           <div className={`w-3 h-3 rounded-full ${step >= 2 ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-surface-raised)]'}`} />
         </div>
 
-        <div className="bg-[var(--color-surface)] rounded-lg border border-[var(--color-border)] p-8">
+        <div className="bg-[var(--color-surface)] card p-8">
           {step === 0 && needsAccount && (
             <CreateAccountStep onComplete={handleAccountCreated} />
           )}

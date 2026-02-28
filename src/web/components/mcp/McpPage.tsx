@@ -156,7 +156,7 @@ export function McpPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-1 w-fit">
+        <div className="flex gap-1 mb-6 bg-[var(--color-surface)] card p-1 w-fit">
           <button
             onClick={() => setActiveTab("servers")}
             className={`px-4 py-2 rounded text-sm font-medium transition ${
@@ -199,7 +199,7 @@ export function McpPage() {
 
             {/* Empty State */}
             {!loading && filteredServers.length === 0 && servers.length === 0 && (
-              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+              <div className="bg-[var(--color-surface)] card p-8 text-center">
                 <McpIcon className="w-12 h-12 text-[var(--color-border-light)] mx-auto mb-4" />
                 <h3 className="text-lg font-medium mb-2">No MCP servers configured</h3>
                 <p className="text-[var(--color-text-muted)] mb-6 max-w-md mx-auto">
@@ -225,7 +225,7 @@ export function McpPage() {
 
             {/* Empty filter state */}
             {!loading && filteredServers.length === 0 && servers.length > 0 && (
-              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center">
+              <div className="bg-[var(--color-surface)] card p-6 text-center">
                 <p className="text-[var(--color-text-muted)]">No servers match this filter.</p>
               </div>
             )}
@@ -298,7 +298,7 @@ export function McpPage() {
 
         {/* Info - only show on servers tab */}
         {activeTab === "servers" && (
-          <div className="mt-8 p-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg">
+          <div className="mt-8 p-4 bg-[var(--color-surface)] card">
             <h3 className="font-medium mb-2">Quick Start</h3>
             <p className="text-sm text-[var(--color-text-muted)] mb-3">
               Add an MCP server by providing its npm package name. For example:
@@ -523,7 +523,7 @@ function ToolsPanel({
   }, [server.id, authFetch]);
 
   return (
-    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg overflow-hidden">
+    <div className="bg-[var(--color-surface)] card overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-[var(--color-border)] flex items-center justify-between">
         <div>
@@ -859,7 +859,7 @@ function RegistryBrowser({
           {servers.map((server) => (
             <div
               key={server.id}
-              className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 hover:border-[var(--color-border-light)] transition"
+              className="bg-[var(--color-surface)] card p-4 hover:border-[var(--color-border-light)] transition"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -913,7 +913,7 @@ function RegistryBrowser({
       )}
 
       {/* Registry info */}
-      <div className="p-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-muted)]">
+      <div className="p-4 bg-[var(--color-surface)] card text-sm text-[var(--color-text-muted)]">
         <p>
           Servers are sourced from the{" "}
           <a
@@ -1060,7 +1060,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
 
   if (!hasAnyConnection) {
     return (
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+      <div className="bg-[var(--color-surface)] card p-8 text-center">
         <p className="text-[var(--color-text-secondary)] mb-2">No hosted MCP services connected</p>
         <p className="text-sm text-[var(--color-text-muted)] mb-4">
           Connect Composio, Smithery, or AgentDojo in Settings to access cloud-based MCP servers.
@@ -1206,7 +1206,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
               {loadingConfigs ? (
                 <div className="text-center py-6 text-[var(--color-text-muted)]">Loading configs...</div>
               ) : composioConfigs.length === 0 ? (
-                <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+                <div className="bg-[var(--color-surface)] card p-4 text-center">
                   <p className="text-sm text-[var(--color-text-muted)]">No MCP configs found</p>
                   <p className="text-xs text-[var(--color-text-faint)] mt-2">
                     First <button onClick={() => setSubTab("connect")} className="text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">connect some apps</button>, then create a config.
@@ -1310,7 +1310,7 @@ function HostedServices({ onServerAdded, projectId }: { onServerAdded?: () => vo
               Browse Smithery →
             </a>
           </div>
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+          <div className="bg-[var(--color-surface)] card p-4 text-center">
             <p className="text-sm text-[var(--color-text-muted)]">
               Smithery servers can be added from the <strong>Browse Registry</strong> tab.
             </p>
@@ -1498,7 +1498,7 @@ function AgentDojoContent({
             {loadingConfigs ? (
               <div className="text-center py-6 text-[var(--color-text-muted)]">Loading servers...</div>
             ) : configs.length === 0 ? (
-              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+              <div className="bg-[var(--color-surface)] card p-4 text-center">
                 <p className="text-sm text-[var(--color-text-muted)]">No MCP servers found</p>
                 <p className="text-xs text-[var(--color-text-faint)] mt-2">
                   <button onClick={() => setSubTab("toolkits")} className="text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]">
@@ -1845,7 +1845,7 @@ function AddServerModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
+      <div className="bg-[var(--color-surface)] card w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="p-4 border-b border-[var(--color-border)] flex items-center justify-between sticky top-0 bg-[var(--color-surface)]">
           <h2 className="text-lg font-semibold">Add MCP Server</h2>
           <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">
@@ -2303,7 +2303,7 @@ function EditServerModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
+      <div className="bg-[var(--color-surface)] card w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="p-4 border-b border-[var(--color-border)] flex items-center justify-between sticky top-0 bg-[var(--color-surface)]">
           <h2 className="text-lg font-semibold">Edit MCP Server</h2>
           <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">

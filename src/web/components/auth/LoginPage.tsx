@@ -23,7 +23,7 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] font-mono flex items-center justify-center p-8">
+    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] flex items-center justify-center p-8">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -34,7 +34,7 @@ export function LoginPage() {
           <p className="text-[var(--color-text-muted)]">Run AI agents locally</p>
         </div>
 
-        <div className="bg-[var(--color-surface)] rounded-lg border border-[var(--color-border)] p-8">
+        <div className="bg-[var(--color-surface)] card p-8">
           <h2 className="text-2xl font-semibold mb-2">Welcome back</h2>
           <p className="text-[var(--color-text-muted)] mb-6">Sign in to continue to apteva</p>
 

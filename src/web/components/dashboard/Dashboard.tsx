@@ -454,12 +454,12 @@ function QuickMessageModal({ agent, onClose }: { agent: Agent; onClose: () => vo
               onKeyDown={e => e.key === "Enter" && handleSend()}
               placeholder={`Message ${agent.name}...`}
               disabled={sending}
-              className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--color-accent)] placeholder-[#444] disabled:opacity-50"
+              className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border-light)] btn px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--color-accent)] placeholder-[#444] disabled:opacity-50"
             />
             <button
               onClick={handleSend}
               disabled={sending || !message.trim()}
-              className="px-4 py-2.5 bg-[var(--color-accent)] text-black rounded-lg text-sm font-medium hover:bg-[var(--color-accent-hover)] transition disabled:opacity-30"
+              className="px-4 py-2.5 bg-[var(--color-accent)] text-black btn text-sm font-medium hover:bg-[var(--color-accent-hover)] transition disabled:opacity-30"
             >
               {sending ? "..." : "Send"}
             </button>

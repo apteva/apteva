@@ -74,7 +74,7 @@ export function IntegrationsTab() {
       {providers.length > 1 && (
         <div className="flex items-center gap-2 mb-4">
           <span className="text-xs text-[var(--color-text-muted)]">Provider:</span>
-          <div className="flex gap-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-0.5">
+          <div className="flex gap-1 bg-[var(--color-surface)] card p-0.5">
             {providers.map(p => (
               <button
                 key={p.id}
@@ -93,7 +93,7 @@ export function IntegrationsTab() {
       )}
 
       {providers.length === 0 ? (
-        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+        <div className="bg-[var(--color-surface)] card p-8 text-center">
           <p className="text-[var(--color-text-muted)]">No integration providers configured.</p>
           <p className="text-sm text-[var(--color-text-faint)] mt-1">Add API keys for Composio or AgentDojo in Settings.</p>
         </div>
@@ -133,7 +133,7 @@ export function IntegrationsTab() {
               ) : (
                 <div className="space-y-2">
                   {triggerTypes.map(tt => (
-                    <div key={tt.slug} className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-3">
+                    <div key={tt.slug} className="bg-[var(--color-bg)] card p-3">
                       <div className="flex items-start gap-3">
                         {tt.logo ? (
                           <img src={tt.logo} alt={tt.toolkit_name} className="w-6 h-6 rounded object-contain flex-shrink-0 mt-0.5" />

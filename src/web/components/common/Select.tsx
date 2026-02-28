@@ -35,7 +35,7 @@ export function Select({ value, options, onChange, placeholder = "Select...", co
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)] hover:border-[var(--color-border-light)] transition`}
+        className={`w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] btn ${compact ? "px-2.5 py-1.5 text-sm" : "px-3 py-2"} text-left flex items-center justify-between focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)] hover:border-[var(--color-border-light)] transition`}
       >
         <span className={selectedOption ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"}>
           {selectedOption ? (
@@ -51,7 +51,7 @@ export function Select({ value, options, onChange, placeholder = "Select...", co
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 w-full min-w-max mt-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] rounded shadow-lg max-h-60 overflow-y-auto scrollbar-hide">
+        <div className="absolute z-50 w-full min-w-max mt-1 bg-[var(--color-surface)] border border-[var(--color-border-light)] shadow-lg max-h-60 overflow-y-auto scrollbar-hide" style={{ borderRadius: "var(--radius-button)" }}>
           {options.map((option) => (
             <button
               key={option.value}

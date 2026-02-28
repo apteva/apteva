@@ -34,6 +34,13 @@ export async function handleTelemetryRoutes(
         return json({ error: "agent_id and events are required" }, 400);
       }
 
+      // Debug: log raw incoming events
+      for (const event of body.events) {
+        if (event.category === "LLM") {
+          console.log(`[telemetry] RAW LLM event from ${body.agent_id}: ${JSON.stringify(event)}`);
+        }
+      }
+
       // Filter out debug events - too noisy
       const filteredEvents = body.events.filter(e => e.level !== "debug");
 
@@ -47,7 +54,16 @@ export async function handleTelemetryRoutes(
             if (event.category === "LLM" && event.data) {
               const inputTokens = (event.data.input_tokens as number) || 0;
               const outputTokens = (event.data.output_tokens as number) || 0;
-              (event as any).cost = (inputTokens * pricing.input_cost + outputTokens * pricing.output_cost) / 1_000_000;
+              const cacheCreationTokens = (event.data.cache_creation_tokens as number) || 0;
+              const cacheReadTokens = (event.data.cache_read_tokens as number) || 0;
+              const reasoningTokens = (event.data.reasoning_tokens as number) || 0;
+              (event as any).cost = (
+                inputTokens * pricing.input_cost +
+                outputTokens * pricing.output_cost +
+                cacheCreationTokens * pricing.cache_creation_cost +
+                cacheReadTokens * pricing.cache_read_cost +
+                reasoningTokens * pricing.output_cost
+              ) / 1_000_000;
             }
           }
         }
@@ -134,7 +150,7 @@ export async function handleTelemetryRoutes(
       project_id: projectIdParam === "null" ? null : projectIdParam || undefined,
       since: url.searchParams.get("since") || undefined,
       until: url.searchParams.get("until") || undefined,
-      group_by: (url.searchParams.get("group_by") as "agent" | "day") || undefined,
+      group_by: (url.searchParams.get("group_by") as "agent" | "day" | "project") || undefined,
     });
     return json({ usage });
   }
@@ -147,6 +163,8 @@ export async function handleTelemetryRoutes(
     const stats = TelemetryDB.getStats({
       agentId,
       projectId: projectIdParam === "null" ? null : projectIdParam || undefined,
+      since: url.searchParams.get("since") || undefined,
+      until: url.searchParams.get("until") || undefined,
     });
     return json({ stats });
   }

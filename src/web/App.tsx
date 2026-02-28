@@ -241,7 +241,7 @@ function AppContent() {
   }
 
   return (
-    <div className="h-screen font-mono flex flex-col overflow-hidden" style={{ backgroundColor: "var(--color-bg)", color: "var(--color-text)" }}>
+    <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: "var(--color-bg)", color: "var(--color-text)" }}>
       <Header onMenuClick={() => setMobileMenuOpen(true)} agents={agents} />
 
       {startError && (

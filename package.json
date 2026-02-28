@@ -1,6 +1,6 @@
 {
   "name": "apteva",
-  "version": "0.4.44",
+  "version": "0.4.48",
   "description": "Run AI agents locally. Multi-provider support for Claude, GPT, Gemini, Llama, and more.",
   "type": "module",
   "main": "./dist/index.js",
@@ -60,13 +60,14 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "playwright": "^1.58.2",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@apteva/apteva-kit": "^0.1.127",
+    "@apteva/apteva-kit": "^0.1.131",
     "grammy": "^1.40.0",
     "ink": "^6.7.0",
     "ink-spinner": "^5.0.0",

@@ -12,9 +12,9 @@ export const PROVIDERS = {
     docsUrl: "https://console.anthropic.com/settings/keys",
     testEndpoint: "https://api.anthropic.com/v1/messages",
     models: [
-      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", recommended: true, input_cost: 3, output_cost: 15 },
-      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", input_cost: 3, output_cost: 15 },
-      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5 (Fast)", input_cost: 0.8, output_cost: 4 },
+      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", recommended: true, input_cost: 3, output_cost: 15, cache_creation_cost: 3.75, cache_read_cost: 0.3 },
+      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", input_cost: 3, output_cost: 15, cache_creation_cost: 3.75, cache_read_cost: 0.3 },
+      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5 (Fast)", input_cost: 0.8, output_cost: 4, cache_creation_cost: 1, cache_read_cost: 0.08 },
     ],
   },
   openai: {
@@ -233,14 +233,19 @@ export const PROVIDERS = {
 
 export type ProviderId = keyof typeof PROVIDERS;
 
-/** Get cost per 1M tokens for a given provider + model. Returns { input_cost, output_cost } in USD. */
-export function getModelCost(provider: string, model: string): { input_cost: number; output_cost: number } {
+/** Get cost per 1M tokens for a given provider + model. Returns { input_cost, output_cost, cache_creation_cost, cache_read_cost } in USD. */
+export function getModelCost(provider: string, model: string): { input_cost: number; output_cost: number; cache_creation_cost: number; cache_read_cost: number } {
   const providerDef = PROVIDERS[provider as ProviderId];
-  if (!providerDef || !("models" in providerDef)) return { input_cost: 0, output_cost: 0 };
-  const modelDef = (providerDef.models as ReadonlyArray<{ value: string; input_cost?: number; output_cost?: number }>)
+  if (!providerDef || !("models" in providerDef)) return { input_cost: 0, output_cost: 0, cache_creation_cost: 0, cache_read_cost: 0 };
+  const modelDef = (providerDef.models as ReadonlyArray<{ value: string; input_cost?: number; output_cost?: number; cache_creation_cost?: number; cache_read_cost?: number }>)
     .find(m => m.value === model);
-  if (!modelDef) return { input_cost: 0, output_cost: 0 };
-  return { input_cost: modelDef.input_cost ?? 0, output_cost: modelDef.output_cost ?? 0 };
+  if (!modelDef) return { input_cost: 0, output_cost: 0, cache_creation_cost: 0, cache_read_cost: 0 };
+  return {
+    input_cost: modelDef.input_cost ?? 0,
+    output_cost: modelDef.output_cost ?? 0,
+    cache_creation_cost: modelDef.cache_creation_cost ?? 0,
+    cache_read_cost: modelDef.cache_read_cost ?? 0,
+  };
 }
 
 // Provider Keys Management

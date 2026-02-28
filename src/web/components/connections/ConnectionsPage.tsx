@@ -28,7 +28,7 @@ export function ConnectionsPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-1 w-fit">
+        <div className="flex gap-1 mb-6 bg-[var(--color-surface)] card p-1 w-fit">
           {tabs.map(tab => (
             <button
               key={tab.id}

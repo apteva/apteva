@@ -158,7 +158,7 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
             {showUserMenu && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
-                <div className="absolute left-3 bottom-full mb-1 w-48 rounded-lg shadow-xl z-50" style={{ backgroundColor: "var(--color-surface)", border: "1px solid var(--color-border-light)" }}>
+                <div className="absolute left-3 bottom-full mb-1 w-48 card shadow-xl z-50" style={{ backgroundColor: "var(--color-surface)" }}>
                   <button
                     onClick={handleLogout}
                     className="w-full px-4 py-2.5 text-left text-sm text-red-400 transition rounded-lg"
@@ -189,8 +189,9 @@ function NavButton({ icon, label, active, onClick, badge }: NavButtonProps) {
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-3 py-2 rounded font-medium transition"
+      className="w-full flex items-center gap-3 px-3 py-2 font-medium transition"
       style={{
+        borderRadius: "var(--radius-button)",
         backgroundColor: active ? "var(--color-surface)" : "transparent",
         color: active ? "var(--color-text)" : "var(--color-text-muted)",
       }}

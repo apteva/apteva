@@ -594,7 +594,7 @@ export function TriggersTab() {
 
   if (providers.length === 0 && !triggersLoading) {
     return (
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-8 text-center">
+      <div className="bg-[var(--color-surface)] card p-8 text-center">
         <p className="text-[var(--color-text-muted)]">No trigger providers configured.</p>
         <p className="text-sm text-[var(--color-text-faint)] mt-1">Add API keys for Composio or AgentDojo in Settings to enable triggers.</p>
       </div>
@@ -615,7 +615,7 @@ export function TriggersTab() {
       {providers.length > 1 && (
         <div className="flex items-center gap-2">
           <span className="text-xs text-[var(--color-text-muted)]">Provider:</span>
-          <div className="flex gap-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-0.5">
+          <div className="flex gap-1 bg-[var(--color-surface)] card p-0.5">
             {providers.map(p => (
               <button
                 key={p.id}
@@ -654,7 +654,7 @@ export function TriggersTab() {
         </div>
 
         {subscriptions.length === 0 ? (
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
+          <div className="bg-[var(--color-surface)] card p-6 text-center text-[var(--color-text-muted)] text-sm">
             No subscriptions yet. Add one to route trigger events to an agent.
           </div>
         ) : (
@@ -662,7 +662,7 @@ export function TriggersTab() {
             {subscriptions.map(sub => {
               const agent = agentMap.get(sub.agent_id);
               return (
-                <div key={sub.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                <div key={sub.id} className="bg-[var(--color-surface)] card p-3 flex items-center gap-3">
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${sub.enabled ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
@@ -712,13 +712,13 @@ export function TriggersTab() {
           {triggersLoading ? (
             <div className="text-center py-6 text-[var(--color-text-muted)] text-sm">Loading triggers...</div>
           ) : triggers.length === 0 ? (
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
+            <div className="bg-[var(--color-surface)] card p-6 text-center text-[var(--color-text-muted)] text-sm">
               No trigger instances. Browse trigger types below to create one.
             </div>
           ) : (
             <div className="space-y-2">
               {triggers.map(trigger => (
-                <div key={trigger.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                <div key={trigger.id} className="bg-[var(--color-surface)] card p-3 flex items-center gap-3">
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
@@ -770,7 +770,7 @@ export function TriggersTab() {
           {triggersLoading ? (
             <div className="text-center py-6 text-[var(--color-text-muted)] text-sm">Loading subscriptions...</div>
           ) : triggers.length === 0 ? (
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-6 text-center text-[var(--color-text-muted)] text-sm">
+            <div className="bg-[var(--color-surface)] card p-6 text-center text-[var(--color-text-muted)] text-sm">
               No active subscriptions. Browse trigger types below to create one.
             </div>
           ) : (
@@ -779,7 +779,7 @@ export function TriggersTab() {
                 const localSub = subscriptions.find(s => s.trigger_instance_id === trigger.id);
                 const agent = localSub ? agentMap.get(localSub.agent_id) : null;
                 return (
-                  <div key={trigger.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-3 flex items-center gap-3">
+                  <div key={trigger.id} className="bg-[var(--color-surface)] card p-3 flex items-center gap-3">
                     <div className={`w-2 h-2 rounded-full flex-shrink-0 ${trigger.status === "active" ? "bg-green-400" : "bg-[var(--color-text-muted)]"}`} />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">

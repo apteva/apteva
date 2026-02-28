@@ -342,7 +342,7 @@ export function TestsPage() {
       ) : (
         <div className="space-y-3">
           {tests.map(tc => (
-            <div key={tc.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+            <div key={tc.id} className="bg-[var(--color-surface)] card p-4">
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
@@ -515,7 +515,7 @@ export function TestsPage() {
       {/* Create/Edit Form Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={() => setShowForm(false)}>
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg w-full max-w-lg mx-4 p-6" onClick={e => e.stopPropagation()}>
+          <div className="bg-[var(--color-surface)] card w-full max-w-lg mx-4 p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-bold mb-4">{editingTest ? "Edit Test" : "New Test"}</h2>
 
             <div className="space-y-4">

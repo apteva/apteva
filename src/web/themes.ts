@@ -1,6 +1,7 @@
 /** Theme system — extensible for future custom themes */
 
 export type ThemeMode = "auto" | "dark" | "light";
+export type ThemeStyle = "classic" | "professional";
 
 export interface ThemeColors {
   "--color-bg": string;
@@ -30,6 +31,7 @@ export interface Theme {
 }
 
 export const themes: Record<string, Theme> = {
+  // ── Classic (terminal/hacker) ──────────────────────────
   dark: {
     id: "dark",
     name: "Dark",
@@ -88,12 +90,73 @@ export const themes: Record<string, Theme> = {
       "--color-scrollbar-hover": "#aaaaaa",
     },
   },
+
+  // ── Professional (enterprise/SaaS) ────────────────────
+  "professional-dark": {
+    id: "professional-dark",
+    name: "Professional Dark",
+    colors: {
+      "--color-bg": "#0f1117",
+      "--color-bg-secondary": "#131520",
+      "--color-surface": "#181a24",
+      "--color-surface-hover": "#1e2030",
+      "--color-surface-raised": "#232636",
+      "--color-border": "#252838",
+      "--color-border-light": "#2d3044",
+      "--color-text": "#d4d7e0",
+      "--color-text-secondary": "#8b8fa3",
+      "--color-text-muted": "#6b6f83",
+      "--color-text-faint": "#4e5266",
+      "--color-accent": "#7c3aed",
+      "--color-accent-hover": "#6d28d9",
+      "--color-accent-5": "rgba(124, 58, 237, 0.05)",
+      "--color-accent-10": "rgba(124, 58, 237, 0.1)",
+      "--color-accent-15": "rgba(124, 58, 237, 0.15)",
+      "--color-accent-20": "rgba(124, 58, 237, 0.2)",
+      "--color-accent-30": "rgba(124, 58, 237, 0.3)",
+      "--color-accent-70": "rgba(124, 58, 237, 0.7)",
+      "--color-selection-bg": "#7c3aed",
+      "--color-selection-text": "#ffffff",
+      "--color-scrollbar": "#2d3044",
+      "--color-scrollbar-hover": "#3d4058",
+    },
+  },
+  "professional-light": {
+    id: "professional-light",
+    name: "Professional Light",
+    colors: {
+      "--color-bg": "#f8f9fb",
+      "--color-bg-secondary": "#f0f2f5",
+      "--color-surface": "#ffffff",
+      "--color-surface-hover": "#f5f6f8",
+      "--color-surface-raised": "#eef0f4",
+      "--color-border": "#e2e4ea",
+      "--color-border-light": "#e8eaef",
+      "--color-text": "#1a1d2b",
+      "--color-text-secondary": "#4b5066",
+      "--color-text-muted": "#6b7088",
+      "--color-text-faint": "#9298ac",
+      "--color-accent": "#6d28d9",
+      "--color-accent-hover": "#5b21b6",
+      "--color-accent-5": "rgba(109, 40, 217, 0.05)",
+      "--color-accent-10": "rgba(109, 40, 217, 0.1)",
+      "--color-accent-15": "rgba(109, 40, 217, 0.15)",
+      "--color-accent-20": "rgba(109, 40, 217, 0.2)",
+      "--color-accent-30": "rgba(109, 40, 217, 0.3)",
+      "--color-accent-70": "rgba(109, 40, 217, 0.7)",
+      "--color-selection-bg": "#6d28d9",
+      "--color-selection-text": "#ffffff",
+      "--color-scrollbar": "#cdd0d8",
+      "--color-scrollbar-hover": "#b0b4c0",
+    },
+  },
 };
 
-/** Resolve the effective theme ID from a mode + system preference */
-export function resolveTheme(mode: ThemeMode, prefersDark: boolean): Theme {
-  if (mode === "auto") {
-    return prefersDark ? themes.dark : themes.light;
+/** Resolve the effective theme from mode + style + system preference */
+export function resolveTheme(mode: ThemeMode, style: ThemeStyle, prefersDark: boolean): Theme {
+  const isDark = mode === "auto" ? prefersDark : mode === "dark";
+  if (style === "professional") {
+    return isDark ? themes["professional-dark"] : themes["professional-light"];
   }
-  return themes[mode] || themes.dark;
+  return isDark ? themes.dark : themes.light;
 }

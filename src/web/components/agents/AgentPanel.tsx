@@ -123,6 +123,7 @@ function ChatTab({ agent, onStartAgent }: { agent: Agent; onStartAgent: (e?: Rea
         variant="terminal"
         theme={theme.id as "light" | "dark"}
         headerTitle={agent.name}
+        enableVoice={!!agent.features.realtime}
       />
     );
   }
@@ -328,6 +329,9 @@ function TasksTab({ agent }: { agent: Agent }) {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editForm, setEditForm] = useState({ title: "", description: "", type: "once" as "once" | "recurring", priority: 5, execute_at: "", recurrence: "" });
   const { confirm, ConfirmDialog } = useConfirm();
   const { events } = useTelemetry({ agent_id: agent.id, category: "task" });
 
@@ -428,6 +432,51 @@ function TasksTab({ agent }: { agent: Agent }) {
     }
   };
 
+  const startEditing = (task: Task) => {
+    setEditForm({
+      title: task.title,
+      description: task.description || "",
+      type: task.type as "once" | "recurring",
+      priority: task.priority,
+      execute_at: task.execute_at ? new Date(task.execute_at).toISOString().slice(0, 16) : "",
+      recurrence: task.recurrence || "",
+    });
+    setEditing(true);
+  };
+
+  const handleUpdateTask = async () => {
+    if (!selectedTask || saving) return;
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        title: editForm.title.trim(),
+        description: editForm.description.trim() || undefined,
+        type: editForm.type,
+        priority: editForm.priority,
+      };
+      if (editForm.type === "once" && editForm.execute_at) {
+        body.execute_at = new Date(editForm.execute_at).toISOString();
+      }
+      if (editForm.type === "recurring" && editForm.recurrence.trim()) {
+        body.recurrence = editForm.recurrence.trim();
+      }
+      const res = await authFetch(`/api/tasks/${agent.id}/${selectedTask.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setEditing(false);
+        setSelectedTask(null);
+        fetchTasks();
+      }
+    } catch (e) {
+      console.error("Failed to update task:", e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Refetch when agent changes, filter changes, or task telemetry arrives
   useEffect(() => {
     setLoading(true);
@@ -493,73 +542,182 @@ function TasksTab({ agent }: { agent: Agent }) {
         {/* Back button + actions */}
         <div className="px-4 pt-3 pb-2 border-b border-[var(--color-border)] shrink-0 flex items-center justify-between">
           <button
-            onClick={() => setSelectedTask(null)}
+            onClick={() => { setSelectedTask(null); setEditing(false); }}
             className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition flex items-center gap-1"
           >
-            <span>←</span> Back to tasks
+            <span>←</span> {editing ? "Cancel" : "Back to tasks"}
           </button>
           <div className="flex items-center gap-2">
-            {(selectedTask.status === "pending" || selectedTask.status === "completed") && (
-              <button
-                onClick={handleExecuteTask}
-                disabled={executing}
-                title="Execute now"
-                className="text-[var(--color-accent)] hover:opacity-80 transition disabled:opacity-50"
-              >
-                <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              </button>
+            {editing ? (
+              <>
+                <button
+                  onClick={() => setEditing(false)}
+                  className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-sm transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleUpdateTask}
+                  disabled={saving || !editForm.title.trim()}
+                  className="px-3 py-1 rounded text-sm bg-[var(--color-accent)] text-black hover:opacity-90 transition disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : "Save"}
+                </button>
+              </>
+            ) : (
+              <>
+                {(selectedTask.status === "pending" || selectedTask.status === "completed" || selectedTask.status === "failed") && (
+                  <button
+                    onClick={() => startEditing(selectedTask)}
+                    title="Edit task"
+                    className="text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition"
+                  >
+                    <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                  </button>
+                )}
+                {(selectedTask.status === "pending" || selectedTask.status === "completed") && (
+                  <button
+                    onClick={handleExecuteTask}
+                    disabled={executing}
+                    title="Execute now"
+                    className="text-[var(--color-accent)] hover:opacity-80 transition disabled:opacity-50"
+                  >
+                    <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </button>
+                )}
+                <button
+                  onClick={handleDeleteTask}
+                  disabled={deleting}
+                  title="Delete task"
+                  className="text-red-400 hover:text-red-300 transition disabled:opacity-50"
+                >
+                  <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                </button>
+              </>
             )}
-            <button
-              onClick={handleDeleteTask}
-              disabled={deleting}
-              title="Delete task"
-              className="text-red-400 hover:text-red-300 transition disabled:opacity-50"
-            >
-              <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-            </button>
           </div>
         </div>
 
         {/* Task detail content */}
         <div className="flex-1 overflow-auto p-4 space-y-4">
+          {(() => {
+            const inputClass = "w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]";
+            return <>
           {/* Title & Status */}
           <div>
             <div className="flex items-start justify-between gap-2 mb-1">
-              <h3 className="text-lg font-medium">{selectedTask.title}</h3>
-              <span className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${statusColors[selectedTask.status]}`}>
-                {selectedTask.status}
-              </span>
+              {editing ? (
+                <input
+                  type="text"
+                  value={editForm.title}
+                  onChange={e => setEditForm({ ...editForm, title: e.target.value })}
+                  className={`${inputClass} text-lg font-medium`}
+                  placeholder="Task title"
+                />
+              ) : (
+                <h3 className="text-lg font-medium">{selectedTask.title}</h3>
+              )}
+              {!editing && (
+                <span className={`px-2 py-1 rounded text-xs font-medium flex-shrink-0 ${statusColors[selectedTask.status]}`}>
+                  {selectedTask.status}
+                </span>
+              )}
             </div>
           </div>
 
           {/* Description */}
-          {selectedTask.description && (
+          {editing ? (
+            <div>
+              <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1">Description</h4>
+              <textarea
+                value={editForm.description}
+                onChange={e => setEditForm({ ...editForm, description: e.target.value })}
+                className={`${inputClass} resize-none`}
+                rows={3}
+                placeholder="Task description..."
+              />
+            </div>
+          ) : selectedTask.description ? (
             <div>
               <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1">Description</h4>
               <p className="text-sm text-[var(--color-text-secondary)] whitespace-pre-wrap">{selectedTask.description}</p>
             </div>
-          )}
+          ) : null}
 
           {/* Metadata */}
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <span className="text-[var(--color-text-muted)]">Type</span>
-              <p className="capitalize">{selectedTask.type}</p>
-            </div>
-            <div>
-              <span className="text-[var(--color-text-muted)]">Priority</span>
-              <p>{selectedTask.priority}</p>
-            </div>
-            {selectedTask.recurrence && (
+          {editing ? (
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <span className="text-[var(--color-text-muted)]">Recurrence</span>
-                <p>{formatCron(selectedTask.recurrence)}</p>
-                <p className="text-xs text-[var(--color-text-faint)] mt-0.5 font-mono">{selectedTask.recurrence}</p>
+                <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Type</label>
+                <select
+                  value={editForm.type}
+                  onChange={e => setEditForm({ ...editForm, type: e.target.value as "once" | "recurring" })}
+                  className={inputClass}
+                >
+                  <option value="once">One-time</option>
+                  <option value="recurring">Recurring</option>
+                </select>
               </div>
-            )}
-          </div>
+              <div>
+                <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Priority</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={editForm.priority}
+                  onChange={e => setEditForm({ ...editForm, priority: Number(e.target.value) })}
+                  className={inputClass}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <span className="text-[var(--color-text-muted)]">Type</span>
+                <p className="capitalize">{selectedTask.type}</p>
+              </div>
+              <div>
+                <span className="text-[var(--color-text-muted)]">Priority</span>
+                <p>{selectedTask.priority}</p>
+              </div>
+              {selectedTask.recurrence && (
+                <div>
+                  <span className="text-[var(--color-text-muted)]">Recurrence</span>
+                  <p>{formatCron(selectedTask.recurrence)}</p>
+                  <p className="text-xs text-[var(--color-text-faint)] mt-0.5 font-mono">{selectedTask.recurrence}</p>
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* Timestamps */}
+          {/* Schedule (edit mode) */}
+          {editing && editForm.type === "once" && (
+            <div>
+              <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Schedule</label>
+              <input
+                type="datetime-local"
+                value={editForm.execute_at}
+                onChange={e => setEditForm({ ...editForm, execute_at: e.target.value })}
+                className={inputClass}
+              />
+            </div>
+          )}
+          {editing && editForm.type === "recurring" && (
+            <div>
+              <label className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1 block">Cron Schedule</label>
+              <input
+                type="text"
+                value={editForm.recurrence}
+                onChange={e => setEditForm({ ...editForm, recurrence: e.target.value })}
+                className={`${inputClass} font-mono`}
+                placeholder="*/30 * * * *"
+              />
+              <p className="text-xs text-[var(--color-text-faint)] mt-1">e.g. */30 * * * * = every 30 min</p>
+            </div>
+          )}
+
+          {/* Timestamps (view mode only) */}
+          {!editing && (
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-[var(--color-text-muted)]">Created</span>
@@ -590,9 +748,10 @@ function TasksTab({ agent }: { agent: Agent }) {
               </div>
             )}
           </div>
+          )}
 
           {/* Error */}
-          {selectedTask.status === "failed" && selectedTask.error && (
+          {!editing && selectedTask.status === "failed" && selectedTask.error && (
             <div className="min-w-0">
               <h4 className="text-xs text-red-400 uppercase tracking-wider mb-1">Error</h4>
               <div className="bg-red-500/10 border border-red-500/20 rounded p-3 overflow-x-auto">
@@ -602,7 +761,7 @@ function TasksTab({ agent }: { agent: Agent }) {
           )}
 
           {/* Result */}
-          {selectedTask.status === "completed" && selectedTask.result && (
+          {!editing && selectedTask.status === "completed" && selectedTask.result && (
             <div className="min-w-0">
               <h4 className="text-xs text-green-400 uppercase tracking-wider mb-1">Result</h4>
               <div className="bg-green-500/10 border border-green-500/20 rounded p-3 overflow-x-auto">
@@ -614,13 +773,13 @@ function TasksTab({ agent }: { agent: Agent }) {
           )}
 
           {/* Trajectory */}
-          {loadingTask && !selectedTask.trajectory && (
+          {!editing && loadingTask && !selectedTask.trajectory && (
             <div>
               <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Trajectory</h4>
               <div className="text-sm text-[var(--color-text-faint)]">Loading trajectory...</div>
             </div>
           )}
-          {selectedTask.trajectory && selectedTask.trajectory.length > 0 && (
+          {!editing && selectedTask.trajectory && selectedTask.trajectory.length > 0 && (
             <div>
               <h4 className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
                 Trajectory ({selectedTask.trajectory.length} steps)
@@ -628,6 +787,8 @@ function TasksTab({ agent }: { agent: Agent }) {
               <TrajectoryView trajectory={selectedTask.trajectory} />
             </div>
           )}
+            </>;
+          })()}
         </div>
       </div>
     );
@@ -681,7 +842,7 @@ function TasksTab({ agent }: { agent: Agent }) {
             <div
               key={task.id}
               onClick={() => selectTask(task)}
-              className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 cursor-pointer hover:border-[var(--color-border-light)] transition"
+              className="bg-[var(--color-surface)] card p-4 cursor-pointer hover:border-[var(--color-border-light)] transition"
             >
               <div className="flex items-start justify-between mb-2">
                 <div className="flex-1 min-w-0">
