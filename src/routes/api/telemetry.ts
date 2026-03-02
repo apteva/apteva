@@ -85,6 +85,7 @@ export async function handleTelemetryRoutes(
           data: e.data,
           duration_ms: e.duration_ms,
           error: e.error,
+          cost: (e as any).cost as number | undefined,
         }));
         telemetryBroadcaster.broadcast(broadcastEvents);
       }

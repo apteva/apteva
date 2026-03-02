@@ -181,8 +181,8 @@ export function Dashboard({
         {/* Activity Feed */}
         <DashboardCard
           title="Activity"
-          actionLabel="Telemetry"
-          onAction={() => onNavigate("telemetry")}
+          actionLabel="Analytics"
+          onAction={() => onNavigate("analytics")}
         >
           {activities.length === 0 ? (
             <div className="p-4 text-center text-[var(--color-text-muted)]">

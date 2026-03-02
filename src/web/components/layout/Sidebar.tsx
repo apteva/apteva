@@ -119,9 +119,9 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
           />
           <NavButton
             icon={<TelemetryIcon />}
-            label="Telemetry"
-            active={route === "telemetry"}
-            onClick={() => handleNavigate("telemetry")}
+            label="Analytics"
+            active={route === "analytics"}
+            onClick={() => handleNavigate("analytics")}
           />
           <NavButton
             icon={<ApiIcon />}

@@ -1457,6 +1457,8 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
   const [availableSkills, setAvailableSkills] = useState<AvailableSkill[]>([]);
+  const [ollamaModels, setOllamaModels] = useState<Array<{ value: string; label: string }>>([]);
+  const [loadingOllamaModels, setLoadingOllamaModels] = useState(false);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [apiKeyFull, setApiKeyFull] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -1531,6 +1533,27 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     fetchSkills();
   }, [authFetch]);
 
+  // Fetch Ollama models when Ollama is selected
+  useEffect(() => {
+    if (form.provider === "ollama") {
+      setLoadingOllamaModels(true);
+      authFetch("/api/providers/ollama/models")
+        .then(res => res.json())
+        .then(data => {
+          if (data.models && data.models.length > 0) {
+            setOllamaModels(data.models.map((m: { value: string; label?: string }) => ({
+              value: m.value,
+              label: m.label || m.value,
+            })));
+          }
+        })
+        .catch(() => setOllamaModels([]))
+        .finally(() => setLoadingOllamaModels(false));
+    } else {
+      setOllamaModels([]);
+    }
+  }, [form.provider, authFetch]);
+
   // Reset form when agent changes
   useEffect(() => {
     setForm({
@@ -1554,11 +1577,13 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
     .filter(p => p.hasKey && p.type === "llm")
     .map(p => ({ value: p.id, label: p.name }));
 
-  const modelOptions = selectedProvider?.models.map(m => ({
-    value: m.value,
-    label: m.label,
-    recommended: m.recommended,
-  })) || [];
+  const modelOptions = form.provider === "ollama" && ollamaModels.length > 0
+    ? ollamaModels
+    : selectedProvider?.models.map(m => ({
+        value: m.value,
+        label: m.label,
+        recommended: m.recommended,
+      })) || [];
 
   const handleProviderChange = (providerId: string) => {
     const provider = providers.find(p => p.id === providerId);
@@ -1704,11 +1729,19 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
         </FormField>
 
         <FormField label="Model">
-          <Select
-            value={form.model}
-            options={modelOptions}
-            onChange={(value) => setForm(prev => ({ ...prev, model: value }))}
-          />
+          {loadingOllamaModels ? (
+            <div className="text-sm text-[var(--color-text-muted)] py-2">Loading Ollama models...</div>
+          ) : form.provider === "ollama" && modelOptions.length === 0 ? (
+            <div className="text-sm text-yellow-400/80 py-2">
+              No models found. Run <code className="bg-[var(--color-surface-raised)] px-1 rounded">ollama pull llama3.3</code> to download a model.
+            </div>
+          ) : (
+            <Select
+              value={form.model}
+              options={modelOptions}
+              onChange={(value) => setForm(prev => ({ ...prev, model: value }))}
+            />
+          )}
         </FormField>
 
         <FormField label="System Prompt">

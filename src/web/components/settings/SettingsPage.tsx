@@ -1027,6 +1027,7 @@ function ProviderKeyCard({
   extraField,
   onExtraFieldChange,
 }: ProviderKeyCardProps) {
+  const { authFetch: providerAuthFetch } = useAuth();
   const isOllama = provider.id === "ollama";
   const isCDP = provider.id === "cdp";
   const isUrlBased = isOllama || isCDP;
@@ -1038,11 +1039,11 @@ function ProviderKeyCard({
 
   // Check Ollama status when configured or after install
   const checkOllamaStatus = React.useCallback(() => {
-    fetch("/api/providers/ollama/status")
+    providerAuthFetch("/api/providers/ollama/status")
       .then(res => res.json())
       .then(data => setOllamaStatus({ connected: data.connected, modelCount: data.modelCount, isDocker: data.isDocker }))
       .catch(() => setOllamaStatus({ connected: false }));
-  }, []);
+  }, [providerAuthFetch]);
 
   React.useEffect(() => {
     if (isOllama) {
@@ -1054,7 +1055,7 @@ function ProviderKeyCard({
     setInstalling(true);
     setInstallResult(null);
     try {
-      const res = await fetch("/api/providers/ollama/install", { method: "POST" });
+      const res = await providerAuthFetch("/api/providers/ollama/install", { method: "POST" });
       const data = await res.json();
       if (data.success) {
         setInstallResult({ success: true, message: data.message });
@@ -2087,7 +2088,7 @@ function DataSettings() {
   }, []);
 
   const clearTelemetry = async () => {
-    const confirmed = await confirm("Are you sure you want to delete all telemetry data? This cannot be undone.", { confirmText: "Clear All", title: "Clear Telemetry Data" });
+    const confirmed = await confirm("Are you sure you want to delete all analytics data? This cannot be undone.", { confirmText: "Clear All", title: "Clear Analytics Data" });
     if (!confirmed) return;
 
     setClearing(true);
@@ -2116,11 +2117,11 @@ function DataSettings() {
     <div className="max-w-4xl w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1">Data Management</h1>
-        <p className="text-[var(--color-text-muted)]">Manage stored data and telemetry.</p>
+        <p className="text-[var(--color-text-muted)]">Manage stored data and analytics.</p>
       </div>
 
       <div className="bg-[var(--color-surface)] card p-4">
-        <h3 className="font-medium mb-2">Telemetry Data</h3>
+        <h3 className="font-medium mb-2">Analytics Data</h3>
         <p className="text-sm text-[var(--color-text-muted)] mb-4">
           {eventCount !== null
             ? `${eventCount.toLocaleString()} events stored`
@@ -2142,7 +2143,7 @@ function DataSettings() {
           disabled={clearing || eventCount === 0}
           className="px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition"
         >
-          {clearing ? "Clearing..." : "Clear All Telemetry"}
+          {clearing ? "Clearing..." : "Clear All Analytics"}
         </button>
       </div>
     </div>

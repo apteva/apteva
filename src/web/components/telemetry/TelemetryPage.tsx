@@ -49,9 +49,13 @@ interface DailyUsage {
   date: string;
   input_tokens: number;
   output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  reasoning_tokens: number;
   llm_calls: number;
   tool_calls: number;
   errors: number;
+  cost: number;
 }
 
 // Helper to extract stats from a single event
@@ -64,6 +68,7 @@ function extractEventStats(event: TelemetryEvent): {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   reasoning_tokens: number;
+  cost: number;
 } {
   const isLlm = event.category === "LLM";
   const isTool = event.category === "TOOL";
@@ -73,6 +78,7 @@ function extractEventStats(event: TelemetryEvent): {
   const cacheCreationTokens = (event.data?.cache_creation_tokens as number) || 0;
   const cacheReadTokens = (event.data?.cache_read_tokens as number) || 0;
   const reasoningTokens = (event.data?.reasoning_tokens as number) || 0;
+  const cost = (event.cost as number) || 0;
 
   return {
     llm_calls: isLlm ? 1 : 0,
@@ -83,6 +89,7 @@ function extractEventStats(event: TelemetryEvent): {
     cache_creation_tokens: cacheCreationTokens,
     cache_read_tokens: cacheReadTokens,
     reasoning_tokens: reasoningTokens,
+    cost,
   };
 }
 
@@ -273,6 +280,7 @@ export function TelemetryPage() {
     let deltaCacheCreationTokens = 0;
     let deltaCacheReadTokens = 0;
     let deltaReasoningTokens = 0;
+    let deltaCost = 0;
 
     for (const event of realtimeEvents) {
       if (!countedEventIdsRef.current.has(event.id)) {
@@ -286,6 +294,7 @@ export function TelemetryPage() {
         deltaCacheCreationTokens += eventStats.cache_creation_tokens;
         deltaCacheReadTokens += eventStats.cache_read_tokens;
         deltaReasoningTokens += eventStats.reasoning_tokens;
+        deltaCost += eventStats.cost;
       }
     }
 
@@ -299,7 +308,7 @@ export function TelemetryPage() {
       total_cache_creation_tokens: (fetchedStats.total_cache_creation_tokens || 0) + deltaCacheCreationTokens,
       total_cache_read_tokens: (fetchedStats.total_cache_read_tokens || 0) + deltaCacheReadTokens,
       total_reasoning_tokens: (fetchedStats.total_reasoning_tokens || 0) + deltaReasoningTokens,
-      total_cost: fetchedStats.total_cost || 0,
+      total_cost: (fetchedStats.total_cost || 0) + deltaCost,
     };
   }, [fetchedStats, realtimeEvents]);
 
@@ -325,6 +334,7 @@ export function TelemetryPage() {
           existing.cache_creation_tokens += eventStats.cache_creation_tokens;
           existing.cache_read_tokens += eventStats.cache_read_tokens;
           existing.reasoning_tokens += eventStats.reasoning_tokens;
+          existing.cost += eventStats.cost;
         } else {
           usageMap.set(event.agent_id, {
             agent_id: event.agent_id,
@@ -336,7 +346,7 @@ export function TelemetryPage() {
             cache_creation_tokens: eventStats.cache_creation_tokens,
             cache_read_tokens: eventStats.cache_read_tokens,
             reasoning_tokens: eventStats.reasoning_tokens,
-            cost: 0,
+            cost: eventStats.cost,
           });
         }
       }
@@ -376,6 +386,43 @@ export function TelemetryPage() {
     });
     return sorted;
   }, [projectUsage, projectSortKey, projectSortDir, projects]);
+
+  // Compute real-time chart data by merging fetched daily usage with SSE deltas
+  const chartData = useMemo(() => {
+    const buckets = new Map<string, DailyUsage>();
+    const useDaily = dailyUsage.length > 1;
+
+    // Seed with fetched daily data
+    for (const d of dailyUsage) {
+      buckets.set(d.date, { ...d });
+    }
+
+    // Add deltas from real-time events not already counted
+    for (const event of realtimeEvents) {
+      if (!countedEventIdsRef.current.has(event.id)) {
+        const ts = new Date(event.timestamp);
+        const key = useDaily
+          ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, "0")}-${String(ts.getDate()).padStart(2, "0")}`
+          : `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, "0")}-${String(ts.getDate()).padStart(2, "0")} ${String(ts.getHours()).padStart(2, "0")}:00`;
+        if (!buckets.has(key)) {
+          buckets.set(key, { date: key, llm_calls: 0, tool_calls: 0, errors: 0, input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, reasoning_tokens: 0, cost: 0 });
+        }
+        const b = buckets.get(key)!;
+        const s = extractEventStats(event);
+        b.llm_calls += s.llm_calls;
+        b.tool_calls += s.tool_calls;
+        b.errors += s.errors;
+        b.input_tokens += s.input_tokens;
+        b.output_tokens += s.output_tokens;
+        b.cache_creation_tokens += s.cache_creation_tokens;
+        b.cache_read_tokens += s.cache_read_tokens;
+        b.reasoning_tokens += s.reasoning_tokens;
+        b.cost += s.cost;
+      }
+    }
+
+    return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [dailyUsage, realtimeEvents]);
 
   const getProjectName = (projectId: string | null) => {
     if (!projectId) return "Unassigned";
@@ -530,14 +577,14 @@ export function TelemetryPage() {
             )}
             <h1 className="text-2xl font-semibold">
               {currentProjectId === null
-                ? "Telemetry"
+                ? "Analytics"
                 : currentProjectId === "unassigned"
-                ? "Telemetry - Unassigned"
-                : `Telemetry - ${currentProject?.name || ""}`}
+                ? "Analytics - Unassigned"
+                : `Analytics - ${currentProject?.name || ""}`}
             </h1>
           </div>
           <p className="text-[var(--color-text-muted)]">
-            Monitor agent activity, token usage, and errors.
+            Monitor agent activity, usage, costs, and performance.
           </p>
         </div>
 
@@ -591,27 +638,7 @@ export function TelemetryPage() {
 
         {/* Charts */}
         {(() => {
-          // Use daily data if we have multiple days, otherwise aggregate events by hour
           const useDaily = dailyUsage.length > 1;
-          const chartData = useDaily ? dailyUsage : (() => {
-            // Aggregate all visible events by hour
-            const buckets = new Map<string, { date: string; llm_calls: number; tool_calls: number; errors: number; input_tokens: number; output_tokens: number }>();
-            for (const event of allEvents) {
-              const d = new Date(event.timestamp);
-              const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:00`;
-              if (!buckets.has(key)) {
-                buckets.set(key, { date: key, llm_calls: 0, tool_calls: 0, errors: 0, input_tokens: 0, output_tokens: 0 });
-              }
-              const b = buckets.get(key)!;
-              const s = extractEventStats(event);
-              b.llm_calls += s.llm_calls;
-              b.tool_calls += s.tool_calls;
-              b.errors += s.errors;
-              b.input_tokens += s.input_tokens;
-              b.output_tokens += s.output_tokens;
-            }
-            return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
-          })();
           const chartLabel = useDaily ? "Daily" : "Hourly";
 
           if (chartData.length === 0) return null;
@@ -687,67 +714,91 @@ export function TelemetryPage() {
               </ResponsiveContainer>
             </div>
 
-            {/* Token Usage Chart */}
-            <div className="bg-[var(--color-surface)] card p-4">
-              <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-4">{chartLabel} Token Usage</h3>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis
-                    dataKey="date"
-                    stroke="var(--color-border-light)"
-                    tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
-                    tickFormatter={(v) => {
-                      if (!useDaily && v.includes(" ")) {
-                        return v.split(" ")[1];
-                      }
-                      const d = new Date(v + "T00:00:00");
-                      return `${d.getMonth() + 1}/${d.getDate()}`;
-                    }}
-                  />
-                  <YAxis
-                    stroke="var(--color-border-light)"
-                    tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
-                    tickFormatter={(v) => {
-                      if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
-                      if (v >= 1000) return `${(v / 1000).toFixed(0)}K`;
-                      return v;
-                    }}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "var(--color-surface)",
-                      border: "1px solid var(--color-border-light)",
-                      borderRadius: "8px",
-                      fontSize: 12,
-                    }}
-                    labelStyle={{ color: "var(--color-text-secondary)" }}
-                    cursor={{ fill: "rgba(255,255,255,0.03)" }}
-                    labelFormatter={(v) => useDaily ? new Date(v + "T00:00:00").toLocaleDateString() : v}
-                    formatter={(value: number) => [value.toLocaleString(), undefined]}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 11 }}
-                    iconType="circle"
-                    iconSize={8}
-                  />
-                  <Bar
-                    dataKey="input_tokens"
-                    name="Input Tokens"
-                    fill="var(--color-accent)"
-                    radius={[2, 2, 0, 0]}
+            {/* Token Usage Chart - stacked bars: Input (cache read / cache write / regular) and Output (reasoning / regular) */}
+            {(() => {
+              // Compute stacked segments for each bucket
+              const stackedData = chartData.map(d => {
+                const cacheRead = d.cache_read_tokens || 0;
+                const cacheWrite = d.cache_creation_tokens || 0;
+                const regularInput = Math.max(0, d.input_tokens - cacheRead - cacheWrite);
+                const reasoning = d.reasoning_tokens || 0;
+                const regularOutput = Math.max(0, d.output_tokens - reasoning);
+                return {
+                  date: d.date,
+                  // Input stack (bottom to top: cache read, cache write, regular)
+                  input_cache_read: cacheRead,
+                  input_cache_write: cacheWrite,
+                  input_regular: regularInput,
+                  // Output stack (bottom to top: reasoning, regular)
+                  output_reasoning: reasoning,
+                  output_regular: regularOutput,
+                };
+              });
+              const hasCache = stackedData.some(d => d.input_cache_read > 0 || d.input_cache_write > 0);
+              const hasReasoning = stackedData.some(d => d.output_reasoning > 0);
 
-                  />
-                  <Bar
-                    dataKey="output_tokens"
-                    name="Output Tokens"
-                    fill="var(--color-accent-hover)"
-                    radius={[2, 2, 0, 0]}
-
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+              return (
+              <div className="bg-[var(--color-surface)] card p-4">
+                <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-4">{chartLabel} Token Usage</h3>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={stackedData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+                    <XAxis
+                      dataKey="date"
+                      stroke="var(--color-border-light)"
+                      tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
+                      tickFormatter={(v) => {
+                        if (!useDaily && v.includes(" ")) {
+                          return v.split(" ")[1];
+                        }
+                        const d = new Date(v + "T00:00:00");
+                        return `${d.getMonth() + 1}/${d.getDate()}`;
+                      }}
+                    />
+                    <YAxis
+                      stroke="var(--color-border-light)"
+                      tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
+                      tickFormatter={(v) => {
+                        if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
+                        if (v >= 1000) return `${(v / 1000).toFixed(0)}K`;
+                        return v;
+                      }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "var(--color-surface)",
+                        border: "1px solid var(--color-border-light)",
+                        borderRadius: "8px",
+                        fontSize: 12,
+                      }}
+                      labelStyle={{ color: "var(--color-text-secondary)" }}
+                      cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                      labelFormatter={(v) => useDaily ? new Date(v + "T00:00:00").toLocaleDateString() : v}
+                      formatter={(value: number, name: string) => [value.toLocaleString(), name]}
+                    />
+                    <Legend
+                      wrapperStyle={{ fontSize: 11 }}
+                      iconType="circle"
+                      iconSize={8}
+                    />
+                    {/* Input stack */}
+                    {hasCache && (
+                      <Bar dataKey="input_cache_read" name="Input (Cache Read)" stackId="input" fill="#fdba74" />
+                    )}
+                    {hasCache && (
+                      <Bar dataKey="input_cache_write" name="Input (Cache Write)" stackId="input" fill="#fb923c" />
+                    )}
+                    <Bar dataKey="input_regular" name={hasCache ? "Input (Regular)" : "Input Tokens"} stackId="input" fill="#f97316" radius={[2, 2, 0, 0]} />
+                    {/* Output stack */}
+                    {hasReasoning && (
+                      <Bar dataKey="output_reasoning" name="Output (Reasoning)" stackId="output" fill="#c4b5fd" />
+                    )}
+                    <Bar dataKey="output_regular" name={hasReasoning ? "Output (Regular)" : "Output Tokens"} stackId="output" fill="#a78bfa" radius={[2, 2, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              );
+            })()}
           </div>
           );
         })()}
@@ -997,7 +1048,7 @@ export function TelemetryPage() {
             <div className="p-8 text-center text-[var(--color-text-muted)]">Loading...</div>
           ) : allEvents.length === 0 ? (
             <div className="p-8 text-center text-[var(--color-text-muted)]">
-              No telemetry events yet. Events will appear here in real-time once agents start sending data.
+              No events yet. Events will appear here in real-time once agents start sending data.
             </div>
           ) : (
             <div className="divide-y divide-[var(--color-border)]">

@@ -451,18 +451,19 @@ export async function startAgentProcess(
   // Mark as starting
   agentsStarting.add(agent.id);
 
-  // Get the API key for the agent's provider
-  const providerKey = ProviderKeys.getDecrypted(agent.provider);
-  if (!providerKey) {
-    agentsStarting.delete(agent.id);
-    return { success: false, error: `No API key for provider: ${agent.provider}` };
-  }
-
   // Get provider config for env var name
   const providerConfig = PROVIDERS[agent.provider as ProviderId];
   if (!providerConfig) {
     agentsStarting.delete(agent.id);
     return { success: false, error: `Unknown provider: ${agent.provider}` };
+  }
+
+  // Get the API key for the agent's provider (local providers like Ollama use URL instead)
+  const isLocalProvider = "isLocal" in providerConfig && providerConfig.isLocal;
+  const providerKey = ProviderKeys.getDecrypted(agent.provider);
+  if (!providerKey && !isLocalProvider) {
+    agentsStarting.delete(agent.id);
+    return { success: false, error: `No API key for provider: ${agent.provider}` };
   }
 
   // Use agent's permanently assigned port
@@ -553,7 +554,7 @@ export async function startAgentProcess(
       DATA_DIR: agentDataDir,
       CONFIG_PATH: agentConfigPath,
       AGENT_API_KEY: agentApiKey,
-      [providerConfig.envVar]: providerKey,
+      [providerConfig.envVar]: providerKey || ("defaultBaseUrl" in providerConfig ? (providerConfig as any).defaultBaseUrl : ""),
     };
 
     // If memory is enabled and agent doesn't use OpenAI, also pass OpenAI key for embeddings

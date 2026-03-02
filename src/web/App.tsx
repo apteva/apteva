@@ -314,7 +314,7 @@ function AppContent() {
 
           {route === "tests" && <TestsPage />}
 
-          {route === "telemetry" && <TelemetryPage />}
+          {route === "analytics" && <TelemetryPage />}
 
           {route === "api" && <ApiDocsPage />}
           </Suspense>

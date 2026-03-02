@@ -670,6 +670,24 @@ function runMigrations() {
       `,
     },
     {
+      name: "024_create_test_runs",
+      sql: `
+        CREATE TABLE IF NOT EXISTS test_runs (
+          id TEXT PRIMARY KEY,
+          test_case_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          agent_response TEXT,
+          judge_reasoning TEXT,
+          duration_ms INTEGER,
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_test_runs_test_case ON test_runs(test_case_id);
+        CREATE INDEX IF NOT EXISTS idx_test_runs_status ON test_runs(status);
+      `,
+    },
+    {
       name: "026_behavior_tests",
       sql: `
         -- Recreate test_cases with nullable agent_id and input_message
@@ -728,24 +746,6 @@ function runMigrations() {
     {
       name: "028_add_test_run_score",
       sql: `ALTER TABLE test_runs ADD COLUMN score INTEGER;`,
-    },
-    {
-      name: "024_create_test_runs",
-      sql: `
-        CREATE TABLE IF NOT EXISTS test_runs (
-          id TEXT PRIMARY KEY,
-          test_case_id TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'running',
-          agent_response TEXT,
-          judge_reasoning TEXT,
-          duration_ms INTEGER,
-          error TEXT,
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          FOREIGN KEY (test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_test_runs_test_case ON test_runs(test_case_id);
-        CREATE INDEX IF NOT EXISTS idx_test_runs_status ON test_runs(status);
-      `,
     },
     {
       name: "030_create_mcp_server_tools",

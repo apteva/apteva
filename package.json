@@ -1,6 +1,6 @@
 {
   "name": "apteva",
-  "version": "0.4.48",
+  "version": "0.4.52",
   "description": "Run AI agents locally. Multi-provider support for Claude, GPT, Gemini, Llama, and more.",
   "type": "module",
   "main": "./dist/index.js",
@@ -77,11 +77,11 @@
     "recharts": "^3.7.0"
   },
   "optionalDependencies": {
-    "@apteva/agent-darwin-arm64": "^1.33.73",
-    "@apteva/agent-darwin-x64": "^1.33.73",
-    "@apteva/agent-linux-arm64": "^1.33.73",
-    "@apteva/agent-linux-x64": "^1.33.73",
-    "@apteva/agent-win32-x64": "^1.33.73",
+    "@apteva/agent-darwin-arm64": "^1.44.6",
+    "@apteva/agent-darwin-x64": "^1.44.6",
+    "@apteva/agent-linux-arm64": "^1.44.6",
+    "@apteva/agent-linux-x64": "^1.44.6",
+    "@apteva/agent-win32-x64": "^1.44.6",
     "@apteva/apteva-darwin-arm64": "0.4.33",
     "@apteva/apteva-darwin-x64": "0.4.33",
     "@apteva/apteva-linux-arm64": "0.4.33",

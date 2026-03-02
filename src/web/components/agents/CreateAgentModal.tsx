@@ -2,7 +2,7 @@ import React from "react";
 import { Modal } from "../common/Modal";
 import { Select } from "../common/Select";
 import { MemoryIcon, TasksIcon, FilesIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, MultiAgentIcon } from "../common/Icons";
-import { useProjects } from "../../context";
+import { useProjects, useAuth } from "../../context";
 import type { Provider, NewAgentForm, AgentFeatures, MultiAgentConfig } from "../../types";
 import { getMultiAgentConfig } from "../../types";
 
@@ -39,6 +39,7 @@ export function CreateAgentModal({
   onGoToSettings,
 }: CreateAgentModalProps) {
   const { projects, currentProjectId } = useProjects();
+  const { authFetch } = useAuth();
   const selectedProvider = providers.find(p => p.id === form.provider);
   const [ollamaModels, setOllamaModels] = React.useState<Array<{ value: string; label: string }>>([]);
   const [loadingOllamaModels, setLoadingOllamaModels] = React.useState(false);
@@ -47,7 +48,7 @@ export function CreateAgentModal({
   React.useEffect(() => {
     if (form.provider === "ollama") {
       setLoadingOllamaModels(true);
-      fetch("/api/providers/ollama/models")
+      authFetch("/api/providers/ollama/models")
         .then(res => res.json())
         .then(data => {
           if (data.models && data.models.length > 0) {

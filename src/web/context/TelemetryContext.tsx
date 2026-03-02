@@ -12,6 +12,7 @@ export interface TelemetryEvent {
   data?: Record<string, unknown>;
   duration_ms?: number;
   error?: string;
+  cost?: number;
 }
 
 interface TelemetryContextValue {
