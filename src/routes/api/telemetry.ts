@@ -34,13 +34,6 @@ export async function handleTelemetryRoutes(
         return json({ error: "agent_id and events are required" }, 400);
       }
 
-      // Debug: log raw incoming events
-      for (const event of body.events) {
-        if (event.category === "LLM") {
-          console.log(`[telemetry] RAW LLM event from ${body.agent_id}: ${JSON.stringify(event)}`);
-        }
-      }
-
       // Filter out debug events - too noisy
       const filteredEvents = body.events.filter(e => e.level !== "debug");
 

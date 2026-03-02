@@ -13,6 +13,7 @@ export interface TelemetryEvent {
   duration_ms?: number;
   error?: string;
   cost?: number;
+  _receivedAt?: number; // Client-side timestamp when event was received via SSE
 }
 
 interface TelemetryContextValue {
@@ -88,8 +89,10 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
 
           // Handle array of events
           if (Array.isArray(data)) {
+            const now = Date.now();
+            const stamped = data.map((e: TelemetryEvent) => ({ ...e, _receivedAt: now }));
             setEvents(prev => {
-              const combined = [...data, ...prev];
+              const combined = [...stamped, ...prev];
               return combined.slice(0, MAX_EVENTS);
             });
 

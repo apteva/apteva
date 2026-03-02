@@ -828,6 +828,30 @@ After adding, use assign_mcp_server_to_agent to give an agent access to these to
       required: ["provider", "config_id"],
     },
   },
+  // Analytics
+  {
+    name: "get_analytics",
+    description: "Get analytics summary: total events, LLM calls, tool calls, errors, token usage (input/output/cache/reasoning), and cost. Optionally filter by agent, project, or time range.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "Filter by agent ID (optional)" },
+        project_id: { type: "string", description: "Filter by project ID (optional)" },
+        since: { type: "string", description: "ISO timestamp — only include events after this time (optional)" },
+      },
+    },
+  },
+  {
+    name: "get_usage_by_agent",
+    description: "Get token usage and cost breakdown per agent. Returns LLM calls, tool calls, input/output/cache/reasoning tokens, errors, and cost for each agent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "Filter by project ID (optional)" },
+        since: { type: "string", description: "ISO timestamp — only include events after this time (optional)" },
+      },
+    },
+  },
 ];
 
 // Project-only tools — hidden entirely when PROJECTS_ENABLED is not set
@@ -867,15 +891,33 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           : AgentDB.findAll();
         // Exclude meta agent from list
         const filtered = agents.filter(a => a.id !== META_AGENT_ID);
-        const result = filtered.map(a => ({
-          id: a.id,
-          name: a.name,
-          provider: a.provider,
-          model: a.model,
-          status: a.status,
-          port: a.port,
-          projectId: a.project_id,
-        }));
+        const mcpIds = [...new Set(filtered.flatMap(a => a.mcp_servers || []))];
+        const skillIds = [...new Set(filtered.flatMap(a => a.skills || []))];
+        const mcpMap = McpServerDB.findByIdsLight(mcpIds);
+        const skillMap = SkillDB.findByIds(skillIds);
+        const result = filtered.map(a => {
+          const mcpNames = (a.mcp_servers || [])
+            .map(id => mcpMap.get(id)?.name)
+            .filter(Boolean);
+          const skillNames = (a.skills || [])
+            .map(id => skillMap.get(id)?.name)
+            .filter(Boolean);
+          const enabledFeatures = Object.entries(a.features || {})
+            .filter(([, v]) => v === true || (typeof v === "object" && v !== null && (v as any).enabled))
+            .map(([k]) => k);
+          return {
+            id: a.id,
+            name: a.name,
+            provider: a.provider,
+            model: a.model,
+            status: a.status,
+            projectId: a.project_id,
+            features: enabledFeatures,
+            mcpServers: mcpNames,
+            skills: skillNames,
+            systemPrompt: a.system_prompt?.slice(0, 200) + (a.system_prompt && a.system_prompt.length > 200 ? "..." : ""),
+          };
+        });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
@@ -2035,6 +2077,29 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `Local add not supported for provider: ${providerId}` }], isError: true };
       }
 
+      case "get_analytics": {
+        const stats = TelemetryDB.getStats({
+          agentId: args.agent_id || undefined,
+          projectId: args.project_id || undefined,
+          since: args.since || undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+      }
+
+      case "get_usage_by_agent": {
+        const usage = TelemetryDB.getUsage({
+          project_id: args.project_id || undefined,
+          since: args.since || undefined,
+          group_by: "agent",
+        });
+        // Enrich with agent names
+        const enriched = usage.map(u => {
+          const agent = AgentDB.findById(u.agent_id || "");
+          return { ...u, agent_name: agent?.name || u.agent_id };
+        });
+        return { content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }] };
+      }
+
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -2090,6 +2155,7 @@ You can manage:
 - PROJECTS: Organize agents into projects. Tools: list_projects, create_project, update_project, delete_project. Use project tools when the user is viewing All Projects. Deleting a project unassigns its agents (does not delete them).
 - MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Use update_agent with add_mcp_servers to assign servers to agents.
 - SKILLS: Reusable instruction sets that specialize agent behavior. Use create_skill to create new skills (pass project_id from context to scope to the current project). Use update_agent with add_skills/remove_skills to assign/unassign skills to agents. Tools: list_skills, get_skill, create_skill, update_skill, toggle_skill, delete_skill.
+- ANALYTICS: View token usage, costs, and activity stats across agents. Tools: get_analytics (summary totals), get_usage_by_agent (per-agent breakdown). Both support filtering by agent, project, or time range.
 - PROVIDERS: View which LLM providers have API keys configured.
 - TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Tools: list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
 - SUBSCRIPTIONS & TRIGGERS: Subscribe agents to external events (webhooks). Supports multiple providers (composio, agentdojo). Use list_trigger_providers → list_trigger_types → list_integration_connections → create_subscription. Manage with enable_subscription, disable_subscription, delete_subscription, list_subscriptions.

@@ -143,8 +143,8 @@ export function TelemetryPage() {
     }
   };
 
-  // Track IDs that were in the fetched stats to avoid double-counting
-  const countedEventIdsRef = useRef<Set<string>>(new Set());
+  // Track the timestamp of the last fetch — only count realtime events arriving after this
+  const fetchTimestampRef = useRef<number>(0);
 
   // Track which events are "new" (for animation) - stores event IDs with their arrival time
   const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
@@ -220,8 +220,8 @@ export function TelemetryPage() {
       const events = eventsData.events || [];
       setHistoricalEvents(events);
 
-      // Mark all fetched event IDs as counted (stats already include them)
-      countedEventIdsRef.current = new Set(events.map((e: TelemetryEvent) => e.id));
+      // Record fetch time — realtime events before this are already in DB aggregations
+      fetchTimestampRef.current = Date.now();
 
       // Fetch usage by agent
       const usageParams = new URLSearchParams();
@@ -283,7 +283,8 @@ export function TelemetryPage() {
     let deltaCost = 0;
 
     for (const event of realtimeEvents) {
-      if (!countedEventIdsRef.current.has(event.id)) {
+      // Only count events received via SSE AFTER the last fetch (DB already has everything before)
+      if (event._receivedAt && event._receivedAt > fetchTimestampRef.current) {
         deltaEvents++;
         const eventStats = extractEventStats(event);
         deltaLlmCalls += eventStats.llm_calls;
@@ -320,9 +321,9 @@ export function TelemetryPage() {
       usageMap.set(u.agent_id, { ...u });
     }
 
-    // Add deltas from real-time events
+    // Add deltas from real-time events received after the last fetch
     for (const event of realtimeEvents) {
-      if (!countedEventIdsRef.current.has(event.id)) {
+      if (event._receivedAt && event._receivedAt > fetchTimestampRef.current) {
         const eventStats = extractEventStats(event);
         const existing = usageMap.get(event.agent_id);
         if (existing) {
@@ -397,9 +398,9 @@ export function TelemetryPage() {
       buckets.set(d.date, { ...d });
     }
 
-    // Add deltas from real-time events not already counted
+    // Add deltas from real-time events received after the last fetch
     for (const event of realtimeEvents) {
-      if (!countedEventIdsRef.current.has(event.id)) {
+      if (event._receivedAt && event._receivedAt > fetchTimestampRef.current) {
         const ts = new Date(event.timestamp);
         const key = useDaily
           ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, "0")}-${String(ts.getDate()).padStart(2, "0")}`
@@ -720,7 +721,9 @@ export function TelemetryPage() {
               const stackedData = chartData.map(d => {
                 const cacheRead = d.cache_read_tokens || 0;
                 const cacheWrite = d.cache_creation_tokens || 0;
-                const regularInput = Math.max(0, d.input_tokens - cacheRead - cacheWrite);
+                // Anthropic: input_tokens includes cache_read but NOT cache_creation
+                // So regular = input_tokens - cache_read (don't subtract cache_write)
+                const regularInput = Math.max(0, d.input_tokens - cacheRead);
                 const reasoning = d.reasoning_tokens || 0;
                 const regularOutput = Math.max(0, d.output_tokens - reasoning);
                 return {
