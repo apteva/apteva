@@ -5,7 +5,7 @@ import { AgentDB, ProjectDB, McpServerDB, McpServerToolDB, SkillDB, TelemetryDB,
 import { TestCaseDB, TestRunDB } from "./db-tests";
 import { runTest, runAll } from "./test-runner";
 import { getProvidersWithStatus, PROVIDERS, ProviderKeys } from "./providers";
-import { startAgentProcess, setAgentStatus, toApiAgent, META_AGENT_ID, agentFetch, fetchFromAgent } from "./routes/api/agent-utils";
+import { startAgentProcess, setAgentStatus, toApiAgent, META_AGENT_ID, agentFetch, fetchFromAgent, buildAgentConfig, pushConfigToAgent, pushSkillsToAgent } from "./routes/api/agent-utils";
 import { agentProcesses } from "./server";
 import { getTriggerProvider, getTriggerProviderIds, registerTriggerProvider } from "./triggers";
 import { ComposioTriggerProvider } from "./triggers/composio";
@@ -126,7 +126,7 @@ TIPS:
   },
   {
     name: "update_agent",
-    description: `Update an existing agent's configuration. Only provide fields you want to change. If the agent is running, restart it after updating for changes to take effect.
+    description: `Update an existing agent's configuration. Only provide fields you want to change. Changes are applied live — if the agent is running, the new config is pushed automatically. No restart needed.
 
 SKILLS & MCP SERVERS:
 - Pass skill_ids or mcp_server_ids to SET the full list (replaces existing).
@@ -1009,7 +1009,10 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           project_id: args.project_id || null,
         });
 
-        return { content: [{ type: "text", text: `Agent created successfully:\n${JSON.stringify({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, port: agent.port }, null, 2)}` }] };
+        const enabledFeatures = Object.entries(agent.features)
+          .filter(([_, v]) => v === true || (typeof v === "object" && v?.enabled))
+          .map(([k]) => k === "agents" ? "multi-agent (call_agent, delegate_task, list_available_agents)" : k);
+        return { content: [{ type: "text", text: `Agent created successfully:\n${JSON.stringify({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, features: enabledFeatures.length > 0 ? enabledFeatures.join(", ") : "none" }, null, 2)}` }] };
       }
 
       case "update_agent": {
@@ -1074,7 +1077,37 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         }
 
         const updated = AgentDB.update(args.agent_id, updates);
-        return { content: [{ type: "text", text: `Agent updated: ${JSON.stringify({ id: updated?.id, name: updated?.name, skills: updates.skills !== undefined ? updates.skills.length + " skills" : "unchanged", mcp_servers: updates.mcp_servers !== undefined ? updates.mcp_servers.length + " servers" : "unchanged" }, null, 2)}` }] };
+
+        // Push config to running agent (live update, no restart needed)
+        let configPushed = false;
+        if (updated && updated.status === "running" && updated.port) {
+          const providerKey = ProviderKeys.getDecrypted(updated.provider);
+          if (providerKey) {
+            const config = buildAgentConfig(updated, providerKey);
+            const configResult = await pushConfigToAgent(updated.id, updated.port, config);
+            configPushed = configResult.success;
+            // Push skills if any
+            if (config.skills?.definitions?.length > 0) {
+              await pushSkillsToAgent(updated.id, updated.port, config.skills.definitions);
+            }
+          }
+        }
+
+        // Build a clear summary of what changed
+        const summary: Record<string, any> = { id: updated?.id, name: updated?.name };
+        if (updates.features) {
+          const enabledFeatures = Object.entries(updates.features)
+            .filter(([_, v]) => v === true || (typeof v === "object" && v?.enabled))
+            .map(([k]) => k === "agents" ? "multi-agent (call_agent, delegate_task, list_available_agents)" : k);
+          summary.features = enabledFeatures.join(", ") || "none";
+        }
+        if (updates.skills !== undefined) summary.skills = updates.skills.length + " skills";
+        if (updates.mcp_servers !== undefined) summary.mcp_servers = updates.mcp_servers.length + " servers";
+        if (updates.name) summary.name = updates.name;
+        if (updates.model) summary.model = updates.model;
+        if (updates.system_prompt) summary.system_prompt = "updated";
+        if (configPushed) summary.config_status = "applied live (no restart needed)";
+        return { content: [{ type: "text", text: `Agent updated: ${JSON.stringify(summary, null, 2)}` }] };
       }
 
       case "delete_agent": {
