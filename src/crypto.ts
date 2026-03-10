@@ -136,13 +136,21 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
     return { valid: false, error: "API key cannot be empty" };
   }
 
-  // Ollama and CDP use URLs instead of API keys
-  if (provider === "ollama" || provider === "cdp") {
+  // Local providers use URLs instead of API keys
+  const urlProviders: Record<string, string> = {
+    ollama: "http://localhost:11434",
+    cdp: "ws://localhost:9222",
+    speaches: "http://localhost:8000",
+    whisper_cpp: "http://localhost:8080",
+    kokoro: "http://localhost:8880",
+    piper: "http://localhost:5000",
+    fish_speech: "http://localhost:8180",
+  };
+  if (provider in urlProviders) {
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("ws://") || trimmed.startsWith("wss://")) {
       return { valid: true };
     }
-    const example = provider === "cdp" ? "ws://localhost:9222" : "http://localhost:11434";
-    return { valid: false, error: `${provider} requires a valid URL (e.g., ${example})` };
+    return { valid: false, error: `${provider} requires a valid URL (e.g., ${urlProviders[provider]})` };
   }
 
   // Multi-field providers store JSON objects — validate the inner api_key
@@ -195,6 +203,10 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
       pattern: /^[a-zA-Z0-9_-]+$/,
       example: "...",
     },
+    cerebras: {
+      pattern: /^csk-[a-zA-Z0-9_-]+$|^[a-zA-Z0-9_-]+$/,
+      example: "csk-...",
+    },
     // MCP Integrations
     composio: {
       pattern: /^[a-zA-Z0-9_-]+$/,
@@ -207,6 +219,15 @@ export function validateKeyFormat(provider: string, key: string): { valid: boole
     agentdojo: {
       pattern: /^(key_)?[a-zA-Z0-9_-]+$/,
       example: "key_...",
+    },
+    // Voice providers
+    elevenlabs: {
+      pattern: /^[a-zA-Z0-9_-]+$/,
+      example: "sk_...",
+    },
+    deepgram: {
+      pattern: /^[a-zA-Z0-9_-]+$/,
+      example: "...",
     },
     // Browser providers
     browserbase: {

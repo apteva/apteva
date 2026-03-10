@@ -1,13 +1,14 @@
 import { type Server, type Subprocess } from "bun";
 import { handleApiRequest } from "./routes/api";
 import { handleAuthRequest } from "./routes/auth";
-import { handleShareRequest } from "./routes/share";
+import { handleShareRequest, findAgentByShareToken } from "./routes/share";
 import { serveStatic } from "./routes/static";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
-import { initDatabase, AgentDB, ProviderKeysDB, McpServerDB, ChannelDB, TelemetryDB, type McpServer, type Agent } from "./db";
+import { initDatabase, AgentDB, ApiKeyDB, ProviderKeysDB, McpServerDB, ChannelDB, TelemetryDB, UserDB, type McpServer, type Agent } from "./db";
 import { authMiddleware, type AuthContext } from "./auth/middleware";
+import { verifyAccessToken } from "./auth";
 import { startMcpProcess } from "./mcp-client";
 import {
   ensureBinary,
@@ -371,12 +372,54 @@ const server = Bun.serve({
     // WebSocket upgrade: /api/agents/:id/voice → proxy to agent binary
     const voiceMatch = path.match(/^\/api\/agents\/([^/]+)\/voice$/);
     if (voiceMatch && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      // Validate auth via query param token (WebSocket can't send custom headers)
+      if (process.env.AUTH_ENABLED !== "false") {
+        const token = url.searchParams.get("token");
+        if (!token) {
+          return new Response("Authentication required", { status: 401 });
+        }
+        // Try API key first, then JWT
+        const isApiKey = token.startsWith("apt_");
+        if (isApiKey) {
+          const result = ApiKeyDB.validate(token);
+          if (!result) {
+            return new Response("Invalid API key", { status: 401 });
+          }
+        } else {
+          const payload = verifyAccessToken(token);
+          if (!payload) {
+            return new Response("Invalid or expired token", { status: 401 });
+          }
+          const user = UserDB.findById(payload.userId);
+          if (!user) {
+            return new Response("User not found", { status: 401 });
+          }
+        }
+      }
+
       const agentId = voiceMatch[1];
       const agent = AgentDB.findById(agentId);
       if (!agent || agent.status !== "running" || !agent.port) {
         return new Response("Agent not available", { status: 400 });
       }
-      const upgraded = bunServer.upgrade(req, { data: { agentId: agent.id, agentPort: agent.port } });
+      const agentApiKey = AgentDB.getApiKey(agentId) || "";
+      console.log(`[WS] Voice upgrade: agent=${agentId} port=${agent.port} hasKey=${!!agentApiKey}`);
+      const upgraded = bunServer.upgrade(req, { data: { agentId: agent.id, agentPort: agent.port, agentApiKey } });
+      if (upgraded) return undefined;
+      return new Response("WebSocket upgrade failed", { status: 500 });
+    }
+
+    // WebSocket upgrade: /share/<token>/voice → proxy to agent binary (public, share-token auth)
+    const shareVoiceMatch = path.match(/^\/share\/([a-f0-9]{32})\/voice$/);
+    if (shareVoiceMatch && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      const shareToken = shareVoiceMatch[1];
+      const agent = findAgentByShareToken(shareToken);
+      if (!agent || agent.status !== "running" || !agent.port) {
+        return new Response("Agent not available", { status: 400 });
+      }
+      const agentApiKey = AgentDB.getApiKey(agent.id) || "";
+      console.log(`[WS] Share voice upgrade: agent=${agent.id} port=${agent.port}`);
+      const upgraded = bunServer.upgrade(req, { data: { agentId: agent.id, agentPort: agent.port, agentApiKey } });
       if (upgraded) return undefined;
       return new Response("WebSocket upgrade failed", { status: 500 });
     }
@@ -454,8 +497,10 @@ const server = Bun.serve({
   // WebSocket proxy for agent voice/realtime
   websocket: {
     open(ws: any) {
-      const { agentId, agentPort } = ws.data;
-      const agentWs = new WebSocket(`ws://localhost:${agentPort}/voice`);
+      const { agentId, agentPort, agentApiKey } = ws.data;
+      const wsTarget = `ws://localhost:${agentPort}/voice${agentApiKey ? `?api_key=${agentApiKey}` : ''}`;
+      console.log(`[WS] Voice proxy connecting: agent=${agentId} port=${agentPort}`);
+      const agentWs = new WebSocket(wsTarget);
 
       agentWs.onopen = () => {
         console.log(`[WS] Voice proxy connected: agent=${agentId} port=${agentPort}`);
@@ -464,10 +509,11 @@ const server = Bun.serve({
         try { ws.send(event.data); } catch {}
       };
       agentWs.onclose = (event: CloseEvent) => {
-        console.log(`[WS] Agent disconnected: agent=${agentId} code=${event.code}`);
+        console.log(`[WS] Agent disconnected: agent=${agentId} code=${event.code} reason=${event.reason}`);
         ws.close(event.code, event.reason);
       };
-      agentWs.onerror = () => {
+      agentWs.onerror = (err: any) => {
+        console.log(`[WS] Agent WS error: agent=${agentId}`, err?.message || err);
         ws.close(1011, "Agent WebSocket error");
       };
 

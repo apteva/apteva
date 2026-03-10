@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { DashboardIcon, ThreadsIcon, AgentsIcon, ActivityIcon, TasksIcon, ConnectionsIcon, McpIcon, SkillsIcon, TestsIcon, TelemetryIcon, ApiIcon, SettingsIcon, CloseIcon } from "../common/Icons";
-import { useAuth } from "../../context";
+import { useAuth, useUIMode } from "../../context";
 import type { Route } from "../../types";
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ interface SidebarProps {
 
 export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onClose }: SidebarProps) {
   const { user, logout } = useAuth();
+  const { isDev, t } = useUIMode();
   const [showUserMenu, setShowUserMenu] = useState(false);
 
   const handleNavigate = (newRoute: Route) => {
@@ -69,7 +70,7 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
           />
           <NavButton
             icon={<AgentsIcon />}
-            label="Agents"
+            label={t("Agents", "Employees")}
             active={route === "agents"}
             onClick={() => handleNavigate("agents")}
             badge={agentCount > 0 ? String(agentCount) : undefined}
@@ -93,42 +94,52 @@ export function Sidebar({ route, agentCount, taskCount, onNavigate, isOpen, onCl
             onClick={() => handleNavigate("tasks")}
             badge={taskCount && taskCount > 0 ? String(taskCount) : undefined}
           />
-          <NavButton
-            icon={<McpIcon />}
-            label="MCP"
-            active={route === "mcp"}
-            onClick={() => handleNavigate("mcp")}
-          />
-          <NavButton
-            icon={<SkillsIcon />}
-            label="Skills"
-            active={route === "skills"}
-            onClick={() => handleNavigate("skills")}
-          />
-          <NavButton
-            icon={<ConnectionsIcon />}
-            label="Connections"
-            active={route === "connections"}
-            onClick={() => handleNavigate("connections")}
-          />
-          <NavButton
-            icon={<TestsIcon />}
-            label="Tests"
-            active={route === "tests"}
-            onClick={() => handleNavigate("tests")}
-          />
+          {isDev && (
+            <NavButton
+              icon={<McpIcon />}
+              label="MCP"
+              active={route === "mcp"}
+              onClick={() => handleNavigate("mcp")}
+            />
+          )}
+          {isDev && (
+            <NavButton
+              icon={<SkillsIcon />}
+              label="Skills"
+              active={route === "skills"}
+              onClick={() => handleNavigate("skills")}
+            />
+          )}
+          {isDev && (
+            <NavButton
+              icon={<ConnectionsIcon />}
+              label="Connections"
+              active={route === "connections"}
+              onClick={() => handleNavigate("connections")}
+            />
+          )}
+          {isDev && (
+            <NavButton
+              icon={<TestsIcon />}
+              label="Tests"
+              active={route === "tests"}
+              onClick={() => handleNavigate("tests")}
+            />
+          )}
           <NavButton
             icon={<TelemetryIcon />}
             label="Analytics"
             active={route === "analytics"}
             onClick={() => handleNavigate("analytics")}
           />
-          <NavButton
-            icon={<ApiIcon />}
-            label="API"
-            active={route === "api"}
-            onClick={() => handleNavigate("api")}
-          />
+          {isDev && (
+            <NavButton
+              icon={<ApiIcon />}
+              label="API"
+              active={route === "api"}
+              onClick={() => handleNavigate("api")}
+            />
+          )}
           <NavButton
             icon={<SettingsIcon />}
             label="Settings"

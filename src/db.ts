@@ -23,13 +23,21 @@ export interface OperatorConfig {
   max_actions_per_turn?: number;
 }
 
+export interface RealtimeConfig {
+  enabled: boolean;
+  sttProvider?: string;
+  sttModel?: string;
+  ttsProvider?: string;
+  ttsModel?: string;
+}
+
 export interface AgentFeatures {
   memory: boolean;
   tasks: boolean;
   vision: boolean;
   operator: boolean | OperatorConfig; // Can be boolean for backwards compat or full config
   mcp: boolean;
-  realtime: boolean;
+  realtime: boolean | RealtimeConfig; // Can be boolean for backwards compat or full config
   files: boolean;
   agents: boolean | MultiAgentConfig; // Can be boolean for backwards compat or full config
   builtinTools?: AgentBuiltinTools;
@@ -56,6 +64,21 @@ export function getOperatorConfig(features: AgentFeatures): OperatorConfig {
     return { enabled: op };
   }
   return op;
+}
+
+// Helper to normalize realtime feature to RealtimeConfig
+export function getRealtimeConfig(features: AgentFeatures): RealtimeConfig {
+  const rt = features.realtime;
+  if (typeof rt === "boolean") {
+    return { enabled: rt };
+  }
+  return rt;
+}
+
+// Helper to check if realtime is enabled
+export function isRealtimeEnabled(features: AgentFeatures): boolean {
+  if (typeof features.realtime === "boolean") return features.realtime;
+  return features.realtime.enabled;
 }
 
 // Helper to normalize agents feature to MultiAgentConfig

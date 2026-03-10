@@ -172,6 +172,70 @@ export async function handleProviderRoutes(
     }
   }
 
+  // ==================== LOCAL VOICE PROVIDERS ====================
+
+  // GET /api/providers/:id/status - Check if a local voice provider is running
+  const localVoiceStatusMatch = path.match(/^\/api\/providers\/(speaches|whisper_cpp|kokoro|piper|fish_speech)\/status$/);
+  if (localVoiceStatusMatch && method === "GET") {
+    const providerId = localVoiceStatusMatch[1];
+    const providerDef = PROVIDERS[providerId as ProviderId];
+    const baseUrl = ProviderKeys.getDecrypted(providerId) ||
+      ("defaultBaseUrl" in providerDef ? (providerDef as any).defaultBaseUrl : "");
+    const isDocker = await isRunningInDocker();
+
+    const healthEndpoints: Record<string, string> = {
+      speaches: "/v1/models",
+      whisper_cpp: "/",
+      kokoro: "/v1/models",
+      piper: "/api/voices",
+      fish_speech: "/v1/models",
+    };
+
+    try {
+      const response = await fetch(`${baseUrl}${healthEndpoints[providerId]}`, {
+        method: "GET",
+        signal: AbortSignal.timeout(3000),
+      });
+      if (response.ok) {
+        return json({ connected: true, url: baseUrl, isDocker });
+      }
+      return json({ connected: false, url: baseUrl, error: "Not responding", isDocker });
+    } catch {
+      return json({ connected: false, url: baseUrl, error: "Not reachable", isDocker });
+    }
+  }
+
+  // GET /api/providers/:id/models - Fetch available models from a local voice provider
+  const localVoiceModelsMatch = path.match(/^\/api\/providers\/(speaches|kokoro|fish_speech)\/models$/);
+  if (localVoiceModelsMatch && method === "GET") {
+    const providerId = localVoiceModelsMatch[1];
+    const providerDef = PROVIDERS[providerId as ProviderId];
+    const baseUrl = ProviderKeys.getDecrypted(providerId) ||
+      ("defaultBaseUrl" in providerDef ? (providerDef as any).defaultBaseUrl : "");
+
+    try {
+      const response = await fetch(`${baseUrl}/v1/models`, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!response.ok) {
+        return json({ error: "Failed to connect", models: [], connected: false }, 200);
+      }
+
+      const data = await response.json() as { data?: Array<{ id: string }> };
+      const models = (data.data || []).map((m: { id: string }) => ({
+        value: m.id,
+        label: m.id,
+      }));
+
+      return json({ models, connected: true });
+    } catch {
+      return json({ error: "Not reachable", models: [], connected: false }, 200);
+    }
+  }
+
   // ==================== ONBOARDING ====================
 
   // GET /api/onboarding/status - Check onboarding status

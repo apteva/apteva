@@ -2,15 +2,19 @@ import React, { useState, useEffect } from "react";
 import { CheckIcon, CloseIcon, PlusIcon } from "../common/Icons";
 import { Modal, useConfirm } from "../common/Modal";
 import { Select } from "../common/Select";
-import { useProjects, useAuth, useTheme, type Project } from "../../context";
+import { useProjects, useAuth, useTheme, useUIMode, type Project } from "../../context";
 import type { ThemeMode, ThemeStyle } from "../../themes";
 import type { Provider } from "../../types";
+import type { UIMode } from "../../context";
 
 type SettingsTab = "general" | "providers" | "projects" | "channels" | "api-keys" | "account" | "updates" | "data" | "assistant";
 
 export function SettingsPage() {
   const { projectsEnabled, metaAgentEnabled } = useProjects();
+  const { isBusiness } = useUIMode();
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+
+  const hiddenInBusiness: SettingsTab[] = ["providers", "api-keys", "data"];
 
   const tabs: { key: SettingsTab; label: string }[] = [
     { key: "general", label: "General" },
@@ -22,7 +26,7 @@ export function SettingsPage() {
     { key: "account", label: "Account" },
     { key: "updates", label: "Updates" },
     { key: "data", label: "Data" },
-  ];
+  ].filter(tab => !isBusiness || !hiddenInBusiness.includes(tab.key));
 
   return (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
@@ -102,6 +106,7 @@ function SettingsNavItem({
 function GeneralSettings() {
   const { authFetch } = useAuth();
   const { mode, style, setMode, setStyle } = useTheme();
+  const { mode: uiMode, setMode: setUIMode } = useUIMode();
   const [instanceUrl, setInstanceUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -211,6 +216,39 @@ function GeneralSettings() {
                   style === opt.value ? "border-[var(--color-accent)]" : "border-[var(--color-scrollbar)]"
                 }`}>
                   {style === opt.value && <div className="w-2 h-2 rounded-full bg-[var(--color-accent)]" />}
+                </div>
+                <span className="text-sm font-medium">{opt.label}</span>
+              </div>
+              <p className="text-xs text-[var(--color-text-muted)] ml-6">{opt.description}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* UI Mode */}
+      <div className="bg-[var(--color-surface)] card p-4 mb-4">
+        <h3 className="font-medium mb-2">UI Mode</h3>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">Switch between developer and business views.</p>
+        <div className="flex gap-3">
+          {([
+            { value: "developer" as UIMode, label: "Developer", description: "Full control over agents, providers, MCP, and configuration" },
+            { value: "business" as UIMode, label: "Business", description: "Simplified view focused on employees and conversations" },
+          ]).map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setUIMode(opt.value)}
+              className={`flex-1 max-w-[240px] px-4 py-3 border text-left transition ${
+                uiMode === opt.value
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-10)]"
+                  : "border-[var(--color-border-light)] bg-[var(--color-bg)] hover:border-[var(--color-scrollbar)]"
+              }`}
+              style={{ borderRadius: "var(--radius-card)" }}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                  uiMode === opt.value ? "border-[var(--color-accent)]" : "border-[var(--color-scrollbar)]"
+                }`}>
+                  {uiMode === opt.value && <div className="w-2 h-2 rounded-full bg-[var(--color-accent)]" />}
                 </div>
                 <span className="text-sm font-medium">{opt.label}</span>
               </div>
@@ -354,9 +392,13 @@ function ProvidersSettings() {
   };
 
   const llmProviders = providers.filter(p => p.type === "llm");
+  const cloudVoiceProviders = providers.filter(p => p.type === "voice" && !p.isLocal);
+  const localVoiceProviders = providers.filter(p => p.type === "voice" && p.isLocal);
+  const voiceProviders = providers.filter(p => p.type === "voice");
   const integrations = providers.filter(p => p.type === "integration");
   const browserProviders = providers.filter(p => p.type === "browser");
   const llmConfiguredCount = llmProviders.filter(p => p.hasKey).length;
+  const voiceConfiguredCount = voiceProviders.filter(p => p.hasKey).length;
   const intConfiguredCount = integrations.filter(p => p.hasKey).length;
   const browserConfiguredCount = browserProviders.filter(p => p.hasKey).length;
 
@@ -399,6 +441,79 @@ function ProvidersSettings() {
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {llmProviders.map(provider => (
+            <ProviderKeyCard
+              key={provider.id}
+              provider={provider}
+              isEditing={selectedProvider === provider.id}
+              apiKey={apiKey}
+              saving={saving}
+              testing={testing}
+              error={selectedProvider === provider.id ? error : null}
+              success={selectedProvider === provider.id ? success : null}
+              onStartEdit={() => {
+                setSelectedProvider(provider.id);
+                setError(null);
+                setSuccess(null);
+              }}
+              onCancelEdit={() => {
+                setSelectedProvider(null);
+                setApiKey("");
+                setError(null);
+              }}
+              onApiKeyChange={setApiKey}
+              onSave={saveKey}
+              onDelete={() => deleteKey(provider.id)}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Voice Providers Section */}
+      <div>
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-1">Voice Providers</h2>
+          <p className="text-[var(--color-text-muted)]">
+            Configure voice providers for real-time voice conversations. {voiceConfiguredCount} of {voiceProviders.length} configured.
+          </p>
+        </div>
+
+        {/* Cloud Voice Providers */}
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3 uppercase tracking-wider">Cloud</h3>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
+          {cloudVoiceProviders.map(provider => (
+            <IntegrationKeyCard
+              key={provider.id}
+              provider={provider}
+              isEditing={selectedProvider === provider.id}
+              apiKey={apiKey}
+              saving={saving}
+              testing={testing}
+              error={selectedProvider === provider.id ? error : null}
+              success={selectedProvider === provider.id ? success : null}
+              onStartEdit={() => {
+                setSelectedProvider(provider.id);
+                setError(null);
+                setSuccess(null);
+              }}
+              onCancelEdit={() => {
+                setSelectedProvider(null);
+                setApiKey("");
+                setError(null);
+              }}
+              onApiKeyChange={setApiKey}
+              onSave={saveKey}
+              onDelete={() => deleteKey(provider.id)}
+              projectsEnabled={projectsEnabled}
+              projects={projects}
+              onRefresh={fetchProviders}
+            />
+          ))}
+        </div>
+
+        {/* Local Voice Providers */}
+        <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3 uppercase tracking-wider">Local</h3>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {localVoiceProviders.map(provider => (
             <ProviderKeyCard
               key={provider.id}
               provider={provider}
@@ -1030,26 +1145,28 @@ function ProviderKeyCard({
   const { authFetch: providerAuthFetch } = useAuth();
   const isOllama = provider.id === "ollama";
   const isCDP = provider.id === "cdp";
-  const isUrlBased = isOllama || isCDP;
+  const isLocal = provider.isLocal || false;
+  const isUrlBased = isLocal || isCDP;
   const isBrowser = provider.type === "browser";
   const isMultiField = provider.id === "browserbase";
-  const [ollamaStatus, setOllamaStatus] = React.useState<{ connected: boolean; modelCount?: number; isDocker?: boolean } | null>(null);
+  const voiceSubtype = (provider as any).voiceSubtype as string | undefined;
+  const [localStatus, setLocalStatus] = React.useState<{ connected: boolean; modelCount?: number; isDocker?: boolean } | null>(null);
   const [installing, setInstalling] = React.useState(false);
   const [installResult, setInstallResult] = React.useState<{ success: boolean; message: string } | null>(null);
 
-  // Check Ollama status when configured or after install
-  const checkOllamaStatus = React.useCallback(() => {
-    providerAuthFetch("/api/providers/ollama/status")
+  // Check status for local providers (Ollama + local voice providers)
+  const checkLocalStatus = React.useCallback(() => {
+    providerAuthFetch(`/api/providers/${provider.id}/status`)
       .then(res => res.json())
-      .then(data => setOllamaStatus({ connected: data.connected, modelCount: data.modelCount, isDocker: data.isDocker }))
-      .catch(() => setOllamaStatus({ connected: false }));
-  }, [providerAuthFetch]);
+      .then(data => setLocalStatus({ connected: data.connected, modelCount: data.modelCount, isDocker: data.isDocker }))
+      .catch(() => setLocalStatus({ connected: false }));
+  }, [providerAuthFetch, provider.id]);
 
   React.useEffect(() => {
-    if (isOllama) {
-      checkOllamaStatus();
+    if (isLocal) {
+      checkLocalStatus();
     }
-  }, [isOllama, provider.hasKey, checkOllamaStatus]);
+  }, [isLocal, provider.hasKey, checkLocalStatus]);
 
   const handleInstallOllama = async () => {
     setInstalling(true);
@@ -1059,8 +1176,7 @@ function ProviderKeyCard({
       const data = await res.json();
       if (data.success) {
         setInstallResult({ success: true, message: data.message });
-        // Auto-save the default URL and refresh status
-        checkOllamaStatus();
+        checkLocalStatus();
       } else {
         setInstallResult({ success: false, message: data.error || "Installation failed" });
       }
@@ -1079,26 +1195,33 @@ function ProviderKeyCard({
         <div className="min-w-0">
           <h3 className="font-medium">{provider.name}</h3>
           <p className="text-sm text-[var(--color-text-muted)] truncate">
-            {isBrowser
-              ? (provider.description || "Browser automation")
-              : provider.type === "integration"
-                ? (provider.description || "MCP integration")
-                : isOllama
-                  ? "Run models locally"
-                  : `${provider.models.length} models`}
+            {provider.description
+              ? provider.description
+              : isBrowser
+                ? "Browser automation"
+                : provider.type === "integration"
+                  ? "MCP integration"
+                  : isLocal
+                    ? "Run locally"
+                    : `${provider.models.length} models`}
           </p>
+          {voiceSubtype && (
+            <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 rounded mt-1 inline-block">
+              {voiceSubtype === "both" ? "STT + TTS" : voiceSubtype === "stt" ? "STT" : "TTS"}
+            </span>
+          )}
         </div>
         {provider.hasKey ? (
           <span className={`text-xs flex items-center gap-1 px-2 py-1 rounded whitespace-nowrap flex-shrink-0 ${
-            isOllama && ollamaStatus
-              ? ollamaStatus.connected
+            isLocal && localStatus
+              ? localStatus.connected
                 ? "text-green-400 bg-green-500/10"
                 : "text-yellow-400 bg-yellow-500/10"
               : "text-green-400 bg-green-500/10"
           }`}>
-            {isOllama && ollamaStatus ? (
-              ollamaStatus.connected ? (
-                <><CheckIcon className="w-3 h-3" />{ollamaStatus.modelCount} models</>
+            {isLocal && localStatus ? (
+              localStatus.connected ? (
+                <><CheckIcon className="w-3 h-3" />{localStatus.modelCount ? `${localStatus.modelCount} models` : "Connected"}</>
               ) : (
                 <>Not running</>
               )
@@ -1147,8 +1270,8 @@ function ProviderKeyCard({
                 type={isUrlBased ? "text" : "password"}
                 value={apiKey}
                 onChange={e => onApiKeyChange(e.target.value)}
-                placeholder={isOllama
-                  ? "http://localhost:11434"
+                placeholder={isLocal
+                  ? (provider.defaultBaseUrl || "http://localhost:8080")
                   : isCDP ? "ws://localhost:9222"
                   : provider.hasKey ? "Enter new API key..." : "Enter API key..."}
                 autoFocus
@@ -1159,7 +1282,7 @@ function ProviderKeyCard({
               <p className="text-xs text-[var(--color-text-muted)]">
                 {isCDP
                   ? "Enter the CDP URL of your browser (e.g., ws://localhost:9222)"
-                  : "Enter your Ollama server URL. Default is http://localhost:11434"}
+                  : `Enter the server URL. Default is ${provider.defaultBaseUrl || "http://localhost:8080"}`}
               </p>
             )}
             {error && <p className="text-red-400 text-sm">{error}</p>}
@@ -1182,15 +1305,21 @@ function ProviderKeyCard({
           </div>
         ) : provider.hasKey ? (
           <div>
-            {isOllama && ollamaStatus && !ollamaStatus.connected && !ollamaStatus.isDocker && (
+            {isLocal && localStatus && !localStatus.connected && (
               <div className="mb-3">
-                <button
-                  onClick={handleInstallOllama}
-                  disabled={installing}
-                  className="w-full px-3 py-1.5 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded text-sm font-medium transition disabled:opacity-50 disabled:cursor-wait"
-                >
-                  {installing ? "Starting Ollama..." : "Start Ollama"}
-                </button>
+                {isOllama && !localStatus.isDocker ? (
+                  <button
+                    onClick={handleInstallOllama}
+                    disabled={installing}
+                    className="w-full px-3 py-1.5 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded text-sm font-medium transition disabled:opacity-50 disabled:cursor-wait"
+                  >
+                    {installing ? "Starting Ollama..." : "Start Ollama"}
+                  </button>
+                ) : (
+                  <p className="text-xs text-yellow-400/80">
+                    Service not reachable. Make sure it&apos;s running at the configured URL.
+                  </p>
+                )}
                 {installResult && (
                   <p className={`text-xs mt-1.5 ${installResult.success ? "text-green-400" : "text-red-400"}`}>
                     {installResult.message}
@@ -1206,7 +1335,7 @@ function ProviderKeyCard({
                 rel="noopener noreferrer"
                 className="text-sm text-[#3b82f6] hover:underline"
               >
-                {isOllama ? "Ollama docs" : "View docs"}
+                {isLocal ? "Setup guide" : "View docs"}
               </a>
             ) : (
               <span />
@@ -1229,14 +1358,14 @@ function ProviderKeyCard({
           </div>
         ) : (
           <div>
-            {isOllama && !ollamaStatus?.isDocker && (
+            {isOllama && !localStatus?.isDocker && (
               <div className="mb-3">
                 <button
                   onClick={handleInstallOllama}
                   disabled={installing}
                   className="w-full px-3 py-2 bg-[#3b82f6]/20 text-[#3b82f6] hover:bg-[#3b82f6]/30 rounded text-sm font-medium transition disabled:opacity-50 disabled:cursor-wait"
                 >
-                  {installing ? "Installing Ollama..." : ollamaStatus?.connected ? "Ollama Running" : "Install Ollama"}
+                  {installing ? "Installing Ollama..." : localStatus?.connected ? "Ollama Running" : "Install Ollama"}
                 </button>
                 {installResult && (
                   <p className={`text-xs mt-1.5 ${installResult.success ? "text-green-400" : "text-red-400"}`}>
@@ -1253,7 +1382,7 @@ function ProviderKeyCard({
                   rel="noopener noreferrer"
                   className="text-sm text-[#3b82f6] hover:underline"
                 >
-                  {isOllama ? "Manual install" : isBrowser ? "View docs" : "Get API key"}
+                  {isLocal ? "Setup guide" : isBrowser ? "View docs" : "Get API key"}
                 </a>
               ) : (
                 <span />
@@ -1506,7 +1635,7 @@ function IntegrationKeyCard({
   const isUrlBased = provider.isLocal;
   const inputType = isUrlBased ? "text" : "password";
   const inputPlaceholder = isUrlBased
-    ? (provider.id === "cdp" ? "ws://localhost:9222" : "http://localhost:11434")
+    ? (provider.defaultBaseUrl || "http://localhost:8080")
     : "Enter API key...";
 
   // Enhanced view with project support

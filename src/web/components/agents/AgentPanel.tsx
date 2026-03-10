@@ -4,10 +4,10 @@ import { CloseIcon, MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, Re
 import { formatCron, formatRelativeTime, TrajectoryView } from "../tasks/TasksPage";
 import { Select } from "../common/Select";
 import { useConfirm } from "../common/Modal";
-import { useTelemetry, useTheme } from "../../context";
+import { useTelemetry, useTheme, useUIMode } from "../../context";
 import { useAuth } from "../../context";
-import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, MultiAgentConfig, OperatorConfig, Task } from "../../types";
-import { getMultiAgentConfig, getOperatorConfig } from "../../types";
+import type { Agent, Provider, AgentFeatures, McpServer, SkillSummary, MultiAgentConfig, OperatorConfig, RealtimeConfig, Task } from "../../types";
+import { getMultiAgentConfig, getOperatorConfig, getRealtimeConfig, isRealtimeEnabled, REALTIME_PROVIDERS } from "../../types";
 
 type Tab = "chat" | "threads" | "tasks" | "memory" | "files" | "settings";
 
@@ -33,6 +33,7 @@ const FEATURE_CONFIG = [
 
 export function AgentPanel({ agent, providers, onClose, onStartAgent, onUpdateAgent, onDeleteAgent }: AgentPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
+  const { isDev } = useUIMode();
 
   return (
     <div className="w-full h-full flex flex-col overflow-hidden bg-[var(--color-bg)] border-l border-[var(--color-border)]">
@@ -56,9 +57,11 @@ export function AgentPanel({ agent, providers, onClose, onStartAgent, onUpdateAg
             <TabButton active={activeTab === "files"} onClick={() => setActiveTab("files")}>
               Files
             </TabButton>
-            <TabButton active={activeTab === "settings"} onClick={() => setActiveTab("settings")}>
-              Settings
-            </TabButton>
+            {isDev && (
+              <TabButton active={activeTab === "settings"} onClick={() => setActiveTab("settings")}>
+                Settings
+              </TabButton>
+            )}
           </div>
         </div>
 
@@ -113,17 +116,20 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 
 function ChatTab({ agent, onStartAgent }: { agent: Agent; onStartAgent: (e?: React.MouseEvent) => void }) {
   const { theme } = useTheme();
+  const { accessToken } = useAuth();
   if (agent.status === "running" && agent.port) {
     return (
       <Chat
         agentId="default"
         apiUrl={`/api/agents/${agent.id}`}
+        apiKey={accessToken || undefined}
         placeholder="Message this agent..."
         context={agent.systemPrompt}
         variant="terminal"
         theme={theme.id as "light" | "dark"}
         headerTitle={agent.name}
-        enableVoice={!!agent.features.realtime}
+        enableVoice={isRealtimeEnabled(agent.features)}
+        voiceProvider={getRealtimeConfig(agent.features).ttsProvider}
       />
     );
   }
@@ -1626,6 +1632,21 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
           };
         }
       });
+    } else if (key === "realtime") {
+      // Special handling for realtime feature - convert to RealtimeConfig
+      setForm(prev => {
+        if (isRealtimeEnabled(prev.features)) {
+          return { ...prev, features: { ...prev.features, realtime: false } };
+        } else {
+          return {
+            ...prev,
+            features: {
+              ...prev.features,
+              realtime: { enabled: true },
+            },
+          };
+        }
+      });
     } else {
       setForm(prev => ({
         ...prev,
@@ -1758,6 +1779,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
               // For agents/operator features, check the enabled property of the config
               const isEnabled = key === "agents" ? isAgentsEnabled()
                 : key === "operator" ? isOperatorEnabled()
+                : key === "realtime" ? isRealtimeEnabled(form.features)
                 : !!form.features[key];
               return (
                 <button
@@ -1805,6 +1827,103 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             )}
           </FormField>
         )}
+
+        {/* Voice Configuration - shown when Realtime is enabled */}
+        {isRealtimeEnabled(form.features) && (() => {
+          const rtConfig = getRealtimeConfig(form.features);
+          const hasOpenAI = providers.some(p => p.id === "openai" && p.hasKey);
+          const hasGemini = providers.some(p => p.id === "gemini" && p.hasKey);
+          const voiceProviders = providers.filter(p => p.type === "voice" && p.hasKey);
+          const hasStandard = voiceProviders.length > 0;
+          const currentMode = rtConfig.provider || "standard";
+
+          const updateRt = (updates: Partial<RealtimeConfig>) => {
+            setForm(prev => ({
+              ...prev,
+              features: {
+                ...prev.features,
+                realtime: { ...getRealtimeConfig(prev.features), ...updates },
+              },
+            }));
+          };
+
+          const sttOptions = voiceProviders
+            .filter(p => !(p as any).voiceSubtype || (p as any).voiceSubtype === "stt" || (p as any).voiceSubtype === "both")
+            .map(p => ({ value: p.id, label: p.name }));
+          const ttsOptions = voiceProviders
+            .filter(p => !(p as any).voiceSubtype || (p as any).voiceSubtype === "tts" || (p as any).voiceSubtype === "both")
+            .map(p => ({ value: p.id, label: p.name }));
+
+          return (
+            <div className="p-3 bg-[var(--color-surface)] rounded border border-[var(--color-border-light)] space-y-3">
+              <p className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">Voice Configuration</p>
+              <FormField label="Voice Mode">
+                <div className="flex gap-2 flex-wrap">
+                  {hasOpenAI && (
+                    <button type="button" onClick={() => updateRt({ provider: "openai", model: "gpt-realtime", voice: "alloy" })}
+                      className={`px-3 py-1.5 text-sm rounded border transition ${currentMode === "openai" ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]" : "border-[var(--color-border-light)]"}`}>
+                      OpenAI Realtime
+                    </button>
+                  )}
+                  {hasGemini && (
+                    <button type="button" onClick={() => updateRt({ provider: "gemini", geminiVoice: "Kore" })}
+                      className={`px-3 py-1.5 text-sm rounded border transition ${currentMode === "gemini" ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]" : "border-[var(--color-border-light)]"}`}>
+                      Gemini Live
+                    </button>
+                  )}
+                  {hasStandard && (
+                    <button type="button" onClick={() => updateRt({ provider: "standard" })}
+                      className={`px-3 py-1.5 text-sm rounded border transition ${currentMode === "standard" ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]" : "border-[var(--color-border-light)]"}`}>
+                      Standard (STT+LLM+TTS)
+                    </button>
+                  )}
+                </div>
+              </FormField>
+              {currentMode === "openai" && (
+                <>
+                  <FormField label="Realtime Model">
+                    <Select value={rtConfig.model || "gpt-realtime"} options={REALTIME_PROVIDERS.openai.models.map(m => ({ value: m.value, label: m.label, recommended: m.recommended }))} onChange={(value) => updateRt({ model: value })} placeholder="Select model..." />
+                  </FormField>
+                  <FormField label="Voice">
+                    <Select value={rtConfig.voice || "alloy"} options={REALTIME_PROVIDERS.openai.voices.map(v => ({ value: v.value, label: v.label, recommended: v.recommended }))} onChange={(value) => updateRt({ voice: value })} placeholder="Select voice..." />
+                  </FormField>
+                </>
+              )}
+              {currentMode === "gemini" && (
+                <>
+                  <FormField label="Realtime Model">
+                    <Select value={rtConfig.geminiModel || REALTIME_PROVIDERS.gemini.models[0].value} options={REALTIME_PROVIDERS.gemini.models.map(m => ({ value: m.value, label: m.label, recommended: m.recommended }))} onChange={(value) => updateRt({ geminiModel: value })} placeholder="Select model..." />
+                  </FormField>
+                  <FormField label="Voice">
+                    <Select value={rtConfig.geminiVoice || "Kore"} options={REALTIME_PROVIDERS.gemini.voices.map(v => ({ value: v.value, label: v.label, recommended: v.recommended }))} onChange={(value) => updateRt({ geminiVoice: value })} placeholder="Select voice..." />
+                  </FormField>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => updateRt({ googleSearch: !rtConfig.googleSearch })}
+                      className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded border transition ${rtConfig.googleSearch ? "border-[var(--color-accent)] bg-[var(--color-accent-10)] text-[var(--color-accent)]" : "border-[var(--color-border-light)]"}`}>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                      Google Search
+                    </button>
+                    <span className="text-xs text-[var(--color-text-faint)]">Enable search grounding</span>
+                  </div>
+                </>
+              )}
+              {currentMode === "standard" && (
+                <>
+                  {sttOptions.length > 0 && (
+                    <FormField label="STT Provider">
+                      <Select value={rtConfig.sttProvider || (sttOptions[0]?.value ?? "")} options={sttOptions} onChange={(value) => updateRt({ sttProvider: value })} placeholder="Select STT provider..." />
+                    </FormField>
+                  )}
+                  {ttsOptions.length > 0 && (
+                    <FormField label="TTS Provider">
+                      <Select value={rtConfig.ttsProvider || (ttsOptions[0]?.value ?? "")} options={ttsOptions} onChange={(value) => updateRt({ ttsProvider: value })} placeholder="Select TTS provider..." />
+                    </FormField>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Agent Built-in Tools - Anthropic only */}
         {form.provider === "anthropic" && (

@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { AgentDB, type Agent } from "../db";
+import { AgentDB, isRealtimeEnabled, type Agent } from "../db";
 import { agentFetch } from "./api/agent-utils";
 
 function deriveShareToken(apiKey: string, agentId: string): string {
@@ -9,7 +9,7 @@ function deriveShareToken(apiKey: string, agentId: string): string {
     .substring(0, 32);
 }
 
-function findAgentByShareToken(token: string): Agent | null {
+export function findAgentByShareToken(token: string): Agent | null {
   const agents = AgentDB.findAll();
   for (const agent of agents) {
     const apiKey = AgentDB.getApiKey(agent.id);
@@ -46,6 +46,7 @@ export async function handleShareRequest(req: Request, path: string): Promise<Re
     return Response.json({
       name: agent.name,
       status: agent.status,
+      voiceEnabled: isRealtimeEnabled(agent.features),
     });
   }
 

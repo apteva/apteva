@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Select } from "../common/Select";
-import { useTelemetryContext, useProjects, useAuth, type TelemetryEvent } from "../../context";
+import { useTelemetryContext, useProjects, useAuth, useUIMode, type TelemetryEvent } from "../../context";
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -97,6 +97,7 @@ export function TelemetryPage() {
   const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
   const { currentProjectId, currentProject, costTrackingEnabled, projectsEnabled, projects } = useProjects();
   const { authFetch } = useAuth();
+  const { isDev, isBusiness, t } = useUIMode();
   const [fetchedStats, setFetchedStats] = useState<TelemetryStats | null>(null);
   const [historicalEvents, setHistoricalEvents] = useState<TelemetryEvent[]>([]);
   const [fetchedUsage, setFetchedUsage] = useState<UsageByAgent[]>([]);
@@ -618,18 +619,22 @@ export function TelemetryPage() {
           <div className="flex flex-wrap gap-4 mb-6">
             <StatCard label="Events" value={formatNumber(stats.total_events)} />
             <StatCard label="LLM Calls" value={formatNumber(stats.total_llm_calls)} />
-            <StatCard label="Tool Calls" value={formatNumber(stats.total_tool_calls)} />
+            {isDev && <StatCard label="Tool Calls" value={formatNumber(stats.total_tool_calls)} />}
             <StatCard label="Errors" value={formatNumber(stats.total_errors)} color="red" />
-            <StatCard label="Input Tokens" value={formatNumber(stats.total_input_tokens)} />
-            <StatCard label="Output Tokens" value={formatNumber(stats.total_output_tokens)} />
-            {(stats.total_cache_creation_tokens > 0 || stats.total_cache_read_tokens > 0) && (
+            {isDev && (
               <>
-                <StatCard label="Cache Write" value={formatNumber(stats.total_cache_creation_tokens)} />
-                <StatCard label="Cache Read" value={formatNumber(stats.total_cache_read_tokens)} />
+                <StatCard label="Input Tokens" value={formatNumber(stats.total_input_tokens)} />
+                <StatCard label="Output Tokens" value={formatNumber(stats.total_output_tokens)} />
+                {(stats.total_cache_creation_tokens > 0 || stats.total_cache_read_tokens > 0) && (
+                  <>
+                    <StatCard label="Cache Write" value={formatNumber(stats.total_cache_creation_tokens)} />
+                    <StatCard label="Cache Read" value={formatNumber(stats.total_cache_read_tokens)} />
+                  </>
+                )}
+                {stats.total_reasoning_tokens > 0 && (
+                  <StatCard label="Reasoning" value={formatNumber(stats.total_reasoning_tokens)} />
+                )}
               </>
-            )}
-            {stats.total_reasoning_tokens > 0 && (
-              <StatCard label="Reasoning" value={formatNumber(stats.total_reasoning_tokens)} />
             )}
             {costTrackingEnabled && (
               <StatCard label="Total Cost" value={`$${stats.total_cost.toFixed(4)}`} color="orange" />
@@ -830,19 +835,19 @@ export function TelemetryPage() {
 
           return (
           <div className="mb-6">
-            <h2 className="text-lg font-medium mb-3">Usage by Agent</h2>
+            <h2 className="text-lg font-medium mb-3">{t("Usage by Agent", "Usage by Employee")}</h2>
             <div className="bg-[var(--color-surface)] card overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
-                    <SortHeader label="Agent" field="agent" align="left" />
+                    <SortHeader label={t("Agent", "Employee")} field="agent" align="left" />
                     <SortHeader label="LLM Calls" field="llm_calls" />
-                    <SortHeader label="Tool Calls" field="tool_calls" />
-                    <SortHeader label="Input Tokens" field="input_tokens" />
-                    <SortHeader label="Output Tokens" field="output_tokens" />
-                    {hasCacheTokens && <SortHeader label="Cache Write" field="cache_creation_tokens" />}
-                    {hasCacheTokens && <SortHeader label="Cache Read" field="cache_read_tokens" />}
-                    {hasReasoningTokens && <SortHeader label="Reasoning" field="reasoning_tokens" />}
+                    {isDev && <SortHeader label="Tool Calls" field="tool_calls" />}
+                    {isDev && <SortHeader label="Input Tokens" field="input_tokens" />}
+                    {isDev && <SortHeader label="Output Tokens" field="output_tokens" />}
+                    {isDev && hasCacheTokens && <SortHeader label="Cache Write" field="cache_creation_tokens" />}
+                    {isDev && hasCacheTokens && <SortHeader label="Cache Read" field="cache_read_tokens" />}
+                    {isDev && hasReasoningTokens && <SortHeader label="Reasoning" field="reasoning_tokens" />}
                     <SortHeader label="Errors" field="errors" />
                     {costTrackingEnabled && <SortHeader label="Est. Cost" field="cost" />}
                   </tr>
@@ -852,16 +857,16 @@ export function TelemetryPage() {
                     <tr key={u.agent_id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg)]">
                       <td className="p-3 font-medium">{getAgentName(u.agent_id)}</td>
                       <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.llm_calls)}</td>
-                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.tool_calls)}</td>
-                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.input_tokens)}</td>
-                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.output_tokens)}</td>
-                      {hasCacheTokens && (
+                      {isDev && <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.tool_calls)}</td>}
+                      {isDev && <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.input_tokens)}</td>}
+                      {isDev && <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.output_tokens)}</td>}
+                      {isDev && hasCacheTokens && (
                         <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_creation_tokens || 0)}</td>
                       )}
-                      {hasCacheTokens && (
+                      {isDev && hasCacheTokens && (
                         <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_read_tokens || 0)}</td>
                       )}
-                      {hasReasoningTokens && (
+                      {isDev && hasReasoningTokens && (
                         <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.reasoning_tokens || 0)}</td>
                       )}
                       <td className="p-3 text-right">
@@ -924,12 +929,12 @@ export function TelemetryPage() {
                   <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
                     <PSortHeader label="Project" field="project" align="left" />
                     <PSortHeader label="LLM Calls" field="llm_calls" />
-                    <PSortHeader label="Tool Calls" field="tool_calls" />
-                    <PSortHeader label="Input Tokens" field="input_tokens" />
-                    <PSortHeader label="Output Tokens" field="output_tokens" />
-                    {hasProjCacheTokens && <PSortHeader label="Cache Write" field="cache_creation_tokens" />}
-                    {hasProjCacheTokens && <PSortHeader label="Cache Read" field="cache_read_tokens" />}
-                    {hasProjReasoningTokens && <PSortHeader label="Reasoning" field="reasoning_tokens" />}
+                    {isDev && <PSortHeader label="Tool Calls" field="tool_calls" />}
+                    {isDev && <PSortHeader label="Input Tokens" field="input_tokens" />}
+                    {isDev && <PSortHeader label="Output Tokens" field="output_tokens" />}
+                    {isDev && hasProjCacheTokens && <PSortHeader label="Cache Write" field="cache_creation_tokens" />}
+                    {isDev && hasProjCacheTokens && <PSortHeader label="Cache Read" field="cache_read_tokens" />}
+                    {isDev && hasProjReasoningTokens && <PSortHeader label="Reasoning" field="reasoning_tokens" />}
                     <PSortHeader label="Errors" field="errors" />
                     {costTrackingEnabled && <PSortHeader label="Est. Cost" field="cost" />}
                   </tr>
@@ -946,16 +951,16 @@ export function TelemetryPage() {
                         </span>
                       </td>
                       <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.llm_calls)}</td>
-                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.tool_calls)}</td>
-                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.input_tokens)}</td>
-                      <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.output_tokens)}</td>
-                      {hasProjCacheTokens && (
+                      {isDev && <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.tool_calls)}</td>}
+                      {isDev && <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.input_tokens)}</td>}
+                      {isDev && <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.output_tokens)}</td>}
+                      {isDev && hasProjCacheTokens && (
                         <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_creation_tokens || 0)}</td>
                       )}
-                      {hasProjCacheTokens && (
+                      {isDev && hasProjCacheTokens && (
                         <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.cache_read_tokens || 0)}</td>
                       )}
-                      {hasProjReasoningTokens && (
+                      {isDev && hasProjReasoningTokens && (
                         <td className="p-3 text-right text-[var(--color-text-secondary)]">{formatNumber(u.reasoning_tokens || 0)}</td>
                       )}
                       <td className="p-3 text-right">

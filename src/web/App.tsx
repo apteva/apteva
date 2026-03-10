@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { Chat } from "@apteva/apteva-kit";
+import { Chat, Call } from "@apteva/apteva-kit";
 import "@apteva/apteva-kit/styles.css";
 
 // Types
@@ -8,7 +8,7 @@ import type { Agent, Provider, Route, NewAgentForm } from "./types";
 import { DEFAULT_FEATURES } from "./types";
 
 // Context
-import { TelemetryProvider, AuthProvider, ProjectProvider, ThemeProvider, useTheme, useAuth, useProjects, useAgentStatusChange, useTaskChange } from "./context";
+import { TelemetryProvider, AuthProvider, ProjectProvider, ThemeProvider, UIModeProvider, useTheme, useAuth, useProjects, useAgentStatusChange, useTaskChange } from "./context";
 
 // Hooks
 import { useAgents, useProviders, useOnboarding } from "./hooks";
@@ -348,6 +348,7 @@ function SharePage({ token }: { token: string }) {
   const { theme } = useTheme();
   const [status, setStatus] = useState<"checking" | "online" | "offline">("checking");
   const [agentName, setAgentName] = useState("Agent");
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
 
   useEffect(() => {
     const check = async () => {
@@ -356,6 +357,7 @@ function SharePage({ token }: { token: string }) {
         if (res.ok) {
           const data = await res.json();
           setAgentName(data.name || "Agent");
+          setVoiceEnabled(!!data.voiceEnabled);
           setStatus(data.status === "running" ? "online" : "offline");
         } else {
           setStatus("offline");
@@ -392,17 +394,28 @@ function SharePage({ token }: { token: string }) {
   return (
     <div className="min-h-[100dvh] flex items-center justify-center p-0 md:p-4" style={{ backgroundColor: "var(--color-bg)" }}>
       <div className="w-full max-w-[640px] h-[100dvh] md:h-[calc(100dvh-32px)] md:max-h-[800px] md:rounded-xl overflow-hidden md:border flex flex-col" style={{ backgroundColor: "var(--color-bg)", borderColor: "var(--color-border)" }}>
-        <Chat
-          agentId="default"
-          apiUrl={`/share/${token}`}
-          placeholder="Type a message..."
-          variant="terminal"
-          theme={theme.id as "light" | "dark"}
-          headerTitle={agentName}
-          enableMarkdown
-          enableWidgets
-          availableWidgets={["form", "kpi"]}
-        />
+        {voiceEnabled ? (
+          <Call
+            agentId="default"
+            agentName={agentName}
+            apiUrl={`/share/${token}`}
+            variant="default"
+            theme={theme.id as "light" | "dark"}
+            showTranscript={false}
+          />
+        ) : (
+          <Chat
+            agentId="default"
+            apiUrl={`/share/${token}`}
+            placeholder="Type a message..."
+            variant="terminal"
+            theme={theme.id as "light" | "dark"}
+            headerTitle={agentName}
+            enableMarkdown
+            enableWidgets
+            availableWidgets={["form", "kpi"]}
+          />
+        )}
       </div>
     </div>
   );
@@ -422,15 +435,17 @@ function App() {
 
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <ProjectProvider>
-          <MetaAgentProvider>
-            <TelemetryProvider>
-              <AppContent />
-            </TelemetryProvider>
-          </MetaAgentProvider>
-        </ProjectProvider>
-      </AuthProvider>
+      <UIModeProvider>
+        <AuthProvider>
+          <ProjectProvider>
+            <MetaAgentProvider>
+              <TelemetryProvider>
+                <AppContent />
+              </TelemetryProvider>
+            </MetaAgentProvider>
+          </ProjectProvider>
+        </AuthProvider>
+      </UIModeProvider>
     </ThemeProvider>
   );
 }

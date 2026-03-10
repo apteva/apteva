@@ -145,6 +145,72 @@ function buildOperatorConfig(features: Agent["features"], projectId: string | nu
   return operatorResult;
 }
 
+function buildRealtimeConfig(features: Agent["features"], projectId: string | null) {
+  // Backwards compatible: handle both boolean and RealtimeConfig
+  const realtimeVal = features.realtime;
+  const isEnabled = typeof realtimeVal === "boolean" ? realtimeVal : (realtimeVal as any)?.enabled ?? false;
+
+  if (!isEnabled) {
+    return { enabled: false, provider: "standard", stt: {}, tts: {} };
+  }
+
+  const rtConfig = typeof realtimeVal === "object" ? realtimeVal as Record<string, unknown> : {};
+  const rtProvider = (rtConfig.provider as string) || "standard";
+
+  // Native OpenAI Realtime mode
+  if (rtProvider === "openai") {
+    return {
+      enabled: true,
+      provider: "openai",
+      model: (rtConfig.model as string) || "gpt-realtime",
+      voice: (rtConfig.voice as string) || "alloy",
+      vad_type: (rtConfig.vadType as string) || "semantic_vad",
+    };
+  }
+
+  // Native Gemini Live mode
+  if (rtProvider === "gemini") {
+    return {
+      enabled: true,
+      provider: "gemini",
+      gemini_model: (rtConfig.geminiModel as string) || "",
+      gemini_voice: (rtConfig.geminiVoice as string) || "Kore",
+      google_search: (rtConfig.googleSearch as boolean) || false,
+    };
+  }
+
+  // Standard mode: STT → Core LLM → TTS pipeline
+  const sttProvider = (rtConfig.sttProvider as string) || "elevenlabs";
+  const sttModel = (rtConfig.sttModel as string) || (sttProvider === "elevenlabs" ? "scribe_v2_realtime" : undefined);
+  const ttsProvider = (rtConfig.ttsProvider as string) || "elevenlabs";
+  const ttsModel = (rtConfig.ttsModel as string) || undefined;
+
+  const sttProviderDef = PROVIDERS[sttProvider as ProviderId];
+  const ttsProviderDef = PROVIDERS[ttsProvider as ProviderId];
+
+  const sttConfig: Record<string, unknown> = { provider: sttProvider };
+  if (sttModel) sttConfig.model = sttModel;
+  // For local providers, include the base URL in the config
+  if (sttProviderDef && "isLocal" in sttProviderDef && sttProviderDef.isLocal) {
+    sttConfig.base_url = ProviderKeys.getDecryptedForProject(sttProvider, projectId) ||
+      ("defaultBaseUrl" in sttProviderDef ? (sttProviderDef as any).defaultBaseUrl : "");
+  }
+
+  const ttsConfig: Record<string, unknown> = { provider: ttsProvider };
+  if (ttsModel) ttsConfig.model = ttsModel;
+  if (ttsProviderDef && "isLocal" in ttsProviderDef && ttsProviderDef.isLocal) {
+    ttsConfig.base_url = ProviderKeys.getDecryptedForProject(ttsProvider, projectId) ||
+      ("defaultBaseUrl" in ttsProviderDef ? (ttsProviderDef as any).defaultBaseUrl : "");
+  }
+
+  return {
+    enabled: true,
+    provider: "standard",
+    stt: sttConfig,
+    tts: ttsConfig,
+  };
+}
+
 // Build agent config from apteva agent data
 // Note: POST /config expects flat structure WITHOUT "agent" wrapper
 export function buildAgentConfig(agent: Agent, providerKey: string) {
@@ -302,12 +368,7 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
       cache_ttl: "15m",
       servers: mcpServers,
     },
-    realtime: {
-      enabled: features.realtime,
-      provider: "openai",
-      model: "gpt-4o-realtime-preview",
-      voice: "alloy",
-    },
+    realtime: buildRealtimeConfig(features, agent.project_id),
     context: {
       max_messages: 30,
       max_tokens: 0,
@@ -565,6 +626,41 @@ export async function startAgentProcess(
       }
     }
 
+    // If realtime voice is enabled, pass voice provider keys/URLs for STT/TTS
+    const rtEnabled = typeof agent.features.realtime === "boolean"
+      ? agent.features.realtime
+      : (agent.features.realtime as any)?.enabled ?? false;
+    if (rtEnabled) {
+      // Cloud voice provider keys (backwards compat — always pass if available)
+      const elevenlabsKey = ProviderKeys.getDecryptedForProject("elevenlabs", agent.project_id);
+      if (elevenlabsKey) env.ELEVENLABS_API_KEY = elevenlabsKey;
+      const deepgramKey = ProviderKeys.getDecryptedForProject("deepgram", agent.project_id);
+      if (deepgramKey) env.DEEPGRAM_API_KEY = deepgramKey;
+
+      // Local voice provider URLs
+      const localVoiceProviders = ["speaches", "whisper_cpp", "kokoro", "piper", "fish_speech"] as const;
+      for (const pvId of localVoiceProviders) {
+        const pv = PROVIDERS[pvId as ProviderId];
+        if (pv) {
+          const url = ProviderKeys.getDecryptedForProject(pvId, agent.project_id);
+          if (url) env[pv.envVar] = url;
+        }
+      }
+
+      // Pass API keys for native realtime providers (OpenAI/Gemini)
+      // Agent may use a different main LLM provider (e.g., Claude) but needs these for voice
+      const rtConfig = typeof agent.features.realtime === "object" ? agent.features.realtime as Record<string, unknown> : {};
+      const rtProvider = rtConfig.provider as string;
+      if (rtProvider === "openai" && agent.provider !== "openai") {
+        const openaiKey = ProviderKeys.getDecryptedForProject("openai", agent.project_id);
+        if (openaiKey) env.OPENAI_API_KEY = openaiKey;
+      }
+      if (rtProvider === "gemini" && agent.provider !== "gemini") {
+        const geminiKey = ProviderKeys.getDecryptedForProject("gemini", agent.project_id);
+        if (geminiKey) env.GEMINI_API_KEY = geminiKey;
+      }
+    }
+
     // Get binary path dynamically (allows hot-reload of new binary versions)
     const binaryPath = getBinaryPathForAgent();
 
@@ -618,8 +714,9 @@ export async function startAgentProcess(
       console.log(`  Pushing configuration...`);
     }
     const config = buildAgentConfig(agent, providerKey);
-    console.log(`[DEBUG] operator config being pushed:`, JSON.stringify(config.operator, null, 2));
-    console.log(`[DEBUG] builtin_tools:`, JSON.stringify(config.operator?.builtin_tools));
+    if (agent.features.realtime) {
+      console.log(`[DEBUG] realtime config being pushed:`, JSON.stringify(config.realtime, null, 2));
+    }
     const configResult = await pushConfigToAgent(agent.id, port, config);
     if (!configResult.success) {
       if (!silent) {

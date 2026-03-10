@@ -7,3 +7,6 @@ export { ProjectProvider, useProjects } from "./ProjectContext";
 export type { Project } from "./ProjectContext";
 
 export { ThemeProvider, useTheme } from "./ThemeContext";
+
+export { UIModeProvider, useUIMode } from "./UIModeContext";
+export type { UIMode } from "./UIModeContext";

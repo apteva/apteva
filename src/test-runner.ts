@@ -241,7 +241,7 @@ export async function runTest(testCase: TestCase): Promise<TestRun> {
 
     const chatRes = await agentFetch(runningAgent.id, runningAgent.port!, "/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Test-Mode": "true" },
       body: JSON.stringify(chatBody),
     });
 

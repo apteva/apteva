@@ -2,7 +2,8 @@ import React, { useMemo } from "react";
 import { AgentCard } from "./AgentCard";
 import { AgentPanel } from "./AgentPanel";
 import { LoadingSpinner } from "../common/LoadingSpinner";
-import { useProjects } from "../../context";
+import { useProjects, useUIMode } from "../../context";
+import { useMetaAgent } from "../meta-agent/MetaAgent";
 import type { Agent, Provider } from "../../types";
 
 interface AgentsViewProps {
@@ -33,6 +34,7 @@ export function AgentsView({
   canCreateAgent = true,
 }: AgentsViewProps) {
   const { currentProjectId, currentProject } = useProjects();
+  const { isBusiness, t } = useUIMode();
 
   // Filter agents by current project
   const filteredAgents = useMemo(() => {
@@ -49,10 +51,10 @@ export function AgentsView({
   }, [agents, currentProjectId]);
 
   const headerTitle = currentProjectId === null
-    ? "Agents"
+    ? t("Agents", "Employees")
     : currentProjectId === "unassigned"
-    ? "Unassigned Agents"
-    : currentProject?.name || "Agents";
+    ? t("Unassigned Agents", "Unassigned Employees")
+    : currentProject?.name || t("Agents", "Employees");
 
   return (
     <div className="flex-1 flex overflow-hidden relative">
@@ -70,11 +72,11 @@ export function AgentsView({
             <h1 className="text-xl font-semibold">{headerTitle}</h1>
             {currentProjectId !== null && (
               <span className="text-sm text-[var(--color-text-muted)]">
-                ({filteredAgents.length} agent{filteredAgents.length !== 1 ? "s" : ""})
+                ({filteredAgents.length} {t("agent", "employee")}{filteredAgents.length !== 1 ? "s" : ""})
               </span>
             )}
           </div>
-          {onNewAgent && (
+          {!isBusiness && onNewAgent && (
             <button
               onClick={onNewAgent}
               disabled={!canCreateAgent}
@@ -86,9 +88,13 @@ export function AgentsView({
         </div>
 
         {loading ? (
-          <LoadingSpinner message="Loading agents..." />
+          <LoadingSpinner message={t("Loading agents...", "Loading employees...")} />
         ) : filteredAgents.length === 0 ? (
-          <EmptyState onNewAgent={onNewAgent} canCreateAgent={canCreateAgent} hasProjectFilter={currentProjectId !== null} />
+          isBusiness ? (
+            <BusinessEmptyState />
+          ) : (
+            <EmptyState onNewAgent={onNewAgent} canCreateAgent={canCreateAgent} hasProjectFilter={currentProjectId !== null} />
+          )
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 auto-rows-fr">
             {filteredAgents.map((agent) => (
@@ -153,6 +159,22 @@ function EmptyState({ onNewAgent, canCreateAgent, hasProjectFilter }: { onNewAge
           + New Agent
         </button>
       )}
+    </div>
+  );
+}
+
+function BusinessEmptyState() {
+  const { toggle } = useMetaAgent();
+  return (
+    <div className="text-center py-20 text-[var(--color-text-muted)]">
+      <p className="text-lg">No employees yet</p>
+      <p className="text-sm mt-1">Ask the Assistant to create one for you</p>
+      <button
+        onClick={toggle}
+        className="mt-4 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-black px-4 py-2 rounded font-medium transition"
+      >
+        Open Assistant
+      </button>
     </div>
   );
 }

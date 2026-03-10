@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useAgentActivity, useAuth, useProjects, useTelemetryContext } from "../../context";
+import { useAgentActivity, useAuth, useProjects, useTelemetryContext, useUIMode } from "../../context";
 import { useTelemetry } from "../../context/TelemetryContext";
 import type { TelemetryEvent } from "../../context";
 import type { Agent, Provider, Route, DashboardStats, Task } from "../../types";
@@ -24,6 +24,7 @@ export function Dashboard({
 }: DashboardProps) {
   const { authFetch } = useAuth();
   const { currentProjectId } = useProjects();
+  const { isDev, t } = useUIMode();
   const { events: realtimeEvents, statusChangeCounter } = useTelemetryContext();
   const { events: taskTelemetryEvents } = useTelemetry({ category: "TASK" });
   const lastProcessedTaskEventRef = useRef<string | null>(null);
@@ -145,24 +146,24 @@ export function Dashboard({
   return (
     <div className="flex-1 overflow-auto p-6">
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Agents" value={filteredAgents.length} subValue={`${filteredRunningCount} running`} />
+      <div className={`grid grid-cols-2 ${isDev ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-4 mb-6`}>
+        <StatCard label={t("Agents", "Employees")} value={filteredAgents.length} subValue={`${filteredRunningCount} running`} />
         <StatCard label="Tasks" value={taskStats.total} subValue={`${taskStats.pending} pending`} />
         <StatCard label="Completed" value={taskStats.completed} color="text-green-400" />
-        <StatCard label="Providers" value={configuredProviders.length} color="text-[var(--color-accent)]" />
+        {isDev && <StatCard label="Providers" value={configuredProviders.length} color="text-[var(--color-accent)]" />}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Agents List */}
         <DashboardCard
-          title="Agents"
+          title={t("Agents", "Employees")}
           actionLabel="View All"
           onAction={() => onNavigate("agents")}
         >
           {loading ? (
             <div className="p-4 text-center text-[var(--color-text-muted)]">Loading...</div>
           ) : filteredAgents.length === 0 ? (
-            <div className="p-4 text-center text-[var(--color-text-muted)]">No agents yet</div>
+            <div className="p-4 text-center text-[var(--color-text-muted)]">{t("No agents yet", "No employees yet")}</div>
           ) : (
             <div className="divide-y divide-[var(--color-border)]">
               {filteredAgents.slice(0, 5).map((agent) => (
@@ -299,6 +300,7 @@ function DashboardCard({ title, actionLabel, onAction, children }: DashboardCard
 function AgentListItem({ agent, onSelect, onMessage, showProject }: { agent: Agent; onSelect: () => void; onMessage?: () => void; showProject?: boolean }) {
   const { isActive, label } = useAgentActivity(agent.id);
   const { projects } = useProjects();
+  const { isDev } = useUIMode();
   const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
 
   return (
@@ -322,7 +324,7 @@ function AgentListItem({ agent, onSelect, onMessage, showProject }: { agent: Age
             {isActive && label ? (
               <span className="text-green-400 truncate">{label}</span>
             ) : (
-              <span>{agent.provider} · {agent.status === "running" ? "idle" : "stopped"}</span>
+              <span>{isDev ? `${agent.provider} · ` : ""}{agent.status === "running" ? "idle" : "stopped"}</span>
             )}
             {showProject && project && (
               <>

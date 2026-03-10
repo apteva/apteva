@@ -18,13 +18,60 @@ export interface OperatorConfig {
   max_actions_per_turn?: number;
 }
 
+export interface RealtimeConfig {
+  enabled: boolean;
+  provider?: "openai" | "gemini" | "standard";  // Voice mode
+  model?: string;         // OpenAI realtime model
+  voice?: string;         // OpenAI voice (alloy, ash, ballad, coral, sage, verse)
+  geminiModel?: string;   // Gemini realtime model
+  geminiVoice?: string;   // Gemini voice (Aoede, Charon, Fenrir, Kore, Puck)
+  vadType?: string;       // "semantic_vad" | "server_vad"
+  googleSearch?: boolean; // Gemini: enable Google Search grounding
+  sttProvider?: string;   // Standard mode: "elevenlabs" | "speaches" | "whisper_cpp" | etc.
+  sttModel?: string;
+  ttsProvider?: string;   // Standard mode: "elevenlabs" | "kokoro" | "piper" | etc.
+  ttsModel?: string;
+}
+
+// Realtime (native voice-to-voice) provider models and voices
+export const REALTIME_PROVIDERS = {
+  openai: {
+    models: [
+      { value: "gpt-realtime-1.5", label: "GPT Realtime 1.5 (Latest)", recommended: true },
+      { value: "gpt-realtime", label: "GPT Realtime" },
+      { value: "gpt-4o-realtime-preview", label: "GPT-4o Realtime Preview" },
+    ],
+    voices: [
+      { value: "alloy", label: "Alloy" },
+      { value: "ash", label: "Ash" },
+      { value: "ballad", label: "Ballad" },
+      { value: "coral", label: "Coral" },
+      { value: "marin", label: "Marin", recommended: true },
+      { value: "sage", label: "Sage" },
+      { value: "verse", label: "Verse" },
+    ],
+  },
+  gemini: {
+    models: [
+      { value: "models/gemini-2.5-flash-native-audio-preview-12-2025", label: "Gemini 2.5 Flash Audio", recommended: true },
+    ],
+    voices: [
+      { value: "Kore", label: "Kore", recommended: true },
+      { value: "Puck", label: "Puck" },
+      { value: "Charon", label: "Charon" },
+      { value: "Aoede", label: "Aoede" },
+      { value: "Fenrir", label: "Fenrir" },
+    ],
+  },
+} as const;
+
 export interface AgentFeatures {
   memory: boolean;
   tasks: boolean;
   vision: boolean;
   operator: boolean | OperatorConfig; // Can be boolean for backwards compat or full config
   mcp: boolean;
-  realtime: boolean;
+  realtime: boolean | RealtimeConfig; // Can be boolean for backwards compat or full config
   files: boolean;
   agents: boolean | MultiAgentConfig; // Can be boolean for backwards compat or full config
   builtinTools?: AgentBuiltinTools;
@@ -49,6 +96,21 @@ export function getOperatorConfig(features: AgentFeatures): OperatorConfig {
     return { enabled: op };
   }
   return op;
+}
+
+// Helper to normalize realtime feature to RealtimeConfig
+export function getRealtimeConfig(features: AgentFeatures): RealtimeConfig {
+  const rt = features.realtime;
+  if (typeof rt === "boolean") {
+    return { enabled: rt };
+  }
+  return rt;
+}
+
+// Helper to check if realtime is enabled
+export function isRealtimeEnabled(features: AgentFeatures): boolean {
+  if (typeof features.realtime === "boolean") return features.realtime;
+  return features.realtime.enabled;
 }
 
 // Helper to normalize agents feature to MultiAgentConfig
@@ -141,7 +203,7 @@ export interface ProviderModel {
 export interface Provider {
   id: string;
   name: string;
-  type: "llm" | "integration" | "browser";
+  type: "llm" | "integration" | "browser" | "voice";
   docsUrl: string;
   description?: string;
   models: ProviderModel[];
@@ -149,7 +211,9 @@ export interface Provider {
   keyHint: string | null;
   isValid: boolean | null;
   configured?: boolean; // for backwards compatibility
-  isLocal?: boolean; // Uses URL instead of API key (ollama)
+  isLocal?: boolean; // Uses URL instead of API key (ollama, local voice)
+  voiceSubtype?: "stt" | "tts" | "both"; // For voice providers
+  defaultBaseUrl?: string; // Default URL for local providers
 }
 
 export interface OnboardingStatus {

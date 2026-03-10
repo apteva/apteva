@@ -290,7 +290,7 @@ export function TestsPage() {
   };
 
   return (
-    <div className="flex-1 overflow-auto p-6">
+    <div className="relative flex-1 overflow-auto p-6">
       {ConfirmDialog}
 
       {/* Header */}
@@ -424,91 +424,106 @@ export function TestsPage() {
         </div>
       )}
 
-      {/* Run History Panel */}
+      {/* Run History Drawer - backdrop */}
       {selectedRuns && (
-        <div className="mt-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-[var(--color-text-secondary)]">Run History</h2>
+        <div
+          className="absolute inset-0 bg-black/40 backdrop-blur-[2px] z-10"
+          onClick={() => { setSelectedRuns(null); setExpandedRun(null); }}
+        />
+      )}
+
+      {/* Run History Drawer - slides in from right */}
+      {selectedRuns && (
+        <div className="absolute right-0 top-0 bottom-0 w-full sm:w-[500px] lg:w-[600px] z-20 bg-[var(--color-bg)] border-l border-[var(--color-border)] shadow-2xl flex flex-col">
+          {/* Drawer Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
+            <h2 className="text-sm font-bold">Run History</h2>
             <button
               onClick={() => { setSelectedRuns(null); setExpandedRun(null); }}
-              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+              className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] rounded transition"
             >
-              Close
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
-          {selectedRuns.runs.length === 0 ? (
-            <p className="text-sm text-[var(--color-text-muted)]">No runs yet</p>
-          ) : (
-            <div className="space-y-2">
-              {selectedRuns.runs.map(run => (
-                <div key={run.id} className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded p-3">
-                  <div
-                    className="flex items-center justify-between cursor-pointer"
-                    onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}
-                  >
-                    <div className="flex items-center gap-3">
-                      {statusBadge(run.status)}
-                      <span className="text-xs text-[var(--color-text-muted)]">
-                        {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "---"}
-                      </span>
-                      {run.score != null && (
-                        <span className="text-xs text-[var(--color-text-secondary)] font-mono">{run.score}/10</span>
-                      )}
-                      {run.selected_agent_name && (
-                        <span className="text-xs text-[var(--color-text-faint)]">
-                          Agent: {run.selected_agent_name}
+
+          {/* Drawer Content */}
+          <div className="flex-1 overflow-auto p-4">
+            {selectedRuns.runs.length === 0 ? (
+              <p className="text-sm text-[var(--color-text-muted)]">No runs yet</p>
+            ) : (
+              <div className="space-y-2">
+                {selectedRuns.runs.map(run => (
+                  <div key={run.id} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-3">
+                    <div
+                      className="flex items-center justify-between cursor-pointer"
+                      onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}
+                    >
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {statusBadge(run.status)}
+                        <span className="text-xs text-[var(--color-text-muted)]">
+                          {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "---"}
                         </span>
-                      )}
-                      <span className="text-xs text-[var(--color-text-faint)]">
-                        {new Date(run.created_at).toLocaleString()}
-                      </span>
+                        {run.score != null && (
+                          <span className="text-xs text-[var(--color-text-secondary)] font-mono">{run.score}/10</span>
+                        )}
+                        {run.selected_agent_name && (
+                          <span className="text-xs text-[var(--color-text-faint)]">
+                            Agent: {run.selected_agent_name}
+                          </span>
+                        )}
+                        <span className="text-xs text-[var(--color-text-faint)]">
+                          {new Date(run.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                      <span className="text-xs text-[var(--color-text-faint)] shrink-0 ml-2">{expandedRun === run.id ? "---" : "+"}</span>
                     </div>
-                    <span className="text-xs text-[var(--color-text-faint)]">{expandedRun === run.id ? "---" : "+"}</span>
-                  </div>
-                  {expandedRun === run.id && (
-                    <div className="mt-3 space-y-2">
-                      {run.planner_reasoning && (
-                        <div>
-                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Planner:</div>
-                          <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">
-                            {run.selected_agent_name && <span className="text-[var(--color-accent)]">{run.selected_agent_name}</span>}
-                            {run.selected_agent_name && " --- "}
-                            {run.planner_reasoning}
+                    {expandedRun === run.id && (
+                      <div className="mt-3 space-y-2">
+                        {run.planner_reasoning && (
+                          <div>
+                            <div className="text-xs text-[var(--color-text-muted)] mb-1">Planner:</div>
+                            <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">
+                              {run.selected_agent_name && <span className="text-[var(--color-accent)]">{run.selected_agent_name}</span>}
+                              {run.selected_agent_name && " --- "}
+                              {run.planner_reasoning}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                      {run.generated_message && (
-                        <div>
-                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Generated Message:</div>
-                          <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">"{run.generated_message}"</div>
-                        </div>
-                      )}
-                      {run.judge_reasoning && (
-                        <div>
-                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Judge:</div>
-                          <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">{run.judge_reasoning}</div>
-                        </div>
-                      )}
-                      {run.error && (
-                        <div>
-                          <div className="text-xs text-red-400 mb-1">Error:</div>
-                          <div className="text-sm text-red-300 bg-[var(--color-bg)] p-2 rounded">{run.error}</div>
-                        </div>
-                      )}
-                      {run.agent_response && (
-                        <div>
-                          <div className="text-xs text-[var(--color-text-muted)] mb-1">Agent Response (Thread):</div>
-                          <pre className="text-xs text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded overflow-auto max-h-64">
-                            {run.agent_response}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                        )}
+                        {run.generated_message && (
+                          <div>
+                            <div className="text-xs text-[var(--color-text-muted)] mb-1">Generated Message:</div>
+                            <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">"{run.generated_message}"</div>
+                          </div>
+                        )}
+                        {run.judge_reasoning && (
+                          <div>
+                            <div className="text-xs text-[var(--color-text-muted)] mb-1">Judge:</div>
+                            <div className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded">{run.judge_reasoning}</div>
+                          </div>
+                        )}
+                        {run.error && (
+                          <div>
+                            <div className="text-xs text-red-400 mb-1">Error:</div>
+                            <div className="text-sm text-red-300 bg-[var(--color-bg)] p-2 rounded">{run.error}</div>
+                          </div>
+                        )}
+                        {run.agent_response && (
+                          <div>
+                            <div className="text-xs text-[var(--color-text-muted)] mb-1">Agent Response (Thread):</div>
+                            <pre className="text-xs text-[var(--color-text-secondary)] bg-[var(--color-bg)] p-2 rounded overflow-auto max-h-64">
+                              {run.agent_response}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

@@ -1,6 +1,6 @@
 import React from "react";
 import { MemoryIcon, TasksIcon, VisionIcon, OperatorIcon, McpIcon, RealtimeIcon, FilesIcon, MultiAgentIcon, SkillsIcon, ActivityIcon } from "../common/Icons";
-import { useAgentActivity, useProjects } from "../../context";
+import { useAgentActivity, useProjects, useUIMode } from "../../context";
 import type { Agent, AgentFeatures } from "../../types";
 
 interface AgentCardProps {
@@ -28,6 +28,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
   const skills = agent.skillDetails || [];
   const { isActive, label: activityLabel } = useAgentActivity(agent.id);
   const { projects } = useProjects();
+  const { isDev } = useUIMode();
   const project = agent.projectId ? projects.find(p => p.id === agent.projectId) : null;
   const subscriptions = agent.subscriptions || [];
 
@@ -43,10 +44,12 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
       <div className="flex items-start justify-between mb-3">
         <div>
           <h3 className="font-semibold text-lg">{agent.name}</h3>
-          <p className="text-sm text-[var(--color-text-muted)]">
-            {agent.provider} / {agent.model}
-            {agent.port && <span className="text-[var(--color-text-faint)]"> · :{agent.port}</span>}
-          </p>
+          {isDev && (
+            <p className="text-sm text-[var(--color-text-muted)]">
+              {agent.provider} / {agent.model}
+              {agent.port && <span className="text-[var(--color-text-faint)]"> · :{agent.port}</span>}
+            </p>
+          )}
           {showProject && project && (
             <p className="text-sm text-[var(--color-text-muted)] flex items-center gap-1.5 mt-1">
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
@@ -57,7 +60,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
         <StatusBadge status={agent.status} isActive={isActive && agent.status === "running"} activityLabel={activityLabel} />
       </div>
 
-      {enabledFeatures.length > 0 && (
+      {isDev && enabledFeatures.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {enabledFeatures.map(({ key, icon: Icon, label }) => (
             <span
@@ -74,7 +77,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
       )}
 
       {/* MCP Servers */}
-      {mcpServers.length > 0 && (
+      {isDev && mcpServers.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {mcpServers.map((server) => {
             // HTTP/remote servers are always available
@@ -98,7 +101,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
       )}
 
       {/* Skills */}
-      {skills.length > 0 && (
+      {isDev && skills.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {skills.map((skill) => (
             <span
@@ -118,7 +121,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
       )}
 
       {/* Subscriptions (triggers listening to) */}
-      {subscriptions.length > 0 && (
+      {isDev && subscriptions.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {subscriptions.map((sub) => (
             <span

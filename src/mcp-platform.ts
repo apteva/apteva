@@ -94,6 +94,7 @@ FEATURES (all optional, default false):
 - vision: Image & PDF understanding — agent can analyze uploaded images and PDFs.
 - mcp: MCP tool use — agent can use tools from assigned MCP servers. Enable this if you plan to assign MCP servers.
 - files: File management — agent can read, write, and manage files in its workspace.
+- agents: Multi-agent communication — agent can call and delegate tasks to peer agents in the same project. Enables call_agent and list_available_agents tools.
 
 TIPS:
 - Always provide a descriptive system_prompt that tells the agent what it does and how to behave.
@@ -116,6 +117,7 @@ TIPS:
             vision: { type: "boolean", description: "Image and PDF understanding" },
             mcp: { type: "boolean", description: "MCP tool use — required if assigning MCP servers" },
             files: { type: "boolean", description: "File read/write in agent workspace" },
+            agents: { type: "boolean", description: "Multi-agent communication — call and delegate to peer agents in the same project" },
           },
         },
       },
@@ -150,6 +152,7 @@ SKILLS & MCP SERVERS:
             vision: { type: "boolean" },
             mcp: { type: "boolean" },
             files: { type: "boolean" },
+            agents: { type: "boolean" },
           },
         },
         skill_ids: { type: "array", items: { type: "string" }, description: "Set the full list of skill IDs (replaces existing)" },
@@ -383,8 +386,19 @@ EXAMPLES:
   },
   // Task management on agents
   {
+    name: "list_tasks",
+    description: "List all tasks across ALL running agents in the project. Returns tasks from every agent, each tagged with agentId and agentName. Use this to get a project-wide overview of all tasks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "Filter to a specific project (optional). If omitted, returns tasks from all running agents." },
+        status: { type: "string", description: "Filter by status: all, pending, running, completed, failed, cancelled (default: all)" },
+      },
+    },
+  },
+  {
     name: "list_agent_tasks",
-    description: "List tasks on a running agent. Tasks are scheduled work items that agents execute autonomously.",
+    description: "List tasks on a specific running agent. Use list_tasks instead for a project-wide view.",
     inputSchema: {
       type: "object",
       properties: {
@@ -532,18 +546,17 @@ EXAMPLES:
   },
   {
     name: "create_test",
-    description: "Create a new test case for an agent. The test sends a message to the agent, then an LLM judge evaluates the conversation against the success criteria.",
+    description: "Create a behavior-driven test case. Describe what the agent should do in natural language — the system will auto-select the best agent and generate the test message. Optionally pin to a specific agent.",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Test name" },
-        agent_id: { type: "string", description: "Agent ID to test" },
-        input_message: { type: "string", description: "Message to send to the agent" },
-        eval_criteria: { type: "string", description: "Natural language success criteria for the LLM judge. E.g. 'The agent should use the post_tweet tool and confirm the post was made.'" },
-        description: { type: "string", description: "Optional description" },
-        timeout_ms: { type: "number", description: "Timeout in ms (default 60000)" },
+        behavior: { type: "string", description: "Natural language description of what the agent should do. E.g. 'Search the web for the latest news about AI and summarize it'" },
+        agent_id: { type: "string", description: "Optional: pin to a specific agent ID. If omitted, the AI planner auto-selects the best agent." },
+        project_id: { type: "string", description: "Optional: project ID to scope agent selection" },
+        timeout_ms: { type: "number", description: "Timeout in ms (default 300000 = 5 min)" },
       },
-      required: ["name", "agent_id", "input_message", "eval_criteria"],
+      required: ["name", "behavior"],
     },
   },
   {
@@ -828,6 +841,43 @@ After adding, use assign_mcp_server_to_agent to give an agent access to these to
       required: ["provider", "config_id"],
     },
   },
+  // Provider key management
+  {
+    name: "set_provider_key",
+    description: "Set or update an API key for a provider (LLM or integration). Use list_providers or list_integration_providers to see which providers need keys. Ask the user for the key — never guess or fabricate one.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider_id: { type: "string", description: "Provider ID (e.g. 'anthropic', 'openai', 'agentdojo', 'composio')" },
+        key: { type: "string", description: "The API key value" },
+        project_id: { type: "string", description: "Project ID to scope the key to (optional — omit for global key)" },
+      },
+      required: ["provider_id", "key"],
+    },
+  },
+  // MCP server lifecycle
+  {
+    name: "start_mcp_server",
+    description: "Start an MCP server. npm/pip servers will be installed and launched; local servers are activated immediately; HTTP servers are always available.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "The MCP server ID to start" },
+      },
+      required: ["server_id"],
+    },
+  },
+  {
+    name: "stop_mcp_server",
+    description: "Stop a running MCP server.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "The MCP server ID to stop" },
+      },
+      required: ["server_id"],
+    },
+  },
   // Analytics
   {
     name: "get_analytics",
@@ -952,7 +1002,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
             mcp: args.features?.mcp ?? false,
             realtime: false,
             files: args.features?.files ?? false,
-            agents: false,
+            agents: args.features?.agents ? { enabled: true, group: args.project_id || undefined } : false,
           },
           mcp_servers: [],
           skills: [],
@@ -975,7 +1025,14 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         if (args.system_prompt !== undefined) updates.system_prompt = args.system_prompt;
         if (args.project_id !== undefined) updates.project_id = args.project_id;
         if (args.features !== undefined) {
-          updates.features = { ...agent.features, ...args.features };
+          const mergedFeatures = { ...agent.features, ...args.features };
+          // Convert agents boolean to MultiAgentConfig
+          if (typeof mergedFeatures.agents === "boolean") {
+            mergedFeatures.agents = mergedFeatures.agents
+              ? { enabled: true, group: args.project_id || agent.project_id || undefined }
+              : false;
+          }
+          updates.features = mergedFeatures;
         }
 
         // Skills: set, add, or remove
@@ -1354,6 +1411,42 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         }
       }
 
+      case "list_tasks": {
+        const status = args.status || "all";
+        let runningAgents = AgentDB.findAll().filter(a => a.status === "running" && a.port);
+
+        if (args.project_id === "unassigned") {
+          runningAgents = runningAgents.filter(a => !a.project_id);
+        } else if (args.project_id) {
+          runningAgents = runningAgents.filter(a => a.project_id === args.project_id);
+        }
+
+        const allTasks: any[] = [];
+        const results = await Promise.all(
+          runningAgents.map(async (agent) => {
+            try {
+              const data = await fetchFromAgent(agent.id, agent.port!, `/tasks?status=${status}`);
+              return { agent, tasks: data?.tasks || [] };
+            } catch {
+              return { agent, tasks: [] };
+            }
+          })
+        );
+
+        for (const { agent, tasks } of results) {
+          for (const task of tasks) {
+            allTasks.push({
+              id: task.id, title: task.title, type: task.type, status: task.status, priority: task.priority,
+              recurrence: task.recurrence, next_run: task.next_run, execute_at: task.execute_at, created_at: task.created_at,
+              agentId: agent.id, agentName: agent.name,
+            });
+          }
+        }
+
+        allTasks.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        return { content: [{ type: "text", text: JSON.stringify({ tasks: allTasks, count: allTasks.length }, null, 2) }] };
+      }
+
       case "list_agent_tasks": {
         const agent = AgentDB.findById(args.agent_id);
         if (!agent) return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
@@ -1533,37 +1626,44 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
       case "list_tests": {
         const tests = TestCaseDB.findAll(args.project_id);
         const result = tests.map(tc => {
-          const agent = AgentDB.findById(tc.agent_id);
+          const agent = tc.agent_id ? AgentDB.findById(tc.agent_id) : null;
           const lastRun = TestRunDB.getLatestByTestCase(tc.id);
           return {
             id: tc.id,
             name: tc.name,
-            agent_id: tc.agent_id,
-            agent_name: agent?.name || "Unknown",
-            input_message: tc.input_message,
-            eval_criteria: tc.eval_criteria,
-            timeout_ms: tc.timeout_ms,
+            behavior: tc.behavior || null,
+            agent_id: tc.agent_id || null,
+            agent_name: agent?.name || (tc.agent_id ? "Unknown" : "Auto-select"),
             last_status: lastRun?.status || null,
+            last_score: lastRun?.score || null,
             last_reasoning: lastRun?.judge_reasoning || null,
+            last_selected_agent: lastRun?.selected_agent_name || null,
           };
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       case "create_test": {
-        const agent = AgentDB.findById(args.agent_id);
-        if (!agent) {
-          return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+        // Validate agent if explicitly provided
+        if (args.agent_id) {
+          const agent = AgentDB.findById(args.agent_id);
+          if (!agent) {
+            return { content: [{ type: "text", text: `Agent not found: ${args.agent_id}` }], isError: true };
+          }
         }
         const tc = TestCaseDB.create({
           name: args.name,
-          agent_id: args.agent_id,
-          input_message: args.input_message,
-          eval_criteria: args.eval_criteria,
-          description: args.description,
-          timeout_ms: args.timeout_ms,
+          behavior: args.behavior,
+          agent_id: args.agent_id || null,
+          input_message: null,
+          eval_criteria: args.behavior,
+          timeout_ms: args.timeout_ms || 300000,
+          project_id: args.project_id || null,
         });
-        return { content: [{ type: "text", text: `Test "${tc.name}" created (id: ${tc.id}) for agent "${agent.name}". Use run_test to execute it.` }] };
+        const agentNote = args.agent_id
+          ? `pinned to agent "${AgentDB.findById(args.agent_id)?.name}"`
+          : "AI will auto-select the best agent";
+        return { content: [{ type: "text", text: `Test "${tc.name}" created (id: ${tc.id}). ${agentNote}. Use run_test to execute it.` }] };
       }
 
       case "run_test": {
@@ -1572,8 +1672,10 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           return { content: [{ type: "text", text: `Test not found: ${args.test_id}` }], isError: true };
         }
         const result = await runTest(tc);
-        const agent = AgentDB.findById(tc.agent_id);
-        return { content: [{ type: "text", text: `Test "${tc.name}" (agent: ${agent?.name || tc.agent_id}): ${result.status.toUpperCase()}${result.duration_ms ? ` in ${(result.duration_ms / 1000).toFixed(1)}s` : ""}\n\nJudge: ${result.judge_reasoning || result.error || "No reasoning"}` }] };
+        const agentName = result.selected_agent_name || (tc.agent_id ? AgentDB.findById(tc.agent_id)?.name : null) || "unknown";
+        const score = result.score != null ? ` (score: ${result.score}/10)` : "";
+        const duration = result.duration_ms ? ` in ${(result.duration_ms / 1000).toFixed(1)}s` : "";
+        return { content: [{ type: "text", text: `Test "${tc.name}" → ${result.status.toUpperCase()}${score}${duration}\nAgent: ${agentName}\n\nJudge: ${result.judge_reasoning || result.error || "No reasoning"}` }] };
       }
 
       case "run_all_tests": {
@@ -1597,8 +1699,11 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         const result = runs.map(r => ({
           id: r.id,
           status: r.status,
+          score: r.score,
           duration_ms: r.duration_ms,
           judge_reasoning: r.judge_reasoning,
+          selected_agent: r.selected_agent_name || null,
+          generated_message: r.generated_message || null,
           error: r.error,
           created_at: r.created_at,
         }));
@@ -2077,6 +2182,64 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         return { content: [{ type: "text", text: `Local add not supported for provider: ${providerId}` }], isError: true };
       }
 
+      case "set_provider_key": {
+        const providerId = args.provider_id;
+        if (!PROVIDERS[providerId as keyof typeof PROVIDERS]) {
+          return { content: [{ type: "text", text: `Unknown provider: ${providerId}. Use list_providers or list_integration_providers to see available providers.` }], isError: true };
+        }
+        if (!args.key) {
+          return { content: [{ type: "text", text: "API key is required" }], isError: true };
+        }
+        const result = await ProviderKeys.save(providerId, args.key, args.project_id || null, null);
+        if (!result.success) {
+          return { content: [{ type: "text", text: `Failed to save key: ${result.error}` }], isError: true };
+        }
+        const provider = PROVIDERS[providerId as keyof typeof PROVIDERS];
+        return { content: [{ type: "text", text: `API key saved for ${provider.name}.` }] };
+      }
+
+      case "start_mcp_server": {
+        const server = McpServerDB.findById(args.server_id);
+        if (!server) {
+          return { content: [{ type: "text", text: `MCP server not found: ${args.server_id}` }], isError: true };
+        }
+        if (server.status === "running") {
+          return { content: [{ type: "text", text: `MCP server "${server.name}" is already running` }] };
+        }
+        try {
+          const port = process.env.PORT || "4280";
+          const res = await fetch(`http://localhost:${port}/api/mcp/servers/${args.server_id}/start`, { method: "POST" });
+          const data = await res.json() as Record<string, unknown>;
+          if (!res.ok) {
+            return { content: [{ type: "text", text: `Failed to start: ${data.error || "unknown error"}` }], isError: true };
+          }
+          return { content: [{ type: "text", text: `MCP server "${server.name}" started. ${data.message || ""}` }] };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Failed to start MCP server: ${err}` }], isError: true };
+        }
+      }
+
+      case "stop_mcp_server": {
+        const server = McpServerDB.findById(args.server_id);
+        if (!server) {
+          return { content: [{ type: "text", text: `MCP server not found: ${args.server_id}` }], isError: true };
+        }
+        if (server.status !== "running") {
+          return { content: [{ type: "text", text: `MCP server "${server.name}" is not running` }] };
+        }
+        try {
+          const port = process.env.PORT || "4280";
+          const res = await fetch(`http://localhost:${port}/api/mcp/servers/${args.server_id}/stop`, { method: "POST" });
+          const data = await res.json() as Record<string, unknown>;
+          if (!res.ok) {
+            return { content: [{ type: "text", text: `Failed to stop: ${data.error || "unknown error"}` }], isError: true };
+          }
+          return { content: [{ type: "text", text: `MCP server "${server.name}" stopped.` }] };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Failed to stop MCP server: ${err}` }], isError: true };
+        }
+      }
+
       case "get_analytics": {
         const stats = TelemetryDB.getStats({
           agentId: args.agent_id || undefined,
@@ -2150,24 +2313,24 @@ export async function handlePlatformMcpRequest(req: Request): Promise<Response> 
         instructions: `This MCP server controls the Apteva AI agent management platform.
 
 You can manage:
-- AGENTS: Create, configure, start, stop, and delete AI agents. Each agent has a provider (LLM), model, system prompt, and optional features (memory, tasks, vision, MCP tools, files). Use update_agent to assign/remove MCP servers (add_mcp_servers, remove_mcp_servers) and skills (add_skills, remove_skills).
-- TASKS: List, create, delete, and execute tasks on running agents. Tasks are scheduled work items that agents execute autonomously. Agents must have the tasks feature enabled. Tools: list_agent_tasks, create_agent_task, delete_agent_task, execute_agent_task.
+- AGENTS: Create, configure, start, stop, and delete AI agents. Each agent has a provider (LLM), model, system prompt, and optional features (memory, tasks, vision, MCP tools, files, agents/multi-agent). The "agents" feature enables multi-agent communication — agents can call and delegate tasks to peer agents in the same project. Use update_agent to assign/remove MCP servers (add_mcp_servers, remove_mcp_servers) and skills (add_skills, remove_skills).
+- TASKS: List, create, delete, and execute tasks. Use list_tasks for a project-wide overview of all tasks across all running agents. Use list_agent_tasks for tasks on a specific agent. Agents must have the tasks feature enabled. Tools: list_tasks, list_agent_tasks, create_agent_task, delete_agent_task, execute_agent_task.
 - PROJECTS: Organize agents into projects. Tools: list_projects, create_project, update_project, delete_project. Use project tools when the user is viewing All Projects. Deleting a project unassigns its agents (does not delete them).
-- MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Use update_agent with add_mcp_servers to assign servers to agents.
+- MCP SERVERS: Tool integrations that give agents capabilities (web search, file access, APIs). Use update_agent with add_mcp_servers to assign servers to agents. Use start_mcp_server/stop_mcp_server to activate/deactivate servers.
 - SKILLS: Reusable instruction sets that specialize agent behavior. Use create_skill to create new skills (pass project_id from context to scope to the current project). Use update_agent with add_skills/remove_skills to assign/unassign skills to agents. Tools: list_skills, get_skill, create_skill, update_skill, toggle_skill, delete_skill.
 - ANALYTICS: View token usage, costs, and activity stats across agents. Tools: get_analytics (summary totals), get_usage_by_agent (per-agent breakdown). Both support filtering by agent, project, or time range.
-- PROVIDERS: View which LLM providers have API keys configured.
-- TESTS: Create and run automated tests for agent workflows. Tests send a message to an agent, then an LLM judge evaluates the response against success criteria. Tools: list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
+- PROVIDERS: View and configure API keys for LLM and integration providers. Tools: list_providers, set_provider_key. If a provider key is missing, ask the user for it and save with set_provider_key.
+- TESTS: Create behavior-driven tests for agent workflows. Describe what the agent should do in natural language — the system auto-selects the best agent and generates a test message. An LLM judge evaluates the result and scores 1-10. Tools: list_tests, create_test, run_test, run_all_tests, get_test_results, delete_test.
 - SUBSCRIPTIONS & TRIGGERS: Subscribe agents to external events (webhooks). Supports multiple providers (composio, agentdojo). Use list_trigger_providers → list_trigger_types → list_integration_connections → create_subscription. Manage with enable_subscription, disable_subscription, delete_subscription, list_subscriptions.
 - INTEGRATIONS: Connect third-party apps and create MCP servers from them. Supports agentdojo and composio providers. Use list_integration_providers → list_integration_apps → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → then update_agent with add_mcp_servers to assign to an agent. For OAuth apps, direct the user to the Browse Toolkits UI.
 
 CRITICAL: ALWAYS pass project_id to every tool call that accepts it. API keys and resources are scoped per project — calls without project_id will fail. The chat context tells you the current project id.
 
 Typical workflow: list_providers → create_agent → update_agent (add_mcp_servers/add_skills) → start_agent.
-Task workflow: list_agent_tasks → create_agent_task (schedule work) → execute_agent_task (run immediately).
-Integration workflow: list_integration_providers → list_integration_apps (browse) → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → update_agent (add_mcp_servers).
+Task workflow: list_tasks (project-wide overview) or list_agent_tasks (single agent) → create_agent_task (schedule work) → execute_agent_task (run immediately).
+Integration workflow: list_integration_providers → if no key, ask user and set_provider_key → list_integration_apps (browse) → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → start_mcp_server → update_agent (add_mcp_servers).
 Subscription workflow: list_trigger_providers → list_trigger_types (pick trigger) → list_integration_connections (pick account) → create_subscription (link trigger to agent).
-Test workflow: create_test (set agent, message, eval criteria) → run_test → check results.
+Test workflow: create_test (describe behavior) → run_test (AI picks agent, generates message, judges result) → get_test_results.
 Always use list_providers first to check which providers have API keys before creating agents.`,
       };
       break;

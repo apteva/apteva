@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, createContext, useContext, type ReactNode } from "react";
 import { Chat } from "@apteva/apteva-kit";
-import { useAuth, useProjects, useTriggerRefresh, useTheme } from "../../context";
+import { useAuth, useProjects, useTriggerRefresh, useTheme, useUIMode } from "../../context";
 
 interface MetaAgentStatus {
   enabled: boolean;
@@ -129,6 +129,7 @@ export function MetaAgentButton() {
 // Chat panel component - renders as a right-side drawer
 export function MetaAgentPanel() {
   const { theme } = useTheme();
+  const { t } = useUIMode();
   const ctx = useMetaAgent();
   const { currentProjectId, currentProject } = useProjects();
   const triggerRefresh = useTriggerRefresh();
@@ -191,7 +192,10 @@ export function MetaAgentPanel() {
               <AssistantIcon className="w-12 h-12 text-[var(--color-border-light)] mb-4" />
               <h3 className="font-medium mb-2">Apteva Assistant</h3>
               <p className="text-sm text-[var(--color-text-muted)] mb-6">
-                I can help you navigate Apteva, create agents, set up MCP servers, and more.
+                {t(
+                  "I can help you navigate Apteva, create agents, set up MCP servers, and more.",
+                  "I can help you hire employees, assign them work, and manage your team."
+                )}
               </p>
               {error && (
                 <p className="text-sm text-red-400 mb-4">{error}</p>
