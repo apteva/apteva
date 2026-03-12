@@ -1,5 +1,5 @@
 import { json } from "./helpers";
-import { TelemetryDB, AgentDB } from "../../db";
+import { TelemetryDB, AgentDB, SettingsDB } from "../../db";
 import { getModelCost } from "../../providers";
 import { telemetryBroadcaster, type TelemetryEvent } from "../../server";
 
@@ -38,7 +38,7 @@ export async function handleTelemetryRoutes(
       const filteredEvents = body.events.filter(e => e.level !== "debug");
 
       // Compute cost per LLM event if cost tracking is enabled
-      const costTrackingEnabled = process.env.COST_TRACKING_ENABLED !== "false";
+      const costTrackingEnabled = SettingsDB.getBool("cost_tracking_enabled", true);
       if (costTrackingEnabled) {
         const agent = AgentDB.findById(body.agent_id);
         if (agent) {

@@ -6,7 +6,7 @@ import { serveStatic } from "./routes/static";
 import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
-import { initDatabase, AgentDB, ApiKeyDB, ProviderKeysDB, McpServerDB, ChannelDB, TelemetryDB, UserDB, type McpServer, type Agent } from "./db";
+import { initDatabase, AgentDB, ApiKeyDB, ProviderKeysDB, McpServerDB, ChannelDB, TelemetryDB, UserDB, SettingsDB, type McpServer, type Agent } from "./db";
 import { authMiddleware, type AuthContext } from "./auth/middleware";
 import { verifyAccessToken } from "./auth";
 import { startMcpProcess } from "./mcp-client";
@@ -311,8 +311,9 @@ function link(url: string, text?: string): string {
 
 // Startup banner
 const aptevaVersion = getAptevaVersion();
+const isDocker = process.env.DATA_DIR === "/data" || existsSync("/.dockerenv");
 console.log(`
-  ${c.orange}${c.bold}>_ apteva${c.reset} ${c.gray}v${aptevaVersion}${c.reset}
+  ${c.orange}${c.bold}>_ apteva${c.reset} ${c.gray}v${aptevaVersion}${isDocker ? " (docker)" : ""}${c.reset}
   ${c.gray}Run AI agents locally${c.reset}
 `);
 
@@ -323,7 +324,11 @@ const binaryResult = await ensureBinary(BIN_DIR);
 // We only need to print "ready" if binary already existed
 if (binaryResult.success && !binaryResult.downloaded) {
   const installedVersion = getInstalledVersion();
-  console.log(`${c.gray}v${installedVersion || "unknown"} ready${c.reset}`);
+  const sourceLabel = binaryResult.source === "npm" ? "npm" : binaryResult.source === "cached" ? "cached" : "";
+  console.log(`${c.gray}v${installedVersion || "unknown"} ready${sourceLabel ? ` (${sourceLabel})` : ""}${c.reset}`);
+}
+if (binaryResult.success) {
+  console.log(`  ${c.darkGray}Binary${c.reset}    ${c.gray}${binaryResult.path}${c.reset}`);
 }
 
 // Check for updates in background (don't block startup)
@@ -334,6 +339,9 @@ checkForUpdates().then(versions => {
   }
   if (versions.agent.updateAvailable) {
     updates.push(`agent: v${versions.agent.installed || "?"} → v${versions.agent.latest}`);
+  }
+  if (versions.integrations.updateAvailable && versions.integrations.installed) {
+    updates.push(`integrations: v${versions.integrations.installed} → v${versions.integrations.latest}`);
   }
   if (updates.length > 0) {
     console.log(`\n  ${c.orange}Updates available:${c.reset}`);
@@ -352,6 +360,17 @@ console.log(`${c.gray}${AgentDB.count()} loaded${c.reset}`);
 const configuredProviders = ProviderKeysDB.getConfiguredProviders();
 process.stdout.write(`  ${c.darkGray}Providers${c.reset} `);
 console.log(`${c.gray}${configuredProviders.length} configured${c.reset}`);
+
+// Check integrations package
+try {
+  const intPkgPath = require.resolve("@apteva/integrations/package.json");
+  const intPkg = JSON.parse(require("fs").readFileSync(intPkgPath, "utf-8"));
+  const { loadAppTemplates } = await import("@apteva/integrations");
+  const appCount = loadAppTemplates().size;
+  console.log(`  ${c.darkGray}Integrations${c.reset} ${c.gray}v${intPkg.version} (${appCount} apps)${c.reset}`);
+} catch {
+  console.log(`  ${c.darkGray}Integrations${c.reset} ${c.gray}not installed${c.reset}`);
+}
 
 const server = Bun.serve({
   port: PORT,
@@ -373,7 +392,7 @@ const server = Bun.serve({
     const voiceMatch = path.match(/^\/api\/agents\/([^/]+)\/voice$/);
     if (voiceMatch && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
       // Validate auth via query param token (WebSocket can't send custom headers)
-      if (process.env.AUTH_ENABLED !== "false") {
+      if (SettingsDB.getBool("auth_enabled", true)) {
         const token = url.searchParams.get("token");
         if (!token) {
           return new Response("Authentication required", { status: 401 });
@@ -553,7 +572,8 @@ if (hasRestarts) {
 
     // Restart MCP servers first (agents may depend on them)
     if (mcpServersToRestart.length > 0) {
-      console.log(`  ${c.darkGray}MCP${c.reset}       ${c.gray}Restarting ${mcpServersToRestart.length} server(s)...${c.reset}`);
+      let mcpOk = 0;
+      let mcpFail = 0;
 
       for (const server of mcpServersToRestart) {
         try {
@@ -580,7 +600,7 @@ if (hasRestarts) {
               cmd.push(...substitutedArgs.split(" "));
             }
           } else {
-            console.log(`  ${c.gray}  ✗ ${server.name}: no command or package${c.reset}`);
+            mcpFail++;
             continue;
           }
 
@@ -590,51 +610,68 @@ if (hasRestarts) {
 
           if (result.success) {
             McpServerDB.setStatus(server.id, "running", port);
-            console.log(`  ${c.gray}  ✓ ${server.name} on :${port}${c.reset}`);
+            mcpOk++;
           } else {
-            console.log(`  ${c.gray}  ✗ ${server.name}: ${result.error}${c.reset}`);
+            mcpFail++;
           }
         } catch (err) {
-          console.log(`  ${c.gray}  ✗ ${server.name}: ${err}${c.reset}`);
+          mcpFail++;
         }
       }
+
+      const mcpStatus = mcpFail > 0
+        ? `${mcpOk} started, ${mcpFail} failed`
+        : `${mcpOk} started`;
+      console.log(`  ${c.darkGray}MCP${c.reset}       ${c.gray}${mcpStatus} (of ${mcpServersToRestart.length})${c.reset}`);
     }
 
     // Then restart agents - in parallel
     if (agentsToRestart.length > 0) {
-      console.log(`  ${c.darkGray}Agents${c.reset}    ${c.gray}Restarting ${agentsToRestart.length} agent(s)...${c.reset}`);
+      let agentOk = 0;
+      let agentFail = 0;
 
       await Promise.allSettled(agentsToRestart.map(async (agent) => {
         try {
           const result = await startAgentProcess(agent, { silent: true });
           if (result.success) {
-            console.log(`  ${c.gray}  ✓ ${agent.name} on :${result.port}${c.reset}`);
+            agentOk++;
           } else {
-            console.log(`  ${c.gray}  ✗ ${agent.name}: ${result.error}${c.reset}`);
+            agentFail++;
           }
         } catch (err) {
-          console.log(`  ${c.gray}  ✗ ${agent.name}: ${err}${c.reset}`);
+          agentFail++;
         }
       }));
+
+      const agentStatus = agentFail > 0
+        ? `${agentOk} started, ${agentFail} failed`
+        : `${agentOk} started`;
+      console.log(`  ${c.darkGray}Agents${c.reset}    ${c.gray}${agentStatus} (of ${agentsToRestart.length})${c.reset}`);
     }
 
     // Restart channels (after agents, since channels depend on running agents)
     if (channelsToRestart.length > 0) {
       const { startChannel } = await import("./channels");
-      console.log(`  ${c.darkGray}Channels${c.reset}  ${c.gray}Restarting ${channelsToRestart.length} channel(s)...${c.reset}`);
+      let chOk = 0;
+      let chFail = 0;
 
       await Promise.allSettled(channelsToRestart.map(async (channel) => {
         try {
           const result = await startChannel(channel.id);
           if (result.success) {
-            console.log(`  ${c.gray}  ✓ ${channel.name} (${channel.type})${c.reset}`);
+            chOk++;
           } else {
-            console.log(`  ${c.gray}  ✗ ${channel.name}: ${result.error}${c.reset}`);
+            chFail++;
           }
         } catch (err) {
-          console.log(`  ${c.gray}  ✗ ${channel.name}: ${err}${c.reset}`);
+          chFail++;
         }
       }));
+
+      const chStatus = chFail > 0
+        ? `${chOk} started, ${chFail} failed`
+        : `${chOk} started`;
+      console.log(`  ${c.darkGray}Channels${c.reset}  ${c.gray}${chStatus} (of ${channelsToRestart.length})${c.reset}`);
     }
   })();
 }

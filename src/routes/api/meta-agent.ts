@@ -1,5 +1,5 @@
 import { json } from "./helpers";
-import { META_AGENT_ENABLED, META_AGENT_ID, toApiAgent, startAgentProcess, setAgentStatus } from "./agent-utils";
+import { isMetaAgentEnabled, META_AGENT_ID, toApiAgent, startAgentProcess, setAgentStatus } from "./agent-utils";
 import { AgentDB } from "../../db";
 import { ProviderKeys, Onboarding, PROVIDERS } from "../../providers";
 import { agentProcesses } from "../../server";
@@ -11,7 +11,7 @@ export async function handleMetaAgentRoutes(
 ): Promise<Response | null> {
   // GET /api/meta-agent/status - Get meta agent status and config
   if (path === "/api/meta-agent/status" && method === "GET") {
-    if (!META_AGENT_ENABLED) {
+    if (!isMetaAgentEnabled()) {
       return json({ enabled: false });
     }
 
@@ -125,7 +125,7 @@ Be concise. Use markdown formatting.`,
 
   // POST /api/meta-agent/start - Start the meta agent
   if (path === "/api/meta-agent/start" && method === "POST") {
-    if (!META_AGENT_ENABLED) {
+    if (!isMetaAgentEnabled()) {
       return json({ error: "Meta agent is not enabled" }, 400);
     }
 
@@ -166,7 +166,7 @@ Be concise. Use markdown formatting.`,
 
   // POST /api/meta-agent/stop - Stop the meta agent
   if (path === "/api/meta-agent/stop" && method === "POST") {
-    if (!META_AGENT_ENABLED) {
+    if (!isMetaAgentEnabled()) {
       return json({ error: "Meta agent is not enabled" }, 400);
     }
 

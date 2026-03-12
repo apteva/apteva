@@ -1,6 +1,7 @@
 import { spawn } from "bun";
 import { json } from "./helpers";
-import { McpServerDB, McpServerToolDB, generateId, type McpServer } from "../../db";
+import { McpServerDB, McpServerToolDB, SettingsDB, generateId, type McpServer } from "../../db";
+import { AGENT_MANAGEMENT_SERVER_ID } from "../../mcp-platform";
 import { getNextPort } from "../../server";
 import {
   startMcpProcess,
@@ -41,8 +42,29 @@ export async function handleMcpRoutes(
       servers = McpServerDB.findAllLight();
       queryMode = "all";
     }
-    const agentdojoCount = servers.filter(s => s.source === "agentdojo").length;
-    console.log(`[mcp:GET] mode=${queryMode} total=${servers.length} agentdojo=${agentdojoCount}`);
+    // Inject built-in Agent Management server when meta agent is enabled
+    if (SettingsDB.getBool("meta_agent_enabled")) {
+      servers = [
+        {
+          id: AGENT_MANAGEMENT_SERVER_ID,
+          name: "Agent Management",
+          description: "Built-in tools for creating, updating, starting, stopping, and messaging other agents",
+          type: "builtin" as any,
+          status: "running",
+          source: "builtin",
+          project_id: null,
+          port: null,
+          package: null,
+          pip_module: null,
+          command: null,
+          args: null,
+          url: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as any,
+        ...servers,
+      ];
+    }
     return json({ servers });
   }
 
@@ -139,6 +161,20 @@ export async function handleMcpRoutes(
   // GET /api/mcp/servers/:id - Get a specific MCP server
   const mcpServerMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)$/);
   if (mcpServerMatch && method === "GET") {
+    // Handle built-in Agent Management server
+    if (mcpServerMatch[1] === AGENT_MANAGEMENT_SERVER_ID) {
+      return json({
+        server: {
+          id: AGENT_MANAGEMENT_SERVER_ID,
+          name: "Agent Management",
+          description: "Built-in tools for creating, updating, starting, stopping, and messaging other agents",
+          type: "builtin",
+          status: "running",
+          source: "builtin",
+          project_id: null,
+        },
+      });
+    }
     const server = McpServerDB.findById(mcpServerMatch[1]);
     if (!server) {
       return json({ error: "MCP server not found" }, 404);
@@ -343,6 +379,24 @@ export async function handleMcpRoutes(
   // GET /api/mcp/servers/:id/tools - List tools from an MCP server
   const mcpToolsMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)\/tools$/);
   if (mcpToolsMatch && method === "GET") {
+    // Handle built-in Agent Management server tools
+    if (mcpToolsMatch[1] === AGENT_MANAGEMENT_SERVER_ID) {
+      const { handleAgentManagementMcpRequest } = await import("../../mcp-platform");
+      const toolsReq = new Request("http://localhost/api/mcp/agent-management", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      const toolsRes = await handleAgentManagementMcpRequest(toolsReq);
+      const toolsData = await toolsRes.json() as any;
+      const tools = (toolsData.result?.tools || []).map((t: any) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema,
+      }));
+      return json({ tools });
+    }
+
     const server = McpServerDB.findById(mcpToolsMatch[1]);
     if (!server) {
       return json({ error: "MCP server not found" }, 404);

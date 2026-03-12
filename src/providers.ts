@@ -25,7 +25,7 @@ export const PROVIDERS = {
     docsUrl: "https://platform.openai.com/api-keys",
     testEndpoint: "https://api.openai.com/v1/models",
     models: [
-      { value: "gpt-5.4", label: "GPT-5.4 (Latest)", recommended: true, input_cost: 2.5, output_cost: 10 },
+      { value: "gpt-5.4", label: "GPT-5.4 (Latest)", recommended: true, input_cost: 2.5, output_cost: 10, cache_read_cost: 1.25 },
     ],
   },
   groq: {
@@ -50,10 +50,10 @@ export const PROVIDERS = {
     docsUrl: "https://aistudio.google.com/app/apikey",
     testEndpoint: "https://generativelanguage.googleapis.com/v1/models",
     models: [
-      { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (Latest)", recommended: true, input_cost: 2, output_cost: 12 },
-      { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview", input_cost: 2, output_cost: 12 },
-      { value: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash Lite Preview (Fast)", input_cost: 0.25, output_cost: 1.5 },
-      { value: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview", input_cost: 0.5, output_cost: 3 },
+      { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (Latest)", recommended: true, input_cost: 2, output_cost: 12, cache_read_cost: 0.5 },
+      { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview", input_cost: 2, output_cost: 12, cache_read_cost: 0.5 },
+      { value: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash Lite Preview (Fast)", input_cost: 0.25, output_cost: 1.5, cache_read_cost: 0.025 },
+      { value: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview", input_cost: 0.5, output_cost: 3, cache_read_cost: 0.05 },
     ],
   },
   xai: {
@@ -65,8 +65,8 @@ export const PROVIDERS = {
     docsUrl: "https://console.x.ai/",
     testEndpoint: "https://api.x.ai/v1/models",
     models: [
-      { value: "grok-2", label: "Grok 2", recommended: true, input_cost: 2, output_cost: 10 },
-      { value: "grok-2-mini", label: "Grok 2 Mini (Fast)", input_cost: 0.3, output_cost: 1 },
+      { value: "grok-2", label: "Grok 2", recommended: true, input_cost: 2, output_cost: 10, cache_read_cost: 0.5 },
+      { value: "grok-2-mini", label: "Grok 2 Mini (Fast)", input_cost: 0.3, output_cost: 1, cache_read_cost: 0.075 },
     ],
   },
   together: {
@@ -78,8 +78,8 @@ export const PROVIDERS = {
     docsUrl: "https://api.together.xyz/settings/api-keys",
     testEndpoint: "https://api.together.xyz/v1/models",
     models: [
-      { value: "moonshotai/Kimi-K2.5", label: "Kimi K2.5", recommended: true, input_cost: 1, output_cost: 4 },
-      { value: "moonshotai/Kimi-K2-Thinking", label: "Kimi K2 Thinking (Reasoning)", input_cost: 1, output_cost: 4 },
+      { value: "moonshotai/Kimi-K2.5", label: "Kimi K2.5", recommended: true, input_cost: 0.5, output_cost: 2.8 },
+      { value: "moonshotai/Kimi-K2-Thinking", label: "Kimi K2 Thinking (Reasoning)", input_cost: 0.5, output_cost: 2.8 },
     ],
   },
   fireworks: {
@@ -91,9 +91,9 @@ export const PROVIDERS = {
     docsUrl: "https://fireworks.ai/api-keys",
     testEndpoint: "https://api.fireworks.ai/inference/v1/models",
     models: [
-      { value: "accounts/fireworks/models/kimi-k2p5", label: "Kimi K2.5", recommended: true, input_cost: 1, output_cost: 4 },
-      { value: "accounts/fireworks/models/kimi-k2-thinking", label: "Kimi K2 Thinking (Reasoning)", input_cost: 1, output_cost: 4 },
-      { value: "accounts/fireworks/models/minimax-m2p5", label: "MiniMax M2.5", input_cost: 1, output_cost: 4 },
+      { value: "accounts/fireworks/models/kimi-k2p5", label: "Kimi K2.5", recommended: true, input_cost: 0.6, output_cost: 3.0, cache_read_cost: 0.1 },
+      { value: "accounts/fireworks/models/kimi-k2-thinking", label: "Kimi K2 Thinking (Reasoning)", input_cost: 0.6, output_cost: 3.0, cache_read_cost: 0.1 },
+      { value: "accounts/fireworks/models/minimax-m2p5", label: "MiniMax M2.5", input_cost: 0.3, output_cost: 1.2 },
       { value: "accounts/fireworks/models/glm-5", label: "GLM 5", input_cost: 1, output_cost: 4 },
     ],
   },

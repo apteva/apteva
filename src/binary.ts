@@ -286,6 +286,7 @@ export interface VersionInfo {
 export interface AllVersionInfo {
   apteva: VersionInfo;
   agent: VersionInfo;
+  integrations: VersionInfo;
   isDocker: boolean;
 }
 
@@ -410,14 +411,54 @@ export async function checkForAptevaUpdates(): Promise<VersionInfo> {
   };
 }
 
-// Check for all updates (apteva + agent)
+// Check for integrations package updates
+export async function checkForIntegrationsUpdates(): Promise<VersionInfo> {
+  let installed: string | null = null;
+  try {
+    const pkgPath = require.resolve("@apteva/integrations/package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    installed = pkg.version || null;
+  } catch {
+    // Not installed
+  }
+
+  let latest: string | null = null;
+  try {
+    const res = await fetch(`${NPM_REGISTRY}/@apteva/integrations/latest`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      const data = await res.json() as { version?: string };
+      latest = data.version || null;
+    }
+  } catch {
+    // Registry unreachable
+  }
+
+  let updateAvailable = false;
+  if (installed && latest) {
+    updateAvailable = compareVersions(latest, installed) > 0;
+  } else if (!installed && latest) {
+    updateAvailable = true; // Not installed but available
+  }
+
+  return {
+    installed,
+    latest,
+    updateAvailable,
+    lastChecked: new Date().toISOString(),
+  };
+}
+
+// Check for all updates (apteva + agent + integrations)
 export async function checkForUpdates(): Promise<AllVersionInfo> {
-  const [apteva, agent] = await Promise.all([
+  const [apteva, agent, integrations] = await Promise.all([
     checkForAptevaUpdates(),
     checkForAgentUpdates(),
+    checkForIntegrationsUpdates(),
   ]);
 
-  return { apteva, agent, isDocker: isRunningInDocker() };
+  return { apteva, agent, integrations, isDocker: isRunningInDocker() };
 }
 
 // Compare semver versions: returns positive if a > b, negative if a < b, 0 if equal

@@ -11,10 +11,13 @@ import {
   deleteServer as deleteAgentDojoServer,
 } from "../../integrations/agentdojo";
 import type { AuthContext } from "../../auth/middleware";
+import { LocalIntegrationProvider, isIntegrationsInstalled, handleOAuthCallback } from "../../integrations/local";
 
 // Register integration providers on module load
 registerProvider(ComposioProvider);
 registerProvider(AgentDojoProvider);
+// Local provider is always registered - it returns empty lists if package not installed
+registerProvider(LocalIntegrationProvider);
 
 export async function handleIntegrationRoutes(
   req: Request,
@@ -24,6 +27,30 @@ export async function handleIntegrationRoutes(
 ): Promise<Response | null> {
   const user = authContext?.user;
 
+  // ============ OAuth Callback (no auth required — user returns from external provider) ============
+
+  // GET /api/integrations/local/oauth/callback?code=...&state=...
+  if (path === "/api/integrations/local/oauth/callback" && method === "GET") {
+    const url = new URL(req.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const error = url.searchParams.get("error");
+
+    if (error) {
+      return new Response(oauthResultPage("OAuth Error", error), { headers: { "Content-Type": "text/html" } });
+    }
+    if (!code || !state) {
+      return new Response(oauthResultPage("OAuth Error", "Missing code or state parameter"), { headers: { "Content-Type": "text/html" } });
+    }
+
+    try {
+      const result = await handleOAuthCallback(code, state, url.origin + url.pathname);
+      return new Response(oauthResultPage("Connected!", `Successfully connected to ${result.appName}. You can close this window.`), { headers: { "Content-Type": "text/html" } });
+    } catch (e) {
+      return new Response(oauthResultPage("OAuth Error", `${e}`), { headers: { "Content-Type": "text/html" } });
+    }
+  }
+
   // ============ Generic Integration Providers ============
 
   // GET /api/integrations/providers - List available integration providers
@@ -31,7 +58,7 @@ export async function handleIntegrationRoutes(
     const providerIds = getProviderIds();
     const providers = providerIds.map(id => {
       const provider = getProvider(id);
-      const hasKey = !!ProviderKeys.getDecrypted(id);
+      const hasKey = id === "local" ? isIntegrationsInstalled() : !!ProviderKeys.getDecrypted(id);
       return {
         id,
         name: provider?.name || id,
@@ -52,7 +79,8 @@ export async function handleIntegrationRoutes(
 
     const url = new URL(req.url);
     const projectId = url.searchParams.get("project_id") || null;
-    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+    // Local provider doesn't need an API key
+    const apiKey = providerId === "local" ? "local" : ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
       return json({ error: `${provider.name} API key not configured`, apps: [] }, 200);
     }
@@ -61,7 +89,7 @@ export async function handleIntegrationRoutes(
       const apps = await provider.listApps(apiKey);
       return json({ apps });
     } catch (e) {
-      console.error(`Failed to list apps from ${providerId}:`, e);
+      console.error(`[integrations] Failed to list apps from ${providerId}:`, e);
       return json({ error: "Failed to fetch apps" }, 500);
     }
   }
@@ -77,11 +105,8 @@ export async function handleIntegrationRoutes(
 
     const url = new URL(req.url);
     const projectId = url.searchParams.get("project_id") || null;
-    console.log(`[integrations/connected] provider=${providerId}, projectId=${projectId}`);
-    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
-    console.log(`[integrations/connected] apiKey found: ${!!apiKey}, length: ${apiKey?.length || 0}`);
+    const apiKey = providerId === "local" ? "local" : ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
-      console.log(`[integrations/connected] NO API KEY for ${providerId}`);
       return json({ error: `${provider.name} API key not configured`, accounts: [] }, 200);
     }
 
@@ -91,8 +116,7 @@ export async function handleIntegrationRoutes(
     }
 
     try {
-      const accounts = await provider.listConnectedAccounts(apiKey, user.id);
-      console.log(`[integrations/connected] Got ${accounts.length} accounts from ${providerId}`);
+      const accounts = await provider.listConnectedAccounts(apiKey, user.id, projectId);
       return json({ accounts });
     } catch (e) {
       console.error(`[integrations/connected] Failed from ${providerId}:`, e);
@@ -115,7 +139,7 @@ export async function handleIntegrationRoutes(
       // Read project_id from query param (frontend sends it there), fall back to body
       const url = new URL(req.url);
       const projectId = url.searchParams.get("project_id") || body.project_id || null;
-      const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+      const apiKey = providerId === "local" ? "local" : ProviderKeys.getDecryptedForProject(providerId, projectId);
       if (!apiKey) {
         return json({ error: `${provider.name} API key not configured` }, 401);
       }
@@ -133,7 +157,7 @@ export async function handleIntegrationRoutes(
       const origin = req.headers.get("origin") || process.env.INSTANCE_URL || `http://localhost:${process.env.PORT || 4280}`;
       const callbackUrl = redirectUrl || `${origin}/mcp?tab=hosted&connected=${appSlug}`;
 
-      const result = await provider.initiateConnection(apiKey, user.id, appSlug, callbackUrl, credentials);
+      const result = await provider.initiateConnection(apiKey, user.id, appSlug, callbackUrl, credentials, projectId);
       return json(result);
     } catch (e) {
       console.error(`Failed to initiate connection for ${providerId}:`, e);
@@ -153,7 +177,7 @@ export async function handleIntegrationRoutes(
 
     const url = new URL(req.url);
     const projectId = url.searchParams.get("project_id") || null;
-    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+    const apiKey = providerId === "local" ? "local" : ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
       return json({ error: `${provider.name} API key not configured` }, 401);
     }
@@ -181,7 +205,7 @@ export async function handleIntegrationRoutes(
 
     const url = new URL(req.url);
     const projectId = url.searchParams.get("project_id") || null;
-    const apiKey = ProviderKeys.getDecryptedForProject(providerId, projectId);
+    const apiKey = providerId === "local" ? "local" : ProviderKeys.getDecryptedForProject(providerId, projectId);
     if (!apiKey) {
       return json({ error: `${provider.name} API key not configured` }, 401);
     }
@@ -636,4 +660,14 @@ export async function handleIntegrationRoutes(
   }
 
   return null;
+}
+
+function oauthResultPage(title: string, message: string): string {
+  return `<!DOCTYPE html><html><head><title>${title}</title><style>
+body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#111;color:#eee}
+.card{background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:2rem;max-width:400px;text-align:center}
+h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#999;margin:0}
+</style></head><body><div class="card"><h1>${title}</h1><p>${message}</p></div>
+<script>setTimeout(()=>{if(window.opener){window.opener.postMessage({type:'oauth-callback',title:'${title}'},'*');window.close()}},1500)</script>
+</body></html>`;
 }

@@ -105,26 +105,58 @@ function SettingsNavItem({
 
 function GeneralSettings() {
   const { authFetch } = useAuth();
+  const { refreshFeatures } = useProjects();
   const { mode, style, setMode, setStyle } = useTheme();
   const { mode: uiMode, setMode: setUIMode } = useUIMode();
   const [instanceUrl, setInstanceUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [features, setFeatures] = useState<Record<string, boolean>>({
+    projects_enabled: false,
+    meta_agent_enabled: false,
+    cost_tracking_enabled: true,
+  });
+  const [featuresLoading, setFeaturesLoading] = useState(true);
 
   useEffect(() => {
-    const fetch = async () => {
+    const fetchAll = async () => {
       try {
-        const res = await authFetch("/api/settings/instance-url");
-        const data = await res.json();
-        setInstanceUrl(data.instance_url || "");
+        const [urlRes, settingsRes] = await Promise.all([
+          authFetch("/api/settings/instance-url"),
+          authFetch("/api/settings"),
+        ]);
+        const urlData = await urlRes.json();
+        setInstanceUrl(urlData.instance_url || "");
+        const settingsData = await settingsRes.json();
+        const s = settingsData.settings || {};
+        setFeatures({
+          projects_enabled: s.projects_enabled === "true",
+          meta_agent_enabled: s.meta_agent_enabled === "true",
+          cost_tracking_enabled: s.cost_tracking_enabled !== "false",
+        });
       } catch {
         // ignore
       }
       setLoading(false);
+      setFeaturesLoading(false);
     };
-    fetch();
+    fetchAll();
   }, []);
+
+  const toggleFeature = async (key: string, enabled: boolean) => {
+    setFeatures(prev => ({ ...prev, [key]: enabled }));
+    try {
+      await authFetch(`/api/settings/${key}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: String(enabled) }),
+      });
+      refreshFeatures();
+    } catch {
+      setFeatures(prev => ({ ...prev, [key]: !enabled }));
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -256,6 +288,40 @@ function GeneralSettings() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Features */}
+      <div className="bg-[var(--color-surface)] card p-4 mb-4">
+        <h3 className="font-medium mb-2">Features</h3>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">Enable or disable platform features. Changes take effect immediately.</p>
+        {featuresLoading ? (
+          <div className="text-[var(--color-text-muted)] text-sm">Loading...</div>
+        ) : (
+          <div className="space-y-3">
+            {[
+              { key: "projects_enabled", label: "Projects", description: "Organize agents into projects with separate configurations" },
+              { key: "meta_agent_enabled", label: "Meta Agent", description: "AI assistant that can manage your agents and platform" },
+              { key: "cost_tracking_enabled", label: "Cost Tracking", description: "Track LLM token usage and estimated costs per agent" },
+            ].map(feat => (
+              <div key={feat.key} className="flex items-center justify-between py-2 border-b border-[var(--color-border-light)] last:border-0">
+                <div>
+                  <div className="text-sm font-medium">{feat.label}</div>
+                  <div className="text-xs text-[var(--color-text-muted)]">{feat.description}</div>
+                </div>
+                <button
+                  onClick={() => toggleFeature(feat.key, !features[feat.key])}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${
+                    features[feat.key] ? "bg-[var(--color-accent)]" : "bg-[var(--color-border)]"
+                  }`}
+                >
+                  <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    features[feat.key] ? "translate-x-5" : "translate-x-0.5"
+                  }`} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="bg-[var(--color-surface)] card p-4">
@@ -876,6 +942,7 @@ interface VersionInfo {
 interface AllVersionInfo {
   apteva: VersionInfo;
   agent: VersionInfo;
+  integrations: VersionInfo;
   isDocker?: boolean;
 }
 
@@ -884,6 +951,7 @@ function UpdatesSettings() {
   const [versions, setVersions] = useState<AllVersionInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [updatingAgent, setUpdatingAgent] = useState(false);
+  const [installingIntegrations, setInstallingIntegrations] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -925,6 +993,25 @@ function UpdatesSettings() {
     setUpdatingAgent(false);
   };
 
+  const installIntegrations = async () => {
+    setInstallingIntegrations(true);
+    setError(null);
+    setUpdateSuccess(null);
+    try {
+      const res = await authFetch("/api/version/install-integrations", { method: "POST" });
+      const data = await res.json();
+      if (!data.success) {
+        setError(data.error || "Install failed");
+      } else {
+        setUpdateSuccess(`Integrations package ${versions?.integrations.installed ? "updated" : "installed"} to v${data.version}.`);
+        await checkForUpdates();
+      }
+    } catch (e) {
+      setError("Failed to install integrations package");
+    }
+    setInstallingIntegrations(false);
+  };
+
   useEffect(() => {
     checkForUpdates();
   }, []);
@@ -935,7 +1022,7 @@ function UpdatesSettings() {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const hasAnyUpdate = versions?.apteva.updateAvailable || versions?.agent.updateAvailable;
+  const hasAnyUpdate = versions?.apteva.updateAvailable || versions?.agent.updateAvailable || versions?.integrations.updateAvailable;
 
   return (
     <div className="max-w-4xl w-full">
@@ -974,6 +1061,10 @@ function UpdatesSettings() {
               </div>
               <div className="text-right">
                 <div className="text-xl font-mono">v{versions.apteva.installed || "?"}</div>
+                <div className="text-sm text-[var(--color-text-muted)] font-mono">agent v{versions.agent.installed || "?"}</div>
+                {versions.integrations.installed && (
+                  <div className="text-sm text-[var(--color-text-muted)] font-mono">integrations v{versions.integrations.installed}</div>
+                )}
               </div>
             </div>
 
@@ -1097,6 +1188,61 @@ function UpdatesSettings() {
                     {updatingAgent ? "Updating..." : "Update Agent"}
                   </button>
                 </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-green-400 text-sm">
+                <CheckIcon className="w-4 h-4" />
+                Up to date
+              </div>
+            )}
+          </div>
+
+          {/* Integrations Package */}
+          <div className="bg-[var(--color-surface)] card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-medium text-lg">Integrations Package</h3>
+                <p className="text-sm text-[var(--color-text-muted)]">Local app connections (GitHub, Slack, Stripe...)</p>
+              </div>
+              <div className="text-right">
+                {versions.integrations.installed ? (
+                  <>
+                    <div className="text-xl font-mono">v{versions.integrations.installed}</div>
+                    {versions.integrations.updateAvailable && (
+                      <div className="text-sm text-[var(--color-accent)]">&rarr; v{versions.integrations.latest}</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-sm text-[var(--color-text-muted)]">Not installed</div>
+                )}
+              </div>
+            </div>
+
+            {!versions.integrations.installed ? (
+              <div className="bg-[var(--color-accent-10)] border border-[var(--color-accent-30)] rounded-lg p-4">
+                <p className="text-sm text-[var(--color-text-secondary)] mb-3">
+                  Install to enable local app integrations with built-in OAuth and API key connections.
+                </p>
+                <button
+                  onClick={installIntegrations}
+                  disabled={installingIntegrations}
+                  className="px-4 py-2 bg-[var(--color-accent)] text-black rounded font-medium text-sm disabled:opacity-50"
+                >
+                  {installingIntegrations ? "Installing..." : "Install Package"}
+                </button>
+              </div>
+            ) : versions.integrations.updateAvailable ? (
+              <div className="bg-[var(--color-accent-10)] border border-[var(--color-accent-30)] rounded-lg p-4">
+                <p className="text-sm text-[var(--color-text-secondary)] mb-3">
+                  A new version is available.
+                </p>
+                <button
+                  onClick={installIntegrations}
+                  disabled={installingIntegrations}
+                  className="px-4 py-2 bg-[var(--color-accent)] text-black rounded font-medium text-sm disabled:opacity-50"
+                >
+                  {installingIntegrations ? "Updating..." : "Update Package"}
+                </button>
               </div>
             ) : (
               <div className="flex items-center gap-2 text-green-400 text-sm">
@@ -2275,8 +2421,99 @@ function DataSettings() {
           {clearing ? "Clearing..." : "Clear All Analytics"}
         </button>
       </div>
+
+      <SettingsExportImport />
     </div>
     </>
+  );
+}
+
+function SettingsExportImport() {
+  const { authFetch } = useAuth();
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const handleExport = async () => {
+    try {
+      const res = await authFetch("/api/settings/export");
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `apteva-settings-${new Date().toISOString().split("T")[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleImport = async () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      setImporting(true);
+      setImportMsg(null);
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const settings = parsed.settings || parsed;
+        const res = await authFetch("/api/settings/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setImportMsg({ type: "success", text: `Imported ${data.imported} settings. Reload to apply.` });
+        } else {
+          setImportMsg({ type: "error", text: data.error || "Import failed" });
+        }
+      } catch {
+        setImportMsg({ type: "error", text: "Invalid JSON file" });
+      }
+      setImporting(false);
+    };
+    input.click();
+  };
+
+  return (
+    <div className="bg-[var(--color-surface)] card p-4 mt-4">
+      <h3 className="font-medium mb-2">Settings Export / Import</h3>
+      <p className="text-sm text-[var(--color-text-muted)] mb-4">
+        Export your settings to a JSON file or import from a previous export.
+      </p>
+
+      {importMsg && (
+        <div className={`mb-4 p-3 rounded text-sm ${
+          importMsg.type === "success"
+            ? "bg-green-500/10 text-green-400 border border-green-500/30"
+            : "bg-red-500/10 text-red-400 border border-red-500/30"
+        }`}>
+          {importMsg.text}
+        </div>
+      )}
+
+      <div className="flex gap-3">
+        <button
+          onClick={handleExport}
+          className="px-4 py-2 bg-[var(--color-surface-raised)] hover:bg-[var(--color-border-light)] border border-[var(--color-border-light)] rounded text-sm font-medium transition"
+        >
+          Export Settings
+        </button>
+        <button
+          onClick={handleImport}
+          disabled={importing}
+          className="px-4 py-2 bg-[var(--color-surface-raised)] hover:bg-[var(--color-border-light)] border border-[var(--color-border-light)] disabled:opacity-50 rounded text-sm font-medium transition"
+        >
+          {importing ? "Importing..." : "Import Settings"}
+        </button>
+      </div>
+    </div>
   );
 }
 

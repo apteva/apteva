@@ -13,6 +13,7 @@ import {
   AGENTS_DATA_DIR,
   META_AGENT_ID,
   setAgentStatus,
+  broadcastAgentEvent,
 } from "./agent-utils";
 import { AgentDB, McpServerDB, SkillDB, TelemetryDB, generateId, getMultiAgentConfig, type Agent } from "../../db";
 import { ProviderKeys } from "../../providers";
@@ -50,7 +51,7 @@ export async function handleAgentRoutes(
   if (path === "/api/agents" && method === "POST") {
     try {
       const body = await req.json();
-      const { name, model, provider, systemPrompt, features, projectId } = body;
+      const { name, model, provider, systemPrompt, features, projectId, description } = body;
 
       if (!name) {
         return json({ error: "Name is required" }, 400);
@@ -62,6 +63,7 @@ export async function handleAgentRoutes(
       const agent = AgentDB.create({
         id: generateId(),
         name,
+        description: description || null,
         model: model || "claude-sonnet-4-6",
         provider: provider || "anthropic",
         system_prompt: systemPrompt || "You are a helpful assistant.",
@@ -71,6 +73,7 @@ export async function handleAgentRoutes(
         project_id: projectId || null,
       } as any);
 
+      broadcastAgentEvent(agent.id, "agent_created", { name: agent.name });
       return json({ agent: toApiAgent(agent) }, 201);
     } catch (e) {
       console.error("Create agent error:", e);
@@ -100,6 +103,7 @@ export async function handleAgentRoutes(
       const updates: Partial<Agent> = {};
 
       if (body.name !== undefined) updates.name = body.name;
+      if (body.description !== undefined) updates.description = body.description;
       if (body.model !== undefined) updates.model = body.model;
       if (body.provider !== undefined) updates.provider = body.provider;
       if (body.systemPrompt !== undefined) updates.system_prompt = body.systemPrompt;
@@ -156,6 +160,7 @@ export async function handleAgentRoutes(
         }
       }
 
+      if (updated) broadcastAgentEvent(updated.id, "agent_updated", { name: updated.name });
       return json({ agent: updated ? toApiAgent(updated) : null });
     } catch (e) {
       return json({ error: "Invalid request body" }, 400);
@@ -224,6 +229,7 @@ export async function handleAgentRoutes(
     }
 
     AgentDB.delete(agentId);
+    broadcastAgentEvent(agentId, "agent_deleted", { name: agent.name });
     return json({ success: true });
   }
 

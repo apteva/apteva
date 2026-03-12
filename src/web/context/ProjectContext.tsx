@@ -21,6 +21,7 @@ interface ProjectContextValue {
   projectsEnabled: boolean; // Feature flag
   metaAgentEnabled: boolean; // Feature flag
   costTrackingEnabled: boolean; // Feature flag
+  refreshFeatures: () => Promise<void>;
   setCurrentProjectId: (id: string | null) => void;
   createProject: (data: { name: string; description?: string; color?: string }) => Promise<Project | null>;
   updateProject: (id: string, data: { name?: string; description?: string; color?: string }) => Promise<Project | null>;
@@ -61,21 +62,24 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
   const [metaAgentEnabled, setMetaAgentEnabled] = useState(false);
   const [costTrackingEnabled, setCostTrackingEnabled] = useState(true);
 
+  const refreshFeatures = useCallback(async () => {
+    try {
+      const res = await fetch("/api/features");
+      const data = await res.json();
+      setProjectsEnabled(data.projects === true);
+      setMetaAgentEnabled(data.metaAgent === true);
+      setCostTrackingEnabled(data.costTracking !== false);
+    } catch {
+      setProjectsEnabled(false);
+      setMetaAgentEnabled(false);
+      setCostTrackingEnabled(true);
+    }
+  }, []);
+
   // Fetch feature flags on mount
   useEffect(() => {
-    fetch("/api/features")
-      .then(res => res.json())
-      .then(data => {
-        setProjectsEnabled(data.projects === true);
-        setMetaAgentEnabled(data.metaAgent === true);
-        setCostTrackingEnabled(data.costTracking !== false);
-      })
-      .catch(() => {
-        setProjectsEnabled(false);
-        setMetaAgentEnabled(false);
-        setCostTrackingEnabled(true);
-      });
-  }, []);
+    refreshFeatures();
+  }, [refreshFeatures]);
 
   const setCurrentProjectId = useCallback((id: string | null) => {
     setCurrentProjectIdState(id);
@@ -203,12 +207,13 @@ export function ProjectProvider({ children }: ProjectProviderProps) {
     projectsEnabled,
     metaAgentEnabled,
     costTrackingEnabled,
+    refreshFeatures,
     setCurrentProjectId,
     createProject,
     updateProject,
     deleteProject,
     refreshProjects,
-  }), [projects, currentProjectId, currentProject, isLoading, error, unassignedCount, projectsEnabled, metaAgentEnabled, costTrackingEnabled, setCurrentProjectId, createProject, updateProject, deleteProject, refreshProjects]);
+  }), [projects, currentProjectId, currentProject, isLoading, error, unassignedCount, projectsEnabled, metaAgentEnabled, costTrackingEnabled, refreshFeatures, setCurrentProjectId, createProject, updateProject, deleteProject, refreshProjects]);
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>;
 }

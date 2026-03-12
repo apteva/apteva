@@ -44,8 +44,11 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
       <div className="flex items-start justify-between mb-3">
         <div>
           <h3 className="font-semibold text-lg">{agent.name}</h3>
+          {agent.description && (
+            <p className="text-sm text-[var(--color-text-secondary)] mt-0.5 line-clamp-1">{agent.description}</p>
+          )}
           {isDev && (
-            <p className="text-sm text-[var(--color-text-muted)]">
+            <p className={`text-sm text-[var(--color-text-muted)]${agent.description ? " mt-1" : ""}`}>
               {agent.provider} / {agent.model}
               {agent.port && <span className="text-[var(--color-text-faint)]"> · :{agent.port}</span>}
             </p>
@@ -140,7 +143,7 @@ export const AgentCard = React.memo(function AgentCard({ agent, selected, onSele
         </div>
       )}
 
-      <p className="text-sm text-[var(--color-text-muted)] line-clamp-2 mb-4 flex-1">
+      <p className="text-sm text-[var(--color-text-muted)] line-clamp-1 mb-4 flex-1">
         {agent.systemPrompt}
       </p>
 

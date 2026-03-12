@@ -1448,6 +1448,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
   const { authFetch, isDev } = useAuth();
   const [form, setForm] = useState({
     name: agent.name,
+    description: agent.description || "",
     provider: agent.provider,
     model: agent.model,
     systemPrompt: agent.systemPrompt,
@@ -1722,6 +1723,7 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
 
   const hasChanges =
     form.name !== agent.name ||
+    form.description !== (agent.description || "") ||
     form.provider !== agent.provider ||
     form.model !== agent.model ||
     form.systemPrompt !== agent.systemPrompt ||
@@ -1738,6 +1740,16 @@ function SettingsTab({ agent, providers, onUpdateAgent, onDeleteAgent }: {
             value={form.name}
             onChange={(e) => setForm(prev => ({ ...prev, name: e.target.value }))}
             className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]"
+          />
+        </FormField>
+
+        <FormField label="Description">
+          <input
+            type="text"
+            value={form.description}
+            onChange={(e) => setForm(prev => ({ ...prev, description: e.target.value }))}
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]"
+            placeholder="Short description of what this agent does"
           />
         </FormField>
 

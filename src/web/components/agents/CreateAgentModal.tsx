@@ -160,6 +160,16 @@ export function CreateAgentModal({
               />
             </FormField>
 
+            <FormField label="Description">
+              <input
+                type="text"
+                value={form.description}
+                onChange={(e) => onFormChange({ ...form, description: e.target.value })}
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded px-3 py-2 focus:outline-none focus:border-[var(--color-accent)] text-[var(--color-text)]"
+                placeholder="Short description of what this agent does"
+              />
+            </FormField>
+
             {projects.length > 0 && (
               <FormField label="Project">
                 <Select

@@ -37,6 +37,7 @@ export function useAgents(enabled: boolean, projectId?: string | null) {
 
   const createAgent = async (agent: {
     name: string;
+    description?: string;
     model: string;
     provider: string;
     systemPrompt: string;
@@ -59,6 +60,7 @@ export function useAgents(enabled: boolean, projectId?: string | null) {
 
   const updateAgent = async (id: string, updates: {
     name?: string;
+    description?: string;
     model?: string;
     provider?: string;
     systemPrompt?: string;

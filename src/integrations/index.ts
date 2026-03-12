@@ -15,6 +15,11 @@ export interface IntegrationApp {
     description?: string;
     required?: boolean;
   }[];
+  oauthConfig?: { // OAuth setup guidance
+    setup_url?: string;
+    setup_steps?: string[];
+    scopes?: string[];
+  };
 }
 
 export interface ConnectedAccount {
@@ -48,8 +53,8 @@ export interface IntegrationProvider {
   // List available apps/toolkits
   listApps(apiKey: string): Promise<IntegrationApp[]>;
 
-  // List user's connected accounts
-  listConnectedAccounts(apiKey: string, userId: string): Promise<ConnectedAccount[]>;
+  // List user's connected accounts (projectId filters to project-scoped + global)
+  listConnectedAccounts(apiKey: string, userId: string, projectId?: string | null): Promise<ConnectedAccount[]>;
 
   // Initiate connection (OAuth or API Key)
   initiateConnection(
@@ -57,7 +62,8 @@ export interface IntegrationProvider {
     userId: string,
     appSlug: string,
     redirectUrl: string,
-    credentials?: ConnectionCredentials
+    credentials?: ConnectionCredentials,
+    projectId?: string | null,
   ): Promise<ConnectionRequest>;
 
   // Check connection status

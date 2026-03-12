@@ -1,5 +1,5 @@
 import { verifyAccessToken, getAuthStatus } from "./index";
-import { UserDB, ApiKeyDB, type User } from "../db";
+import { UserDB, ApiKeyDB, SettingsDB, type User } from "../db";
 
 // Extend Request type to include user
 declare global {
@@ -68,7 +68,7 @@ export async function authMiddleware(req: Request, path: string): Promise<{ resp
   };
 
   // Check if auth is disabled
-  if (process.env.AUTH_ENABLED === "false") {
+  if (!SettingsDB.getBool("auth_enabled", true)) {
     return { context };
   }
 
@@ -162,7 +162,7 @@ export async function authMiddleware(req: Request, path: string): Promise<{ resp
  * Helper to check if a path requires authentication
  */
 export function requiresAuth(path: string): boolean {
-  if (process.env.AUTH_ENABLED === "false") {
+  if (!SettingsDB.getBool("auth_enabled", true)) {
     return false;
   }
 

@@ -148,6 +148,7 @@ export interface SkillSummary {
 export interface Agent {
   id: string;
   name: string;
+  description: string | null;
   model: string;
   provider: string;
   systemPrompt: string;
@@ -288,6 +289,7 @@ export interface DashboardStats {
 
 export interface NewAgentForm {
   name: string;
+  description: string;
   model: string;
   provider: string;
   systemPrompt: string;

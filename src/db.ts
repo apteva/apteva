@@ -100,6 +100,7 @@ export function getMultiAgentConfig(features: AgentFeatures, projectId?: string 
 export interface Agent {
   id: string;
   name: string;
+  description: string | null;
   model: string;
   provider: string;
   system_prompt: string;
@@ -135,6 +136,7 @@ export interface ProjectRow {
 export interface AgentRow {
   id: string;
   name: string;
+  description: string | null;
   model: string;
   provider: string;
   system_prompt: string;
@@ -181,6 +183,7 @@ export interface ProviderKeyRow {
 export interface McpServer {
   id: string;
   name: string;
+  description: string | null;   // Human-readable description of what this server does
   type: "npm" | "pip" | "github" | "http" | "custom" | "local";
   package: string | null;       // npm or pip package name
   pip_module: string | null;    // For pip type: the module to run (e.g., "late.mcp")
@@ -286,6 +289,7 @@ export interface ChannelRow {
 export interface McpServerRow {
   id: string;
   name: string;
+  description: string | null;
   type: string;
   package: string | null;
   pip_module: string | null;
@@ -310,7 +314,7 @@ export interface McpServerTool {
   input_schema: Record<string, any>;
   handler_type: "mock" | "http" | "javascript";
   mock_response: Record<string, any> | null;
-  http_config: { method?: string; url: string; headers?: Record<string, string>; body?: any } | null;
+  http_config: { method?: string; url: string; headers?: Record<string, string>; body?: any; default_body?: Record<string, string> } | null;
   code: string | null;
   enabled: boolean;
   created_at: string;
@@ -893,6 +897,73 @@ function runMigrations() {
         ALTER TABLE telemetry_events ADD COLUMN cost REAL DEFAULT 0;
       `,
     },
+    {
+      name: "036_add_mcp_server_description",
+      sql: `
+        ALTER TABLE mcp_servers ADD COLUMN description TEXT;
+      `,
+    },
+    {
+      name: "037_repair_test_runs_columns",
+      sql: `
+        -- Repair: migration 028 may have been marked applied but failed.
+        -- Recreate test_runs with all required columns.
+        CREATE TABLE IF NOT EXISTS test_runs_new (
+          id TEXT PRIMARY KEY,
+          test_case_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          score INTEGER,
+          agent_response TEXT,
+          judge_reasoning TEXT,
+          duration_ms INTEGER,
+          error TEXT,
+          generated_message TEXT,
+          selected_agent_id TEXT,
+          selected_agent_name TEXT,
+          planner_reasoning TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (test_case_id) REFERENCES test_cases(id) ON DELETE CASCADE
+        );
+        INSERT OR IGNORE INTO test_runs_new (id, test_case_id, status, agent_response, judge_reasoning, duration_ms, error, created_at)
+          SELECT id, test_case_id, status, agent_response, judge_reasoning, duration_ms, error, created_at FROM test_runs;
+        DROP TABLE IF EXISTS test_runs;
+        ALTER TABLE test_runs_new RENAME TO test_runs;
+        CREATE INDEX IF NOT EXISTS idx_test_runs_test_case ON test_runs(test_case_id);
+        CREATE INDEX IF NOT EXISTS idx_test_runs_status ON test_runs(status);
+      `,
+    },
+    {
+      name: "038_create_integration_connections",
+      sql: `
+        CREATE TABLE IF NOT EXISTS integration_connections (
+          id TEXT PRIMARY KEY,
+          app_slug TEXT NOT NULL,
+          app_name TEXT NOT NULL,
+          name TEXT NOT NULL,
+          auth_type TEXT NOT NULL,
+          credentials TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          mcp_server_id TEXT,
+          project_id TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_int_conn_app_slug ON integration_connections(app_slug);
+        CREATE INDEX IF NOT EXISTS idx_int_conn_project ON integration_connections(project_id);
+      `,
+    },
+    {
+      name: "039_settings_add_autoload",
+      sql: `
+        ALTER TABLE settings ADD COLUMN autoload INTEGER NOT NULL DEFAULT 1;
+      `,
+    },
+    {
+      name: "040_agents_add_description",
+      sql: `
+        ALTER TABLE agents ADD COLUMN description TEXT;
+      `,
+    },
   ];
 
   // Check which migrations have been applied
@@ -1017,10 +1088,10 @@ export const AgentDB = {
     const apiKey = generateAgentApiKey(agent.id);
     const apiKeyEncrypted = encrypt(apiKey);
     const stmt = db.prepare(`
-      INSERT INTO agents (id, name, model, provider, system_prompt, features, mcp_servers, skills, project_id, status, port, api_key_encrypted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, ?)
+      INSERT INTO agents (id, name, description, model, provider, system_prompt, features, mcp_servers, skills, project_id, status, port, api_key_encrypted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, ?)
     `);
-    stmt.run(agent.id, agent.name, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, skillsJson, agent.project_id || null, port, apiKeyEncrypted, now, now);
+    stmt.run(agent.id, agent.name, (agent as any).description || null, agent.model, agent.provider, agent.system_prompt, featuresJson, mcpServersJson, skillsJson, agent.project_id || null, port, apiKeyEncrypted, now, now);
     return this.findById(agent.id)!;
   },
 
@@ -1054,6 +1125,10 @@ export const AgentDB = {
     if (updates.name !== undefined) {
       fields.push("name = ?");
       values.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      fields.push("description = ?");
+      values.push(updates.description);
     }
     if (updates.model !== undefined) {
       fields.push("model = ?");
@@ -1357,25 +1432,7 @@ export const MessageDB = {
   },
 };
 
-// Settings operations
-export const SettingsDB = {
-  get(key: string): string | null {
-    const row = db.query("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | null;
-    return row?.value ?? null;
-  },
-
-  set(key: string, value: string): void {
-    db.run(
-      "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP",
-      [key, value, value]
-    );
-  },
-
-  delete(key: string): boolean {
-    const result = db.run("DELETE FROM settings WHERE key = ?", [key]);
-    return result.changes > 0;
-  },
-};
+// Settings operations — defined at bottom of file (enhanced version with cache, defaults, export/import)
 
 // Helper to convert DB row to Agent type
 function rowToAgent(row: AgentRow): Agent {
@@ -1411,6 +1468,7 @@ function rowToAgent(row: AgentRow): Agent {
   return {
     id: row.id,
     name: row.name,
+    description: row.description || null,
     model: row.model,
     provider: row.provider,
     system_prompt: row.system_prompt,
@@ -1577,12 +1635,13 @@ export const McpServerDB = {
     const port = (server.type === "http" || server.type === "local") ? null : this.getNextAvailablePort();
     console.log(`[McpServerDB.create] id=${server.id} name=${server.name} type=${server.type} source=${server.source} project_id=${server.project_id} url=${server.url?.substring(0, 60)}`);
     const stmt = db.prepare(`
-      INSERT INTO mcp_servers (id, name, type, package, pip_module, command, args, env, url, headers, source, project_id, status, port, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?)
+      INSERT INTO mcp_servers (id, name, description, type, package, pip_module, command, args, env, url, headers, source, project_id, status, port, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const initialStatus = server.type === "http" ? "running" : "stopped";
     stmt.run(
-      server.id, server.name, server.type, server.package, server.pip_module || null, server.command, server.args,
-      envEncrypted, server.url || null, headersEncrypted, server.source || null, server.project_id || null, port, now
+      server.id, server.name, server.description || null, server.type, server.package, server.pip_module || null, server.command, server.args,
+      envEncrypted, server.url || null, headersEncrypted, server.source || null, server.project_id || null, initialStatus, port, now
     );
     const created = this.findById(server.id);
     console.log(`[McpServerDB.create] findById after INSERT: ${created ? `found id=${created.id} project_id=${created.project_id}` : "NOT FOUND"}`);
@@ -1642,6 +1701,10 @@ export const McpServerDB = {
     if (updates.name !== undefined) {
       fields.push("name = ?");
       values.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      fields.push("description = ?");
+      values.push(updates.description);
     }
     if (updates.type !== undefined) {
       fields.push("type = ?");
@@ -1718,7 +1781,9 @@ export const McpServerDB = {
 
   resetAllStatus(): void {
     // Keep ports as they're permanently assigned (like agents)
-    db.run("UPDATE mcp_servers SET status = 'stopped'");
+    // Skip HTTP servers — they're hosted externally and always available
+    db.run("UPDATE mcp_servers SET status = 'stopped' WHERE type != 'http'");
+    db.run("UPDATE mcp_servers SET status = 'running' WHERE type = 'http'");
   },
 
   count(): number {
@@ -1892,6 +1957,7 @@ function rowToMcpServer(row: McpServerRow): McpServer {
   return {
     id: row.id,
     name: row.name,
+    description: row.description || null,
     type: row.type as McpServer["type"],
     package: row.package,
     pip_module: row.pip_module,
@@ -1913,6 +1979,7 @@ function rowToMcpServerLight(row: McpServerRow): McpServer {
   return {
     id: row.id,
     name: row.name,
+    description: row.description || null,
     type: row.type as McpServer["type"],
     package: row.package,
     pip_module: row.pip_module,
@@ -3124,6 +3191,209 @@ export const ChannelDB = {
   delete(id: string): boolean {
     const result = db.run("DELETE FROM channels WHERE id = ?", [id]);
     return result.changes > 0;
+  },
+};
+
+// ============ Integration Connections ============
+
+export interface IntegrationConnection {
+  id: string;
+  app_slug: string;
+  app_name: string;
+  name: string;
+  auth_type: string; // api_key, bearer, basic, oauth2
+  credentials: string; // encrypted JSON
+  status: "active" | "pending" | "expired" | "error";
+  mcp_server_id: string | null; // auto-generated MCP server
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface IntegrationConnectionRow {
+  id: string;
+  app_slug: string;
+  app_name: string;
+  name: string;
+  auth_type: string;
+  credentials: string;
+  status: string;
+  mcp_server_id: string | null;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToConnection(row: IntegrationConnectionRow): IntegrationConnection {
+  return {
+    ...row,
+    status: row.status as IntegrationConnection["status"],
+  };
+}
+
+export const IntegrationConnectionDB = {
+  create(conn: Omit<IntegrationConnection, "id" | "created_at" | "updated_at">): IntegrationConnection {
+    const id = generateId();
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO integration_connections (id, app_slug, app_name, name, auth_type, credentials, status, mcp_server_id, project_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, conn.app_slug, conn.app_name, conn.name, conn.auth_type, conn.credentials, conn.status, conn.mcp_server_id || null, conn.project_id || null, now, now]
+    );
+    return this.findById(id)!;
+  },
+
+  findById(id: string): IntegrationConnection | null {
+    const row = db.query("SELECT * FROM integration_connections WHERE id = ?").get(id) as IntegrationConnectionRow | null;
+    return row ? rowToConnection(row) : null;
+  },
+
+  findAll(projectId?: string | null): IntegrationConnection[] {
+    let rows: IntegrationConnectionRow[];
+    if (projectId === undefined) {
+      rows = db.query("SELECT * FROM integration_connections ORDER BY created_at DESC").all() as IntegrationConnectionRow[];
+    } else if (projectId === null) {
+      rows = db.query("SELECT * FROM integration_connections WHERE project_id IS NULL ORDER BY created_at DESC").all() as IntegrationConnectionRow[];
+    } else {
+      rows = db.query("SELECT * FROM integration_connections WHERE project_id = ? OR project_id IS NULL ORDER BY created_at DESC").all(projectId) as IntegrationConnectionRow[];
+    }
+    return rows.map(rowToConnection);
+  },
+
+  findByAppSlug(appSlug: string, projectId?: string | null): IntegrationConnection[] {
+    let rows: IntegrationConnectionRow[];
+    if (projectId) {
+      rows = db.query("SELECT * FROM integration_connections WHERE app_slug = ? AND (project_id = ? OR project_id IS NULL) ORDER BY created_at DESC").all(appSlug, projectId) as IntegrationConnectionRow[];
+    } else {
+      rows = db.query("SELECT * FROM integration_connections WHERE app_slug = ? ORDER BY created_at DESC").all(appSlug) as IntegrationConnectionRow[];
+    }
+    return rows.map(rowToConnection);
+  },
+
+  update(id: string, updates: Partial<IntegrationConnection>): IntegrationConnection | null {
+    const fields: string[] = [];
+    const values: any[] = [];
+    if (updates.name !== undefined) { fields.push("name = ?"); values.push(updates.name); }
+    if (updates.credentials !== undefined) { fields.push("credentials = ?"); values.push(updates.credentials); }
+    if (updates.status !== undefined) { fields.push("status = ?"); values.push(updates.status); }
+    if (updates.mcp_server_id !== undefined) { fields.push("mcp_server_id = ?"); values.push(updates.mcp_server_id); }
+    if (fields.length === 0) return this.findById(id);
+    fields.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(id);
+    db.run(`UPDATE integration_connections SET ${fields.join(", ")} WHERE id = ?`, values);
+    return this.findById(id);
+  },
+
+  delete(id: string): boolean {
+    const result = db.run("DELETE FROM integration_connections WHERE id = ?", [id]);
+    return result.changes > 0;
+  },
+};
+
+// ── Settings (key-value store with autoload cache) ──
+
+// Default settings for new installs (conservative defaults)
+const SETTING_DEFAULTS: Record<string, string> = {
+  "projects_enabled": "false",
+  "meta_agent_enabled": "false",
+  "cost_tracking_enabled": "true",
+  "auth_enabled": "true",
+};
+
+// In-memory cache for autoloaded settings
+let settingsCache: Map<string, string> | null = null;
+
+export const SettingsDB = {
+  /** Load all autoload=1 settings into memory cache */
+  _loadCache(): void {
+    settingsCache = new Map();
+    const rows = db.query("SELECT key, value FROM settings WHERE autoload = 1").all() as { key: string; value: string }[];
+    for (const row of rows) {
+      settingsCache.set(row.key, row.value);
+    }
+  },
+
+  /** Get a setting value. Checks cache first, then DB, then env var, then default. */
+  get(key: string, fallback?: string): string | null {
+    // 1. Check cache
+    if (!settingsCache) this._loadCache();
+    if (settingsCache!.has(key)) return settingsCache!.get(key)!;
+
+    // 2. Check DB (non-autoloaded)
+    const row = db.query("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | null;
+    if (row) return row.value;
+
+    // 3. Check env var (uppercase with underscores)
+    const envKey = key.toUpperCase();
+    if (process.env[envKey] !== undefined) return process.env[envKey]!;
+
+    // 4. Default
+    if (fallback !== undefined) return fallback;
+    return SETTING_DEFAULTS[key] ?? null;
+  },
+
+  /** Get a boolean setting */
+  getBool(key: string, fallback?: boolean): boolean {
+    const val = this.get(key);
+    if (val === null) return fallback ?? false;
+    return val === "true" || val === "1";
+  },
+
+  /** Set a setting value */
+  set(key: string, value: string, autoload: boolean = true): void {
+    db.run(
+      `INSERT INTO settings (key, value, autoload, updated_at) VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, autoload = excluded.autoload, updated_at = excluded.updated_at`,
+      [key, value, autoload ? 1 : 0]
+    );
+    // Update cache
+    if (autoload) {
+      if (!settingsCache) this._loadCache();
+      settingsCache!.set(key, value);
+    } else {
+      settingsCache?.delete(key);
+    }
+  },
+
+  /** Delete a setting */
+  delete(key: string): boolean {
+    const result = db.run("DELETE FROM settings WHERE key = ?", [key]);
+    settingsCache?.delete(key);
+    return result.changes > 0;
+  },
+
+  /** Get all settings (for API/export) */
+  getAll(): Record<string, string> {
+    const rows = db.query("SELECT key, value FROM settings ORDER BY key").all() as { key: string; value: string }[];
+    const result: Record<string, string> = {};
+    for (const row of rows) {
+      result[row.key] = row.value;
+    }
+    return result;
+  },
+
+  /** Bulk import settings (merges with existing) */
+  import(settings: Record<string, string>): number {
+    let count = 0;
+    for (const [key, value] of Object.entries(settings)) {
+      this.set(key, String(value));
+      count++;
+    }
+    return count;
+  },
+
+  /** Export all settings as JSON-friendly object */
+  export(): { settings: Record<string, string>; exported_at: string } {
+    return {
+      settings: this.getAll(),
+      exported_at: new Date().toISOString(),
+    };
+  },
+
+  /** Invalidate the in-memory cache (force reload on next access) */
+  invalidateCache(): void {
+    settingsCache = null;
   },
 };
 

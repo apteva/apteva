@@ -3,20 +3,36 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { agentProcesses, agentsStarting, getBinaryPathForAgent, getBinaryStatus, BIN_DIR, telemetryBroadcaster, isShuttingDown, type TelemetryEvent } from "../../server";
-import { AgentDB, McpServerDB, SkillDB, SubscriptionDB, TelemetryDB, generateId, getMultiAgentConfig, getOperatorConfig, type Agent, type Project } from "../../db";
+import { AgentDB, McpServerDB, SkillDB, SubscriptionDB, TelemetryDB, SettingsDB, generateId, getMultiAgentConfig, getOperatorConfig, type Agent, type Project } from "../../db";
 import { ProviderKeys, PROVIDERS, type ProviderId } from "../../providers";
 import { binaryExists } from "../../binary";
+import { AGENT_MANAGEMENT_SERVER_ID } from "../../mcp-platform";
 
 // Data directory for agent instances (in ~/.apteva/agents/)
 export const AGENTS_DATA_DIR = process.env.DATA_DIR
   ? join(process.env.DATA_DIR, "agents")
   : join(homedir(), ".apteva", "agents");
 
-// Meta Agent configuration
-export const META_AGENT_ENABLED = process.env.META_AGENT_ENABLED === "true";
+// Meta Agent configuration — reads from settings DB at runtime
+export function isMetaAgentEnabled(): boolean {
+  return SettingsDB.getBool("meta_agent_enabled");
+}
 export const META_AGENT_ID = "apteva-assistant";
 
 // Update agent status + emit telemetry event + broadcast to SSE
+export function broadcastAgentEvent(agentId: string, type: "agent_created" | "agent_updated" | "agent_deleted", data?: Record<string, any>): void {
+  const event: TelemetryEvent = {
+    id: generateId(),
+    agent_id: agentId,
+    timestamp: new Date().toISOString(),
+    category: "system",
+    type,
+    level: "info",
+    data: data || {},
+  };
+  telemetryBroadcaster.broadcast([event]);
+}
+
 export function setAgentStatus(agentId: string, status: "running" | "stopped", reason?: string): Agent | null {
   const agent = AgentDB.setStatus(agentId, status);
   const event: TelemetryEvent = {
@@ -252,6 +268,19 @@ export function buildAgentConfig(agent: Agent, providerKey: string) {
   }
 
   for (const id of agent.mcp_servers || []) {
+    // Handle built-in Agent Management server — pass caller agent ID so project_id can be auto-injected
+    if (id === AGENT_MANAGEMENT_SERVER_ID) {
+      const baseUrl = `http://localhost:${process.env.PORT || 4280}`;
+      mcpServers.push({
+        name: "Agent Management",
+        type: "http",
+        url: `${baseUrl}/api/mcp/agent-management?caller=${agent.id}`,
+        headers: {},
+        enabled: true,
+      });
+      continue;
+    }
+
     const server = mcpMap.get(id);
     if (!server) continue;
 
@@ -772,16 +801,15 @@ export function toApiAgent(agent: Agent) {
   const skillMap = SkillDB.findByIds(agent.skills || []);
 
   const mcpServerDetails = (agent.mcp_servers || [])
-    .map(id => mcpMap.get(id))
-    .filter((s): s is NonNullable<typeof s> => !!s)
-    .map(s => ({
-      id: s.id,
-      name: s.name,
-      type: s.type,
-      status: s.status,
-      port: s.port,
-      url: s.url,
-    }));
+    .map(id => {
+      if (id === AGENT_MANAGEMENT_SERVER_ID) {
+        return { id, name: "Agent Management", type: "builtin" as const, status: "running" as const, port: null, url: null };
+      }
+      const s = mcpMap.get(id);
+      if (!s) return null;
+      return { id: s.id, name: s.name, type: s.type, status: s.status, port: s.port, url: s.url };
+    })
+    .filter((s): s is NonNullable<typeof s> => !!s);
 
   const skillDetails = (agent.skills || [])
     .map(id => skillMap.get(id))
@@ -802,6 +830,7 @@ export function toApiAgent(agent: Agent) {
   return {
     id: agent.id,
     name: agent.name,
+    description: agent.description,
     model: agent.model,
     provider: agent.provider,
     systemPrompt: agent.system_prompt,
@@ -838,9 +867,15 @@ export function toApiAgentsBatch(agents: Agent[]) {
 
   return agents.map(agent => {
     const mcpServerDetails = (agent.mcp_servers || [])
-      .map(id => mcpMap.get(id))
-      .filter((s): s is NonNullable<typeof s> => !!s)
-      .map(s => ({ id: s.id, name: s.name, type: s.type, status: s.status, port: s.port, url: s.url }));
+      .map(id => {
+        if (id === AGENT_MANAGEMENT_SERVER_ID) {
+          return { id, name: "Agent Management", type: "builtin" as const, status: "running" as const, port: null, url: null };
+        }
+        const s = mcpMap.get(id);
+        if (!s) return null;
+        return { id: s.id, name: s.name, type: s.type, status: s.status, port: s.port, url: s.url };
+      })
+      .filter((s): s is NonNullable<typeof s> => !!s);
 
     const skillDetails = (agent.skills || [])
       .map(id => skillMap.get(id))
@@ -852,7 +887,7 @@ export function toApiAgentsBatch(agents: Agent[]) {
     }));
 
     return {
-      id: agent.id, name: agent.name, model: agent.model, provider: agent.provider,
+      id: agent.id, name: agent.name, description: agent.description, model: agent.model, provider: agent.provider,
       systemPrompt: agent.system_prompt, status: agent.status, port: agent.port,
       features: cleanFeatures(agent.features), mcpServers: agent.mcp_servers, mcpServerDetails,
       skills: agent.skills, skillDetails, subscriptions, projectId: agent.project_id,

@@ -65,32 +65,25 @@ export function Header({ onMenuClick, agents = [] }: HeaderProps) {
     if (latest && (!projectAgentIds || projectAgentIds.has(latest.agent_id))) {
       setUnseenCount(c => c + 1);
     }
-  }, [notificationChange]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [notificationChange, events, projectAgentIds]);
 
-  // Re-count when project filter changes (from cached notifications or reset)
+  // Re-count and clear stale notifications when project filter changes
   const prevProjectRef = useRef(currentProjectId);
   useEffect(() => {
     if (prevProjectRef.current === currentProjectId) return;
     prevProjectRef.current = currentProjectId;
-    // Refetch count with project filter
+    // Clear stale notifications from previous project immediately
+    setNotifications([]);
     if (!accessToken) return;
-    fetch("/api/notifications/count", { headers: { Authorization: `Bearer ${accessToken}` } })
+    // Always fetch actual notifications to get accurate project-filtered count
+    fetch("/api/notifications?limit=200", { headers: { Authorization: `Bearer ${accessToken}` } })
       .then(r => r.json())
-      .then(d => {
-        // API returns total unseen — client filters by project
+      .then(nd => {
+        const all: Notification[] = nd.notifications || [];
         if (!projectAgentIds) {
-          setUnseenCount(d.count || 0);
+          setUnseenCount(all.filter(n => !n.seen).length);
         } else {
-          // We need to fetch actual notifications to filter by project
-          fetch("/api/notifications?limit=200", { headers: { Authorization: `Bearer ${accessToken}` } })
-            .then(r => r.json())
-            .then(nd => {
-              const unseen = (nd.notifications || []).filter(
-                (n: Notification) => !n.seen && projectAgentIds.has(n.agent_id)
-              );
-              setUnseenCount(unseen.length);
-            })
-            .catch(() => {});
+          setUnseenCount(all.filter(n => !n.seen && projectAgentIds.has(n.agent_id)).length);
         }
       })
       .catch(() => {});

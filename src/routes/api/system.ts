@@ -1,6 +1,6 @@
 import { json } from "./helpers";
-import { META_AGENT_ENABLED, fetchFromAgent, agentFetch, startAgentProcess, setAgentStatus } from "./agent-utils";
-import { AgentDB } from "../../db";
+import { fetchFromAgent, agentFetch, startAgentProcess, setAgentStatus } from "./agent-utils";
+import { AgentDB, SettingsDB } from "../../db";
 import { ProviderKeys } from "../../providers";
 import { agentProcesses, getBinaryStatus, BIN_DIR } from "../../server";
 import {
@@ -11,6 +11,7 @@ import {
   installViaNpm,
 } from "../../binary";
 import { openApiSpec } from "../../openapi";
+import { resetIntegrationsCache } from "../../integrations/local";
 
 export async function handleSystemRoutes(
   req: Request,
@@ -35,6 +36,8 @@ export async function handleSystemRoutes(
         platform: binaryStatus.platform,
         arch: binaryStatus.arch,
         version: installedVersion,
+        source: binaryStatus.source,
+        path: binaryStatus.path,
       },
     });
   }
@@ -42,9 +45,9 @@ export async function handleSystemRoutes(
   // GET /api/features - Feature flags (no auth required)
   if (path === "/api/features" && method === "GET") {
     return json({
-      projects: process.env.PROJECTS_ENABLED === "true",
-      metaAgent: process.env.META_AGENT_ENABLED === "true",
-      costTracking: process.env.COST_TRACKING_ENABLED !== "false",
+      projects: SettingsDB.getBool("projects_enabled"),
+      metaAgent: SettingsDB.getBool("meta_agent_enabled"),
+      costTracking: SettingsDB.getBool("cost_tracking_enabled", true),
     });
   }
 
@@ -116,6 +119,55 @@ export async function handleSystemRoutes(
       version: result.version,
       restarted: restartResults,
     });
+  }
+
+  // POST /api/version/install-integrations - Install or update @apteva/integrations
+  if (path === "/api/version/install-integrations" && method === "POST") {
+    try {
+      const { readFileSync, existsSync, rmSync } = await import("fs");
+      const { join, resolve } = await import("path");
+      const projectRoot = resolve(import.meta.dir, "../../..");
+
+      // Remove cached package to force fresh install
+      const cachedDir = join(projectRoot, "node_modules", "@apteva", "integrations");
+      if (existsSync(cachedDir)) {
+        rmSync(cachedDir, { recursive: true, force: true });
+      }
+
+      console.log(`[install-integrations] Installing in ${projectRoot}`);
+      const proc = Bun.spawn(["npm", "install", "@apteva/integrations@latest", "--save"], {
+        cwd: projectRoot,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, npm_config_cache: "/tmp/npm-cache-" + Date.now() },
+      });
+      const exitCode = await proc.exited;
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      console.log(`[install-integrations] exit=${exitCode} stdout=${stdout.substring(0, 200)}`);
+
+      if (exitCode !== 0) {
+        console.error(`[install-integrations] stderr=${stderr}`);
+        return json({ success: false, error: stderr || "Install failed" }, 500);
+      }
+
+      // Read installed version
+      let version: string | null = null;
+      try {
+        const pkgPath = join(projectRoot, "node_modules", "@apteva", "integrations", "package.json");
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        version = pkg.version;
+      } catch (e) {
+        console.error(`[install-integrations] Failed to read version:`, e);
+      }
+
+      // Reset cached import so next API call picks up the new package
+      resetIntegrationsCache();
+
+      return json({ success: true, version, output: stdout });
+    } catch (err) {
+      return json({ success: false, error: `Install failed: ${err}` }, 500);
+    }
   }
 
   // GET /api/tasks - Get all tasks from all running agents

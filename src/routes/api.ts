@@ -15,7 +15,8 @@ import { handleTelemetryRoutes } from "./api/telemetry";
 import { handleTestRoutes } from "./api/tests";
 import { handleApiKeyRoutes } from "./api/api-keys";
 import { handleChannelRoutes } from "./api/channels";
-import { handlePlatformMcpRequest } from "../mcp-platform";
+import { handleSettingsRoutes } from "./api/settings";
+import { handlePlatformMcpRequest, handleAgentManagementMcpRequest } from "../mcp-platform";
 
 // Re-export for backward compatibility (server.ts dynamic import)
 export { startAgentProcess } from "./api/agent-utils";
@@ -32,6 +33,11 @@ export async function handleApiRequest(
     return handlePlatformMcpRequest(req);
   }
 
+  // Agent Management MCP server (assignable to any agent)
+  if (path === "/api/mcp/agent-management" && method === "POST") {
+    return handleAgentManagementMcpRequest(req);
+  }
+
   return (
     (await handleWebhookRoutes(req, path, method)) ?? // Public, HMAC-verified — before auth
     (await handleSystemRoutes(req, path, method, authContext)) ??
@@ -46,6 +52,7 @@ export async function handleApiRequest(
     (await handleTriggerRoutes(req, path, method, authContext)) ??
     (await handleChannelRoutes(req, path, method)) ??
     (await handleMetaAgentRoutes(req, path, method)) ??
+    (await handleSettingsRoutes(req, path, method)) ??
     (await handleTelemetryRoutes(req, path, method)) ??
     (await handleTestRoutes(req, path, method)) ??
     json({ error: "Not found" }, 404)

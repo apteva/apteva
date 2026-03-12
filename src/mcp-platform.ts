@@ -5,7 +5,7 @@ import { AgentDB, ProjectDB, McpServerDB, McpServerToolDB, SkillDB, TelemetryDB,
 import { TestCaseDB, TestRunDB } from "./db-tests";
 import { runTest, runAll } from "./test-runner";
 import { getProvidersWithStatus, PROVIDERS, ProviderKeys } from "./providers";
-import { startAgentProcess, setAgentStatus, toApiAgent, META_AGENT_ID, agentFetch, fetchFromAgent, buildAgentConfig, pushConfigToAgent, pushSkillsToAgent } from "./routes/api/agent-utils";
+import { startAgentProcess, setAgentStatus, broadcastAgentEvent, toApiAgent, META_AGENT_ID, agentFetch, fetchFromAgent, buildAgentConfig, pushConfigToAgent, pushSkillsToAgent } from "./routes/api/agent-utils";
 import { agentProcesses } from "./server";
 import { getTriggerProvider, getTriggerProviderIds, registerTriggerProvider } from "./triggers";
 import { ComposioTriggerProvider } from "./triggers/composio";
@@ -18,6 +18,7 @@ import {
   createServer as createAgentDojoServer,
   getServer as getAgentDojoServer,
 } from "./integrations/agentdojo";
+import { LocalIntegrationProvider } from "./integrations/local";
 import {
   listMcpServers as listComposioServers,
   createMcpServer as createComposioServer,
@@ -31,6 +32,7 @@ registerTriggerProvider(ComposioTriggerProvider);
 registerTriggerProvider(AgentDojoTriggerProvider);
 registerProvider(ComposioProvider);
 registerProvider(AgentDojoProvider);
+registerProvider(LocalIntegrationProvider);
 
 // MCP Protocol version
 const PROTOCOL_VERSION = "2024-11-05";
@@ -104,6 +106,7 @@ TIPS:
       type: "object",
       properties: {
         name: { type: "string", description: "Agent name (e.g. 'Customer Support', 'Code Reviewer')" },
+        description: { type: "string", description: "Short description of the agent's purpose (displayed on the agent card)" },
         provider: { type: "string", description: "LLM provider ID: anthropic, openai, groq, gemini, xai, together, fireworks, moonshot, ollama" },
         model: { type: "string", description: "Model ID — see tool description for full list per provider" },
         system_prompt: { type: "string", description: "Instructions for the agent. Describe its role, personality, and capabilities. This is the most important field for agent behavior." },
@@ -139,6 +142,7 @@ SKILLS & MCP SERVERS:
       properties: {
         agent_id: { type: "string", description: "The agent ID to update" },
         name: { type: "string", description: "New display name" },
+        description: { type: "string", description: "New short description of the agent's purpose" },
         model: { type: "string", description: "New model ID (see create_agent for available models per provider)" },
         provider: { type: "string", description: "New provider ID (the new provider must have an API key configured)" },
         system_prompt: { type: "string", description: "New system prompt / instructions" },
@@ -289,6 +293,7 @@ After creating, assign to agents with assign_mcp_server_to_agent. Local and HTTP
       type: "object",
       properties: {
         name: { type: "string", description: "Display name (e.g. 'Filesystem', 'Web Search', 'GitHub')" },
+        description: { type: "string", description: "What this server does and what tools it provides (helps agents understand its purpose)" },
         type: { type: "string", description: "Server type: http, npm, pip, or custom" },
         url: { type: "string", description: "For http type: the remote MCP server URL (e.g. 'https://mcp.example.com/sse')" },
         headers: { type: "object", description: "For http type: auth headers as key-value pairs" },
@@ -907,9 +912,28 @@ After adding, use assign_mcp_server_to_agent to give an agent access to these to
 // Project-only tools — hidden entirely when PROJECTS_ENABLED is not set
 const PROJECT_ONLY_TOOLS = new Set(["list_projects", "create_project", "update_project", "delete_project"]);
 
+// Agent Management subset — tools exposed to regular agents for creating/managing other agents
+const AGENT_MANAGEMENT_TOOL_NAMES = new Set([
+  "list_agents",
+  "get_agent",
+  "create_agent",
+  "update_agent",
+  "delete_agent",
+  "start_agent",
+  "stop_agent",
+  "send_message",
+  "list_mcp_servers",
+]);
+
+export const AGENT_MANAGEMENT_SERVER_ID = "builtin-agent-management";
+
+function getAgentManagementTools() {
+  return PLATFORM_TOOLS.filter(t => AGENT_MANAGEMENT_TOOL_NAMES.has(t.name));
+}
+
 // Build tools list — when PROJECTS_ENABLED, add project_id to required for all tools that accept it
 function getPlatformTools() {
-  const projectsEnabled = process.env.PROJECTS_ENABLED === "true";
+  const projectsEnabled = SettingsDB.getBool("projects_enabled");
   if (!projectsEnabled) {
     return PLATFORM_TOOLS.filter(tool => !PROJECT_ONLY_TOOLS.has(tool.name));
   }
@@ -991,6 +1015,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         const agent = AgentDB.create({
           id,
           name: args.name,
+          description: args.description || null,
           model: args.model,
           provider: args.provider,
           system_prompt: args.system_prompt || `You are ${args.name}, a helpful AI assistant.`,
@@ -1009,6 +1034,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           project_id: args.project_id || null,
         });
 
+        broadcastAgentEvent(agent.id, "agent_created", { name: agent.name });
         const enabledFeatures = Object.entries(agent.features)
           .filter(([_, v]) => v === true || (typeof v === "object" && v?.enabled))
           .map(([k]) => k === "agents" ? "multi-agent (call_agent, delegate_task, list_available_agents)" : k);
@@ -1023,6 +1049,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
 
         const updates: any = {};
         if (args.name !== undefined) updates.name = args.name;
+        if (args.description !== undefined) updates.description = args.description;
         if (args.model !== undefined) updates.model = args.model;
         if (args.provider !== undefined) updates.provider = args.provider;
         if (args.system_prompt !== undefined) updates.system_prompt = args.system_prompt;
@@ -1107,6 +1134,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         if (updates.model) summary.model = updates.model;
         if (updates.system_prompt) summary.system_prompt = "updated";
         if (configPushed) summary.config_status = "applied live (no restart needed)";
+        if (updated) broadcastAgentEvent(updated.id, "agent_updated", { name: updated.name });
         return { content: [{ type: "text", text: `Agent updated: ${JSON.stringify(summary, null, 2)}` }] };
       }
 
@@ -1122,6 +1150,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           return { content: [{ type: "text", text: "Cannot delete the Apteva Assistant." }], isError: true };
         }
         AgentDB.delete(args.agent_id);
+        broadcastAgentEvent(args.agent_id, "agent_deleted", { name: agent.name });
         return { content: [{ type: "text", text: `Agent deleted: ${agent.name} (${agent.id})` }] };
       }
 
@@ -1233,6 +1262,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         const result = servers.map(s => ({
           id: s.id,
           name: s.name,
+          description: s.description,
           type: s.type,
           status: s.status,
           url: s.url,
@@ -1250,6 +1280,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         const serverInfo: Record<string, any> = {
           id: server.id,
           name: server.name,
+          description: server.description,
           type: server.type,
           status: server.status,
           url: server.url,
@@ -1283,6 +1314,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
         const server = McpServerDB.create({
           id,
           name: args.name,
+          description: args.description || null,
           type: args.type || "http",
           package: args.package || null,
           pip_module: null,
@@ -1294,7 +1326,7 @@ async function executeTool(name: string, args: Record<string, any>): Promise<{ c
           source: null,
           project_id: args.project_id || null,
         });
-        return { content: [{ type: "text", text: `MCP server created: ${JSON.stringify({ id: server.id, name: server.name, type: server.type }, null, 2)}` }] };
+        return { content: [{ type: "text", text: `MCP server created: ${JSON.stringify({ id: server.id, name: server.name, description: server.description, type: server.type }, null, 2)}` }] };
       }
 
       case "delete_mcp_server": {
@@ -2359,6 +2391,9 @@ You can manage:
 
 CRITICAL: ALWAYS pass project_id to every tool call that accepts it. API keys and resources are scoped per project — calls without project_id will fail. The chat context tells you the current project id.
 
+MULTI-AGENT TEAMS: When the user asks you to set up a multi-agent team or enable the "agents" feature, be action-oriented. Create focused, specialized agents — each with a clear responsibility and only the MCP servers/skills it needs. Do NOT present architecture options (Option A vs B) or ask the user to choose between approaches. Just create the agents with sensible defaults and move on. The user can always adjust later. Only ask for clarification if the user's request is genuinely ambiguous about what the agents should do. Default to more specialized agents over fewer generalist ones.
+IMPORTANT: The "agents" feature MUST be enabled on ALL agents that need to communicate with each other. It is not enough to enable it on just one agent — both the caller and the callee must have the agents feature enabled, otherwise they cannot see or call each other. When setting up a multi-agent team, always enable the agents feature on every agent in the team.
+
 Typical workflow: list_providers → create_agent → update_agent (add_mcp_servers/add_skills) → start_agent.
 Task workflow: list_tasks (project-wide overview) or list_agent_tasks (single agent) → create_agent_task (schedule work) → execute_agent_task (run immediately).
 Integration workflow: list_integration_providers → if no key, ask user and set_provider_key → list_integration_apps (browse) → connect_integration_app (API key) → create_integration_config → add_integration_config_locally → start_mcp_server → update_agent (add_mcp_servers).
@@ -2383,6 +2418,116 @@ Always use list_providers first to check which providers have API keys before cr
     case "tools/call": {
       const { name, arguments: args } = params as { name: string; arguments: Record<string, any> };
       result = await executeTool(name, args || {});
+      break;
+    }
+
+    default: {
+      error = { code: -32601, message: `Method not found: ${method}` };
+    }
+  }
+
+  const response: JsonRpcResponse = {
+    jsonrpc: "2.0",
+    id: id || 0,
+    ...(error ? { error } : { result }),
+  };
+
+  return new Response(JSON.stringify(response), {
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// Agent Management MCP endpoint — scoped subset of platform tools for regular agents
+// Auto-injects the calling agent's project_id when projects are enabled
+export async function handleAgentManagementMcpRequest(req: Request): Promise<Response> {
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Mcp-Session-Id",
+  };
+
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  // Extract caller agent ID from URL query param
+  const url = new URL(req.url, "http://localhost");
+  const callerId = url.searchParams.get("caller");
+  let callerProjectId: string | null = null;
+  if (callerId) {
+    const callerAgent = AgentDB.findById(callerId);
+    if (callerAgent) callerProjectId = callerAgent.project_id;
+  }
+  const projectsEnabled = SettingsDB.getBool("projects_enabled");
+
+  let body: JsonRpcRequest;
+  try {
+    body = await req.json() as JsonRpcRequest;
+  } catch {
+    return new Response(JSON.stringify({
+      jsonrpc: "2.0", id: 0,
+      error: { code: -32700, message: "Parse error" },
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  }
+
+  const { method, params, id } = body;
+  let result: unknown;
+  let error: { code: number; message: string } | undefined;
+
+  switch (method) {
+    case "initialize": {
+      result = {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: "apteva-agent-management", version: "1.0.0" },
+        instructions: `This MCP server lets you create and manage other AI agents on the Apteva platform.
+${callerProjectId ? `\nYou are operating within a project. New agents you create will automatically be added to your project.` : ""}
+You can:
+- LIST agents: list_agents, get_agent
+- CREATE agents: create_agent (requires provider with API key — use list_mcp_servers to see what's available)
+- UPDATE agents: update_agent (change model, prompt, features, assign MCP servers/skills)
+- LIFECYCLE: start_agent, stop_agent, delete_agent
+- COMMUNICATE: send_message (send a chat message to a running agent)
+- BROWSE TOOLS: list_mcp_servers (see available MCP servers to assign to new agents)
+
+Typical workflow: create_agent → update_agent (assign MCP servers) → start_agent.`,
+      };
+      break;
+    }
+
+    case "notifications/initialized": {
+      result = {};
+      break;
+    }
+
+    case "tools/list": {
+      let tools = getAgentManagementTools();
+      // When projects enabled + caller has a project, strip project_id from tool schemas
+      if (projectsEnabled && callerProjectId) {
+        tools = tools.map(t => {
+          const props = t.inputSchema?.properties as Record<string, unknown> | undefined;
+          if (!props || !("project_id" in props)) return t;
+          const { project_id: _, ...restProps } = props;
+          const required = ((t.inputSchema as any).required || []).filter((r: string) => r !== "project_id");
+          return { ...t, inputSchema: { ...t.inputSchema, properties: restProps, ...(required.length > 0 ? { required } : {}) } };
+        });
+      }
+      result = { tools };
+      break;
+    }
+
+    case "tools/call": {
+      const { name, arguments: args } = params as { name: string; arguments: Record<string, any> };
+      if (!AGENT_MANAGEMENT_TOOL_NAMES.has(name)) {
+        error = { code: -32602, message: `Tool not available: ${name}` };
+      } else {
+        // Auto-inject caller's project_id when projects are enabled
+        const enrichedArgs = { ...args };
+        if (projectsEnabled && callerProjectId && !enrichedArgs.project_id) {
+          enrichedArgs.project_id = callerProjectId;
+        }
+        result = await executeTool(name, enrichedArgs);
+      }
       break;
     }
 

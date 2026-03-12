@@ -122,8 +122,8 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
               return updated;
             });
 
-            // Detect agent status change events (system-emitted)
-            if (data.some((e: TelemetryEvent) => e.category === "system" && (e.type === "agent_started" || e.type === "agent_stopped"))) {
+            // Detect agent status/lifecycle change events (system-emitted)
+            if (data.some((e: TelemetryEvent) => e.category === "system" && (e.type === "agent_started" || e.type === "agent_stopped" || e.type === "agent_created" || e.type === "agent_updated" || e.type === "agent_deleted"))) {
               setStatusChangeCounter(c => c + 1);
             }
 

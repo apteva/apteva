@@ -118,6 +118,7 @@ function AppContent() {
   // Form state
   const [newAgent, setNewAgent] = useState<NewAgentForm>({
     name: "",
+    description: "",
     model: "",
     provider: "",
     systemPrompt: "You are a helpful assistant.",
@@ -169,6 +170,7 @@ function AppContent() {
     const defaultModel = defaultProvider?.models.find(m => m.recommended)?.value || defaultProvider?.models[0]?.value || "";
     setNewAgent({
       name: "",
+      description: "",
       model: defaultModel,
       provider: defaultProvider?.id || "",
       systemPrompt: "You are a helpful assistant.",

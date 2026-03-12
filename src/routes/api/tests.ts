@@ -1,7 +1,7 @@
 import { json } from "./helpers";
 import { TestCaseDB, TestRunDB } from "../../db-tests";
 import { AgentDB } from "../../db";
-import { runTest, runAll } from "../../test-runner";
+import { runTest, runAll, cleanupStaleRuns } from "../../test-runner";
 
 export async function handleTestRoutes(
   req: Request,
@@ -10,6 +10,8 @@ export async function handleTestRoutes(
 ): Promise<Response | null> {
   // GET /api/tests - List test cases
   if (path === "/api/tests" && method === "GET") {
+    // Auto-clean stale "running" test runs
+    cleanupStaleRuns();
     const url = new URL(req.url);
     const projectId = url.searchParams.get("project_id") || undefined;
     const tests = TestCaseDB.findAll(projectId);

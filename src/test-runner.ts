@@ -21,6 +21,10 @@ interface PlanResult {
 
 // 5-minute safety cap for stream consumption
 const STREAM_SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
+// 10-minute overall test timeout (covers planning + chat + stream + judging)
+const TEST_OVERALL_TIMEOUT_MS = 10 * 60 * 1000;
+// Tests stuck in "running" longer than this are considered stale
+const STALE_TEST_THRESHOLD_MS = 15 * 60 * 1000;
 
 // Broadcast a test telemetry event via SSE
 function broadcastTestEvent(
@@ -127,8 +131,60 @@ Respond with ONLY a JSON object (no markdown, no extra text):
   };
 }
 
-// Run a single test case
+// Clean up stale test runs stuck in "running" state
+export function cleanupStaleRuns(): number {
+  const db = (TestRunDB as any).__db?.() || null;
+  // Use raw SQL via the DB helper in db-tests
+  try {
+    const cutoff = new Date(Date.now() - STALE_TEST_THRESHOLD_MS).toISOString();
+    const stale = TestRunDB.findRecent(100).filter(
+      r => r.status === "running" && r.created_at < cutoff
+    );
+    for (const run of stale) {
+      TestRunDB.complete(run.id, {
+        status: "error",
+        error: "Test timed out (stale run cleanup)",
+        duration_ms: Date.now() - new Date(run.created_at).getTime(),
+      });
+    }
+    if (stale.length > 0) {
+      console.log(`${TAG} Cleaned up ${stale.length} stale test run(s)`);
+    }
+    return stale.length;
+  } catch (err: any) {
+    console.log(`${TAG} Stale cleanup error: ${err.message}`);
+    return 0;
+  }
+}
+
+// Run a single test case (with overall timeout wrapper)
 export async function runTest(testCase: TestCase): Promise<TestRun> {
+  // Clean up any stale runs first
+  cleanupStaleRuns();
+
+  return Promise.race([
+    runTestInner(testCase),
+    new Promise<TestRun>((_, reject) =>
+      setTimeout(() => reject(new Error("Overall test timeout (10 min)")), TEST_OVERALL_TIMEOUT_MS)
+    ),
+  ]).catch(async (err) => {
+    // If the overall timeout fires, make sure we mark the run as errored
+    // Find the most recent running test run for this test case
+    const latest = TestRunDB.getLatestByTestCase(testCase.id);
+    if (latest && latest.status === "running") {
+      console.log(`${TAG} Overall timeout — marking run ${latest.id} as error`);
+      return TestRunDB.complete(latest.id, {
+        status: "error",
+        error: err.message || String(err),
+        duration_ms: Date.now() - new Date(latest.created_at).getTime(),
+      })!;
+    }
+    throw err;
+  });
+}
+
+// Inner test execution
+async function runTestInner(testCase: TestCase): Promise<TestRun> {
   console.log(`${TAG} ========== Running test "${testCase.name}" (${testCase.id}) ==========`);
   console.log(`${TAG} Test details: behavior=${testCase.behavior ? `"${testCase.behavior.slice(0, 60)}..."` : "null"}, agent_id=${testCase.agent_id || "null"}, input_message=${testCase.input_message ? `"${testCase.input_message.slice(0, 60)}"` : "null"}, project_id=${testCase.project_id || "null"}`);
 
@@ -243,6 +299,7 @@ export async function runTest(testCase: TestCase): Promise<TestRun> {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Test-Mode": "true" },
       body: JSON.stringify(chatBody),
+      signal: AbortSignal.timeout(STREAM_SAFETY_TIMEOUT_MS),
     });
 
     if (!chatRes.ok) {
@@ -416,6 +473,13 @@ async function consumeStream(response: Response): Promise<string> {
       fullText += chunk;
       if (chunks <= 3 || chunks % 10 === 0) {
         console.log(`${TAG} consumeStream: chunk #${chunks} (+${chunk.length} chars, total ${fullText.length})`);
+      }
+      // Detect agent's "done" SSE event — stop reading immediately instead of
+      // waiting for HTTP connection close (which may linger)
+      if (chunk.includes('"type":"done"')) {
+        console.log(`${TAG} consumeStream: detected done event after ${chunks} chunks, ${fullText.length} chars`);
+        reader.cancel();
+        break;
       }
     }
   };

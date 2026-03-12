@@ -44,10 +44,23 @@ export function McpPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [editingServer, setEditingServer] = useState<McpServer | null>(null);
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
-  const [activeTab, setActiveTab] = useState<"servers" | "hosted" | "registry">("servers");
+  const [activeTab, setActiveTab] = useState<"servers" | "hosted" | "registry" | "integrations">("servers");
+  const [integrationsInstalled, setIntegrationsInstalled] = useState(false);
   const { confirm, ConfirmDialog } = useConfirm();
 
   const hasProjects = projects.length > 0;
+
+  // Check if integrations package is installed
+  useEffect(() => {
+    authFetch("/api/integrations/local/apps")
+      .then(r => r.json())
+      .then(data => {
+        setIntegrationsInstalled(data.apps && data.apps.length > 0);
+      })
+      .catch(() => {
+        setIntegrationsInstalled(false);
+      });
+  }, [authFetch]);
 
   const fetchServers = async () => {
     try {
@@ -187,6 +200,18 @@ export function McpPage() {
           >
             Browse Registry
           </button>
+          {integrationsInstalled && (
+            <button
+              onClick={() => setActiveTab("integrations")}
+              className={`px-4 py-2 rounded text-sm font-medium transition ${
+                activeTab === "integrations"
+                  ? "bg-[var(--color-surface-raised)] text-white"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+              }`}
+            >
+              Integrations
+            </button>
+          )}
         </div>
 
         {/* My Servers Tab */}
@@ -294,6 +319,11 @@ export function McpPage() {
               setActiveTab("servers");
             }}
           />
+        )}
+
+        {/* Integrations Tab */}
+        {activeTab === "integrations" && (
+          <LocalIntegrationsTab onServerAdded={fetchServers} projectId={currentProjectId} />
         )}
 
         {/* Info - only show on servers tab */}
@@ -2510,6 +2540,534 @@ function EditServerModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============ Local Integrations Tab ============
+
+interface LocalApp {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  logo: string | null;
+  categories: string[];
+  authSchemes: string[];
+  credentialFields?: { name: string; description?: string; required?: boolean }[];
+  oauthConfig?: { setup_url?: string; setup_steps?: string[]; scopes?: string[] };
+}
+
+interface LocalConnection {
+  id: string;
+  appId: string;
+  appName: string;
+  status: "active" | "pending" | "failed" | "expired";
+  createdAt: string;
+  metadata?: { projectId?: string | null };
+}
+
+function LocalIntegrationsTab({ onServerAdded, projectId }: { onServerAdded: () => void; projectId: string | null }) {
+  const { authFetch } = useAuth();
+  const [apps, setApps] = useState<LocalApp[]>([]);
+  const [connections, setConnections] = useState<LocalConnection[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [installed, setInstalled] = useState(true);
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [authMethod, setAuthMethod] = useState<"token" | "oauth" | null>(null);
+  const [fieldInputs, setFieldInputs] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [shareGlobally, setShareGlobally] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
+
+  // Effective project ID for connections: null if sharing globally or no project selected
+  const effectiveProjectId = shareGlobally ? null : (projectId && projectId !== "unassigned" ? projectId : null);
+
+  const fetchData = async () => {
+    try {
+      const projectParam = projectId && projectId !== "unassigned" ? `?project_id=${projectId}` : "";
+      const [appsRes, connsRes] = await Promise.all([
+        authFetch("/api/integrations/local/apps"),
+        authFetch(`/api/integrations/local/connected${projectParam}`),
+      ]);
+      const appsData = await appsRes.json();
+      const connsData = await connsRes.json();
+
+      if (appsData.apps && appsData.apps.length > 0) {
+        setApps(appsData.apps);
+        setConnections(connsData.accounts || []);
+        setInstalled(true);
+      } else {
+        setInstalled(false);
+      }
+    } catch {
+      setInstalled(false);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, [authFetch, projectId]);
+
+  // Listen for OAuth popup callback
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === "oauth-callback") {
+        fetchData();
+        onServerAdded();
+        setSuccess("OAuth connection established!");
+        setConnecting(null);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  const startConnect = (appSlug: string) => {
+    const app = apps.find(a => a.slug === appSlug);
+    setConnecting(appSlug);
+    setFieldInputs({});
+    setError(null);
+    setSuccess(null);
+    setShareGlobally(false);
+
+    // If app supports both OAuth and token, let user choose
+    const hasOAuth = app?.authSchemes.includes("OAUTH2");
+    const hasToken = app?.authSchemes.some(s => s !== "OAUTH2");
+
+    if (hasOAuth && hasToken) {
+      setAuthMethod(null); // Show choice
+    } else if (hasOAuth) {
+      setAuthMethod("oauth");
+    } else {
+      setAuthMethod("token");
+    }
+  };
+
+  const connectWithToken = async (appSlug: string) => {
+    const app = apps.find(a => a.slug === appSlug);
+    if (!app) return;
+
+    // Check required fields
+    const fields = app.credentialFields;
+    if (fields && fields.length > 0) {
+      const missing = fields.filter(f => f.required !== false && !fieldInputs[f.name]?.trim());
+      if (missing.length > 0) {
+        setError(`Missing required fields: ${missing.map(f => f.name).join(", ")}`);
+        return;
+      }
+    }
+
+    setError(null);
+    try {
+      const hasFields = fields && fields.length > 0;
+      const authScheme = app.authSchemes.includes("API_KEY") ? "API_KEY" : "BEARER_TOKEN";
+
+      let credentials: any;
+      if (hasFields) {
+        credentials = { authScheme, fields: fieldInputs };
+      } else {
+        // Fallback: single field
+        const val = fieldInputs._single || "";
+        credentials = authScheme === "API_KEY"
+          ? { authScheme, apiKey: val }
+          : { authScheme, bearerToken: val };
+      }
+
+      const res = await authFetch("/api/integrations/local/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appSlug,
+          credentials,
+          ...(effectiveProjectId ? { project_id: effectiveProjectId } : {}),
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.connectionId) {
+        setSuccess(`Connected to ${app.name}! MCP server created.`);
+        setConnecting(null);
+        setFieldInputs({});
+        await fetchData();
+        onServerAdded();
+      } else {
+        setError(data.error || "Connection failed");
+      }
+    } catch (err) {
+      setError(`Failed to connect: ${err}`);
+    }
+  };
+
+  const connectWithOAuth = async (appSlug: string) => {
+    const app = apps.find(a => a.slug === appSlug);
+    if (!app) return;
+
+    if (!fieldInputs.client_id?.trim() || !fieldInputs.client_secret?.trim()) {
+      setError("Client ID and Client Secret are required for OAuth");
+      return;
+    }
+
+    setError(null);
+    try {
+      const res = await authFetch("/api/integrations/local/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appSlug,
+          credentials: {
+            authScheme: "OAUTH2",
+            fields: {
+              client_id: fieldInputs.client_id.trim(),
+              client_secret: fieldInputs.client_secret.trim(),
+            },
+          },
+          ...(effectiveProjectId ? { project_id: effectiveProjectId } : {}),
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.redirectUrl) {
+        // Open OAuth in popup
+        window.open(data.redirectUrl, "oauth", "width=600,height=700,popup=yes");
+      } else {
+        setError(data.error || "Failed to start OAuth flow");
+      }
+    } catch (err) {
+      setError(`Failed to start OAuth: ${err}`);
+    }
+  };
+
+  const disconnectApp = async (connectionId: string, appName: string) => {
+    const ok = await confirm(`Disconnect ${appName}?`, "This will remove the connection and its auto-generated MCP server.");
+    if (!ok) return;
+
+    try {
+      await authFetch(`/api/integrations/local/connection/${connectionId}`, { method: "DELETE" });
+      await fetchData();
+      onServerAdded();
+    } catch {}
+  };
+
+  if (loading) {
+    return <div className="text-center py-8 text-[var(--color-text-muted)]">Loading...</div>;
+  }
+
+  if (!installed) {
+    return (
+      <div className="bg-[var(--color-surface)] card p-8 text-center">
+        <h3 className="text-lg font-medium mb-2">Integrations Package Not Installed</h3>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">
+          Install @apteva/integrations from Settings &gt; Updates to enable local app connections.
+        </p>
+      </div>
+    );
+  }
+
+  const connectedSlugs = new Set(connections.map(c => c.appId));
+
+  const connectingApp = connecting ? apps.find(a => a.slug === connecting) : null;
+
+  const AppIcon = ({ app, size = 8 }: { app: { logo?: string | null; name: string }; size?: number }) => (
+    app.logo ? (
+      <img src={app.logo} alt={app.name} className={`w-${size} h-${size} rounded-lg object-contain`} />
+    ) : (
+      <div className={`w-${size} h-${size} rounded-lg bg-[var(--color-surface-raised)] flex items-center justify-center text-sm font-bold text-[var(--color-text-muted)]`}>
+        {app.name[0]}
+      </div>
+    )
+  );
+
+  return (
+    <div>
+      {ConfirmDialog}
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-4 text-red-400 text-sm">
+          {error}
+        </div>
+      )}
+      {success && (
+        <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3 mb-4 text-green-400 text-sm">
+          {success}
+        </div>
+      )}
+
+      {/* Active Connections */}
+      {connections.length > 0 && (
+        <div className="mb-8">
+          <h3 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider mb-3">Active Connections</h3>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {connections.map(conn => {
+              const connApp = apps.find(a => a.slug === conn.appId);
+              return (
+                <div key={conn.id} className="bg-[var(--color-surface)] border border-green-500/20 card p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {connApp?.logo ? (
+                        <img src={connApp.logo} alt={conn.appName} className="w-8 h-8 rounded-lg object-contain" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center text-sm font-bold text-green-400">
+                          {conn.appName[0]}
+                        </div>
+                      )}
+                      <div>
+                        <div className="font-medium text-sm">{conn.appName}</div>
+                        <div className="text-xs text-green-400 flex items-center gap-1.5">
+                          {conn.status === "pending" ? "Pending OAuth..." : "Connected"}
+                          {conn.metadata?.projectId === null ? (
+                            <span className="text-[var(--color-text-faint)] bg-[var(--color-surface-raised)] px-1.5 py-0.5 rounded text-[10px]">Global</span>
+                          ) : conn.metadata?.projectId ? (
+                            <span className="text-[var(--color-accent-70)] bg-[var(--color-accent-10)] px-1.5 py-0.5 rounded text-[10px]">Project</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => disconnectApp(conn.id, conn.appName)}
+                      className="text-xs text-[var(--color-text-faint)] hover:text-red-400 transition"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Available Apps */}
+      <div>
+        <h3 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider mb-3">Available Apps</h3>
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {apps.filter(app => !connectedSlugs.has(app.slug)).map(app => (
+            <div key={app.slug} className="bg-[var(--color-surface)] card p-4">
+              <div className="flex items-center gap-3 mb-3">
+                {app.logo ? (
+                  <img src={app.logo} alt={app.name} className="w-10 h-10 rounded-lg object-contain" />
+                ) : (
+                  <div className="w-10 h-10 rounded-lg bg-[var(--color-surface-raised)] flex items-center justify-center text-lg font-bold text-[var(--color-text-muted)]">
+                    {app.name[0]}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm">{app.name}</div>
+                  <div className="text-xs text-[var(--color-text-faint)] truncate">{app.description}</div>
+                </div>
+              </div>
+              <button
+                onClick={() => startConnect(app.slug)}
+                className="w-full px-3 py-1.5 bg-[var(--color-surface-raised)] hover:bg-[var(--color-border)] rounded text-sm transition"
+              >
+                Connect
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-6 text-xs text-[var(--color-text-faint)]">
+        Connections auto-generate local MCP servers with tools. Assign them to agents from the agent config.
+      </div>
+
+      {/* Connect Modal */}
+      {connectingApp && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-50 flex items-center justify-center p-4" onClick={() => { setConnecting(null); setAuthMethod(null); setFieldInputs({}); setError(null); }}>
+          <div className="bg-[var(--color-surface)] card w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="sticky top-0 bg-[var(--color-surface)] border-b border-[var(--color-border)] p-4 flex items-center gap-3">
+              {connectingApp.logo ? (
+                <img src={connectingApp.logo} alt={connectingApp.name} className="w-10 h-10 rounded-lg object-contain" />
+              ) : (
+                <div className="w-10 h-10 rounded-lg bg-[var(--color-surface-raised)] flex items-center justify-center text-lg font-bold text-[var(--color-text-muted)]">
+                  {connectingApp.name[0]}
+                </div>
+              )}
+              <div className="flex-1">
+                <h3 className="font-semibold">Connect {connectingApp.name}</h3>
+                <p className="text-xs text-[var(--color-text-faint)]">{connectingApp.description}</p>
+              </div>
+              <button
+                onClick={() => { setConnecting(null); setAuthMethod(null); setFieldInputs({}); setError(null); }}
+                className="text-[var(--color-text-faint)] hover:text-[var(--color-text)] text-xl leading-none p-1"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              {error && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded p-2.5 text-red-400 text-sm">
+                  {error}
+                </div>
+              )}
+
+              {/* Scope toggle — only show when a project is selected */}
+              {projectId && projectId !== "unassigned" && (
+                <div className="flex items-center justify-between bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg px-3 py-2">
+                  <div>
+                    <div className="text-sm font-medium">{shareGlobally ? "Shared globally" : "Project-scoped"}</div>
+                    <div className="text-xs text-[var(--color-text-faint)]">
+                      {shareGlobally ? "Available to all projects" : "Only visible to the current project"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShareGlobally(!shareGlobally)}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${shareGlobally ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-raised)]"}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${shareGlobally ? "translate-x-5" : ""}`} />
+                  </button>
+                </div>
+              )}
+
+              {/* Auth method choice */}
+              {(() => {
+                const hasOAuth = connectingApp.authSchemes.includes("OAUTH2");
+                const hasToken = connectingApp.authSchemes.some(s => s !== "OAUTH2");
+
+                if (hasOAuth && hasToken && authMethod === null) {
+                  return (
+                    <div className="space-y-2">
+                      <div className="text-sm text-[var(--color-text-muted)] mb-2">Choose how to connect:</div>
+                      <button
+                        onClick={() => { setAuthMethod("token"); setFieldInputs({}); }}
+                        className="w-full px-4 py-3 bg-[var(--color-surface-raised)] hover:bg-[var(--color-border)] rounded-lg text-left transition"
+                      >
+                        <div className="font-medium text-sm">API Key / Token</div>
+                        <div className="text-xs text-[var(--color-text-faint)] mt-0.5">Paste a personal access token or API key</div>
+                      </button>
+                      <button
+                        onClick={() => { setAuthMethod("oauth"); setFieldInputs({}); }}
+                        className="w-full px-4 py-3 bg-[var(--color-surface-raised)] hover:bg-[var(--color-border)] rounded-lg text-left transition"
+                      >
+                        <div className="font-medium text-sm">OAuth 2.0</div>
+                        <div className="text-xs text-[var(--color-text-faint)] mt-0.5">Create an OAuth app in {connectingApp.name}, then authorize</div>
+                      </button>
+                    </div>
+                  );
+                }
+
+                // OAuth form
+                if (authMethod === "oauth") {
+                  const oauth = connectingApp.oauthConfig;
+                  const callbackUrl = `${window.location.origin}/api/integrations/local/oauth/callback`;
+                  return (
+                    <div className="space-y-3">
+                      {oauth?.setup_steps && (
+                        <div className="bg-[var(--color-bg)] border border-[var(--color-border-light)] rounded-lg p-3 text-xs">
+                          <div className="font-medium text-[var(--color-text-secondary)] mb-2">Setup {connectingApp.name} OAuth:</div>
+                          <ol className="list-decimal list-inside space-y-1.5 text-[var(--color-text-muted)]">
+                            {oauth.setup_steps.map((step, i) => (
+                              <li key={i}>{step.replace("{callback_url}", callbackUrl)}</li>
+                            ))}
+                          </ol>
+                          {oauth.setup_url && (
+                            <a href={oauth.setup_url} target="_blank" rel="noopener noreferrer"
+                              className="inline-block mt-2 text-[var(--color-accent)] hover:underline text-xs">
+                              Open {connectingApp.name} Developer Console
+                            </a>
+                          )}
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-xs text-[var(--color-text-secondary)] mb-1">Callback URL</label>
+                        <div className="flex gap-1">
+                          <input type="text" value={callbackUrl} readOnly
+                            className="flex-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-1.5 text-xs font-mono text-[var(--color-text-muted)]" />
+                          <button onClick={() => navigator.clipboard.writeText(callbackUrl)}
+                            className="px-2.5 py-1.5 bg-[var(--color-surface-raised)] hover:bg-[var(--color-border)] rounded text-xs transition">
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-[var(--color-text-secondary)] mb-1">Client ID <span className="text-red-400">*</span></label>
+                        <input type="text" value={fieldInputs.client_id || ""}
+                          onChange={e => setFieldInputs(prev => ({ ...prev, client_id: e.target.value }))}
+                          placeholder="OAuth Client ID" autoFocus
+                          className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-2 text-sm" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-[var(--color-text-secondary)] mb-1">Client Secret <span className="text-red-400">*</span></label>
+                        <input type="password" value={fieldInputs.client_secret || ""}
+                          onChange={e => setFieldInputs(prev => ({ ...prev, client_secret: e.target.value }))}
+                          placeholder="OAuth Client Secret"
+                          className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-2 text-sm" />
+                      </div>
+                      {oauth?.scopes && oauth.scopes.length > 0 && (
+                        <div className="text-[10px] text-[var(--color-text-faint)]">Scopes: {oauth.scopes.join(", ")}</div>
+                      )}
+                      <div className="flex gap-2 pt-2">
+                        <button onClick={() => connectWithOAuth(connectingApp.slug)}
+                          disabled={!fieldInputs.client_id?.trim() || !fieldInputs.client_secret?.trim()}
+                          className="flex-1 px-4 py-2 bg-[var(--color-accent)] text-black rounded-lg text-sm font-medium disabled:opacity-50">
+                          Authorize
+                        </button>
+                        {hasToken && (
+                          <button onClick={() => { setAuthMethod(null); setFieldInputs({}); setError(null); }}
+                            className="px-4 py-2 bg-[var(--color-surface-raised)] rounded-lg text-sm">
+                            Back
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Token/API Key form
+                const fields = connectingApp.credentialFields;
+                return (
+                  <div className="space-y-3">
+                    {fields && fields.length > 0 ? (
+                      fields.map((field, idx) => (
+                        <div key={field.name}>
+                          <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                            {field.description || field.name.replace(/[_-]/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                            {field.required !== false && <span className="text-red-400 ml-0.5">*</span>}
+                          </label>
+                          <input type="password" value={fieldInputs[field.name] || ""}
+                            onChange={e => setFieldInputs(prev => ({ ...prev, [field.name]: e.target.value }))}
+                            placeholder={`Enter ${field.name.replace(/[_-]/g, " ")}...`}
+                            className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-2 text-sm"
+                            autoFocus={idx === 0} />
+                        </div>
+                      ))
+                    ) : (
+                      <div>
+                        <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                          {connectingApp.authSchemes.includes("API_KEY") ? "API Key" : "Bearer Token"} <span className="text-red-400">*</span>
+                        </label>
+                        <input type="password"
+                          placeholder={connectingApp.authSchemes.includes("API_KEY") ? "Enter API key..." : "Enter token..."}
+                          value={fieldInputs._single || ""}
+                          onChange={e => setFieldInputs(prev => ({ ...prev, _single: e.target.value }))}
+                          className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-3 py-2 text-sm"
+                          autoFocus />
+                      </div>
+                    )}
+                    <div className="flex gap-2 pt-2">
+                      <button onClick={() => connectWithToken(connectingApp.slug)}
+                        className="flex-1 px-4 py-2 bg-[var(--color-accent)] text-black rounded-lg text-sm font-medium disabled:opacity-50">
+                        Connect
+                      </button>
+                      {hasOAuth && (
+                        <button onClick={() => { setAuthMethod(null); setFieldInputs({}); setError(null); }}
+                          className="px-4 py-2 bg-[var(--color-surface-raised)] rounded-lg text-sm">
+                          Back
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

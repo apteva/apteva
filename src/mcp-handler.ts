@@ -126,7 +126,12 @@ async function executeHttp(
   const { method = "GET", url, headers = {}, body } = config;
 
   // Render templates in URL, headers, and body
-  const renderedUrl = renderTemplate(url, args) as string;
+  let renderedUrl = renderTemplate(url, args) as string;
+  // Also resolve {param} path placeholders (used by local-integration tools)
+  renderedUrl = renderedUrl.replace(/\{(\w+)\}/g, (_, key) => {
+    const val = args[key];
+    return val !== undefined ? encodeURIComponent(String(val)) : `{${key}}`;
+  });
   const renderedHeaders = renderTemplate(headers, args) as Record<string, string>;
 
   // Substitute credential references in headers
@@ -144,11 +149,13 @@ async function executeHttp(
   };
 
   if (["POST", "PUT", "PATCH"].includes(fetchOptions.method!)) {
+    // Merge default_body (credential-derived defaults) with user args
+    const mergedArgs = { ...(config.default_body || {}), ...args };
     if (body) {
-      const renderedBody = renderTemplate(body, args);
+      const renderedBody = renderTemplate(body, mergedArgs);
       fetchOptions.body = JSON.stringify(renderedBody);
     } else {
-      fetchOptions.body = JSON.stringify(args);
+      fetchOptions.body = JSON.stringify(mergedArgs);
     }
   }
 
