@@ -1,92 +1,17 @@
 {
   "name": "apteva",
-  "version": "0.4.60",
-  "description": "Run AI agents locally. Multi-provider support for Claude, GPT, Gemini, Llama, and more.",
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "version": "0.1.0",
+  "description": "Apteva — continuous AI agents with integrations, webhooks, and a management dashboard",
   "bin": {
-    "apteva": "./bin/apteva.js"
+    "apteva": "./cli.js"
   },
   "scripts": {
-    "dev": "bun run --watch src/server.ts",
-    "build": "bun run build.ts",
-    "build:cli": "bun build ./src/cli.ts --outdir ./dist --target node",
-    "compile": "bun run build && bun run scripts/compile.ts",
-    "compile:single": "bun run build && bun run scripts/compile.ts --single",
-    "start": "bun run src/server.ts",
-    "tui": "bun run src/tui/index.tsx",
-    "postinstall": "node scripts/postinstall.mjs",
-    "prepublishOnly": "bun run build"
+    "postinstall": "node install.js"
   },
-  "files": [
-    "bin/apteva.js",
-    "scripts/postinstall.mjs",
-    "dist/*.js",
-    "dist/*.css",
-    "dist/*.html",
-    "dist/*.png",
-    "src",
-    "LICENSE",
-    "README.md"
-  ],
-  "keywords": [
-    "apteva",
-    "ai",
-    "agents",
-    "llm",
-    "claude",
-    "anthropic",
-    "openai",
-    "gpt",
-    "gemini",
-    "llama",
-    "groq",
-    "local",
-    "cli"
-  ],
-  "author": "Apteva <hello@apteva.com>",
-  "license": "Elastic-2.0",
+  "keywords": ["ai", "agent", "llm", "mcp", "webhooks", "integrations"],
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/apteva/apteva.git"
-  },
-  "homepage": "https://github.com/apteva/apteva",
-  "bugs": {
-    "url": "https://github.com/apteva/apteva/issues"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "playwright": "^1.58.2",
-    "tailwindcss": "^3.4.0",
-    "typescript": "^5.0.0"
-  },
-  "dependencies": {
-    "@apteva/apteva-kit": "^0.1.138",
-    "@apteva/integrations": "^0.3.0",
-    "grammy": "^1.40.0",
-    "ink": "^6.7.0",
-    "ink-spinner": "^5.0.0",
-    "ink-text-input": "^6.0.0",
-    "react": "19",
-    "react-dom": "19",
-    "recharts": "^3.7.0"
-  },
-  "optionalDependencies": {
-    "@apteva/agent-darwin-arm64": "^1.49.0",
-    "@apteva/agent-darwin-x64": "^1.49.0",
-    "@apteva/agent-linux-arm64": "^1.49.0",
-    "@apteva/agent-linux-x64": "^1.49.0",
-    "@apteva/agent-win32-x64": "^1.49.0",
-    "@apteva/apteva-darwin-arm64": "0.4.33",
-    "@apteva/apteva-darwin-x64": "0.4.33",
-    "@apteva/apteva-linux-arm64": "0.4.33",
-    "@apteva/apteva-linux-x64": "0.4.33",
-    "@apteva/apteva-win32-x64": "0.4.33"
+    "url": "https://github.com/apteva/apteva"
   }
 }

@@ -1,16 +1,6 @@
 # Apteva
 
-Run AI agents locally on your machine.
-
-[![npm version](https://img.shields.io/npm/v/apteva.svg)](https://www.npmjs.com/package/apteva)
-[![license](https://img.shields.io/badge/license-ELv2-blue.svg)](LICENSE)
-
-## Features
-
-- **Multi-Provider Support** - Claude, GPT, Gemini, Llama, Grok, and more
-- **Local-First** - Your data and API keys stay on your machine
-- **Web Dashboard** - Beautiful UI for managing agents
-- **Secure** - API keys encrypted at rest
+Continuous AI agents with integrations, webhooks, and a management dashboard.
 
 ## Quick Start
 
@@ -18,67 +8,36 @@ Run AI agents locally on your machine.
 npx apteva
 ```
 
-Open http://localhost:4280 in your browser.
+This downloads the Apteva binaries and starts the server with dashboard at `http://localhost:5280`.
 
-## Installation
+## What's Inside
 
-```bash
-# npm
-npm install -g apteva
+- **apteva-core** — The thinking engine. Continuous loop, threads, tool dispatch, MCP, memory.
+- **apteva-server** — Management server. Instances, connections, subscriptions, projects, dashboard.
+- **200+ integrations** — Connect to GitHub, Slack, Stripe, OmniKit, and more.
 
-# bun
-bun add -g apteva
-```
+## Configuration
 
-## Usage
+Set environment variables before running:
 
 ```bash
-# Start server (default port 4280)
-apteva
-
-# Custom port
-apteva --port 8080
-
-# Custom data directory
-apteva --data-dir ./my-data
+PORT=5280              # Server port (default: 5280)
+APTEVA_DATA=~/.apteva  # Data directory (default: ~/.apteva)
 ```
 
-## Supported Providers
+## From Source
 
-| Provider | Models |
-|----------|--------|
-| Anthropic | Claude Sonnet 4, Opus 4, Haiku |
-| OpenAI | GPT-4o, GPT-4o Mini |
-| Google | Gemini 2.0 Flash, 1.5 Pro |
-| Groq | Llama 3.3 70B, Mixtral |
-| xAI | Grok 2 |
-| Fireworks | Llama, DeepSeek V3 |
-| Together | Llama, DeepSeek R1 |
-| Moonshot | Moonshot V1 |
-| Venice | Llama 3.3 70B |
+```bash
+# Build core
+cd core && go build -o apteva-core .
 
-## API
+# Build server
+cd server && go build -o apteva-server .
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/agents` | GET | List agents |
-| `/api/agents` | POST | Create agent |
-| `/api/agents/:id/start` | POST | Start agent |
-| `/api/agents/:id/stop` | POST | Stop agent |
-| `/api/agents/:id/chat` | POST | Chat (streaming) |
-| `/api/providers` | GET | List providers |
-| `/api/health` | GET | Health check |
-
-## Requirements
-
-- Node.js 18+ or Bun 1.0+
-- Linux, macOS, or Windows
+# Run
+./apteva-server
+```
 
 ## License
 
-[Elastic License 2.0](LICENSE) - Free to use, cannot offer as a hosted service.
-
-## Links
-
-- [Issues](https://github.com/apteva/apteva/issues)
-- [Contributing](CONTRIBUTING.md)
+MIT
