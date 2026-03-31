@@ -6,7 +6,7 @@ const path = require("path");
 const https = require("https");
 const os = require("os");
 
-const VERSION = "0.1.0";
+const VERSION = "0.5.0";
 const BIN_DIR = path.join(__dirname, "bin");
 const GITHUB_ORG = "apteva";
 

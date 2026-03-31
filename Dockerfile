@@ -1,27 +1,42 @@
-FROM golang:1.25-alpine AS builder
+# ─── Stage 1: Build dashboard ───
+FROM oven/bun:1 AS dashboard-builder
 
+WORKDIR /build/dashboard
+COPY dashboard/package.json dashboard/bun.lock ./
+RUN bun install --frozen-lockfile
+
+COPY dashboard/ ./
+RUN bun run build.ts
+
+# ─── Stage 2: Build Go binaries ───
+FROM golang:1.26-alpine AS go-builder
+
+ARG VERSION=dev
 RUN apk add --no-cache git
 
+# Copy all Go source (core depends on computer via replace directive)
 WORKDIR /build
+COPY core/ ./core/
+COPY computer/ ./computer/
 
-# Clone and build core
-RUN git clone --depth 1 https://github.com/apteva/core.git core
-RUN cd core && CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-core .
+# Build core
+WORKDIR /build/core
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o /apteva-core .
 
-# Clone and build server
-RUN git clone --depth 1 https://github.com/apteva/server.git server
-RUN cd server && CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-server .
+# Build server (with embedded dashboard)
+WORKDIR /build/server
+COPY server/ ./
+COPY --from=dashboard-builder /build/dashboard/dist/ ./dashboard/
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o /apteva-server .
 
-# Clone integrations catalog (just the JSON files)
-RUN git clone --depth 1 https://github.com/apteva/integrations.git integrations
+# ─── Stage 3: Runtime ───
+FROM alpine:3.21
 
-# --- Runtime (scratch = zero overhead) ---
-FROM scratch
+RUN apk add --no-cache ca-certificates
 
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /apteva-core /usr/local/bin/apteva-core
-COPY --from=builder /apteva-server /usr/local/bin/apteva-server
-COPY --from=builder /build/integrations/src/apps /data/integrations
+COPY --from=go-builder /apteva-core /usr/local/bin/apteva-core
+COPY --from=go-builder /apteva-server /usr/local/bin/apteva-server
+COPY integrations/src/apps /data/integrations
 
 ENV PORT=5280
 ENV CORE_CMD=/usr/local/bin/apteva-core

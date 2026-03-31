@@ -1,17 +1,5 @@
 {
   "name": "apteva",
-  "version": "0.1.0",
-  "description": "Apteva — continuous AI agents with integrations, webhooks, and a management dashboard",
-  "bin": {
-    "apteva": "./cli.js"
-  },
-  "scripts": {
-    "postinstall": "node install.js"
-  },
-  "keywords": ["ai", "agent", "llm", "mcp", "webhooks", "integrations"],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/apteva/apteva"
-  }
+  "version": "0.5.0",
+  "private": true
 }
