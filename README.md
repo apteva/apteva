@@ -146,29 +146,6 @@ docker build -t apteva .
 docker run -p 5280:5280 -v apteva-data:/data apteva
 ```
 
-## Building Apps
-
-Any Go developer can build an apteva app. Import the MCP SDK, register tools, ship a binary:
-
-```go
-package main
-
-import "github.com/apteva/apps/pkg/mcp"
-
-func main() {
-    s := mcp.NewServer("my-app", "1.0.0")
-
-    s.Tool("do_something", "Does a thing", schema, func(args map[string]any) (any, error) {
-        // any logic — HTTP calls, database, hardware, ML inference
-        return map[string]any{"result": "done"}, nil
-    })
-
-    s.Run() // blocks, speaks MCP on stdio
-}
-```
-
-Build it, drop it in `~/.apteva/bin/`, and the core can use it.
-
 ## Migrating from OpenClaw
 
 Already running OpenClaw agents? Here's how to switch.
