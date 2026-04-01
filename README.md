@@ -169,6 +169,50 @@ func main() {
 
 Build it, drop it in `~/.apteva/bin/`, and the core can use it.
 
+## Migrating from OpenClaw
+
+Already running OpenClaw agents? Here's how to switch.
+
+| OpenClaw | Apteva | Notes |
+|----------|--------|-------|
+| `claw.run(prompt)` | `config.json` → directive | Apteva doesn't need prompts. It runs continuously. |
+| `claw.tool(...)` | MCP server | Any MCP server works. 200+ built-in. |
+| `claw.memory` | `[[remember]]` | Persistent across restarts. Embedding-based recall. |
+| `claw.agent(name)` | `[[spawn id="name"]]` | Threads are cheaper. They share memory and tools. |
+| Webhook handlers | Subscriptions | Events route directly to threads. |
+| `OPENCLAW_API_KEY` | `FIREWORKS_API_KEY` | Or Anthropic, OpenAI, Google, Ollama. Your choice. |
+| Cron jobs | Self-pacing | No cron needed. `[[pace sleep="5m"]]` and it wakes on events. |
+| Agent state files | Evolving directives | The agent rewrites its own config. It improves itself. |
+
+### Quick migration
+
+```bash
+# 1. Export your OpenClaw config
+openclaw export --format json > my-agent.json
+
+# 2. Convert to Apteva config
+# (or just write a new config.json — it's 10 lines)
+{
+  "directive": "Your agent's purpose here",
+  "mode": "autonomous",
+  "mcp_servers": [
+    { "name": "my-tool", "command": "./my-tool" }
+  ]
+}
+
+# 3. Run
+npx apteva
+```
+
+### Why switch?
+
+- **OpenClaw agents sleep between requests.** Apteva agents think between requests.
+- **OpenClaw needs orchestration.** Apteva orchestrates itself.
+- **OpenClaw bills per call.** Apteva self-paces to minimize cost — sleeps long when idle, thinks fast when busy.
+- **OpenClaw agents forget.** Apteva agents remember, learn, and evolve their own directives.
+
+The fundamental difference: OpenClaw agents are **functions you call**. Apteva agents are **processes that run**. One waits. The other works.
+
 ## License
 
 [MIT](LICENSE)
