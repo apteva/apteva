@@ -1,71 +1,36 @@
 #!/usr/bin/env node
 
-const { spawn, execSync } = require("child_process");
-const path = require("path");
-const fs = require("fs");
-const os = require("os");
+const { execSync, spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
-const BIN_DIR = path.join(__dirname, "bin");
-const ext = os.platform() === "win32" ? ".exe" : "";
-const SERVER_BIN = path.join(BIN_DIR, `apteva-server${ext}`);
-const CORE_BIN = path.join(BIN_DIR, `apteva-core${ext}`);
+const BINARY_NAME = os.platform() === 'win32' ? 'apteva.exe' : 'apteva';
+const BINARY_PATH = path.join(__dirname, BINARY_NAME);
 
-// Check binaries exist
-if (!fs.existsSync(SERVER_BIN)) {
-  console.error("apteva-server binary not found. Run: npm install apteva");
-  process.exit(1);
-}
-if (!fs.existsSync(CORE_BIN)) {
-  console.error("apteva-core binary not found. Run: npm install apteva");
-  process.exit(1);
-}
-
-// Default data directory
-const DATA_DIR = process.env.APTEVA_DATA || path.join(os.homedir(), ".apteva");
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const DB_PATH = path.join(DATA_DIR, "apteva.db");
-const PORT = process.env.PORT || "5280";
-
-console.log(`
-  ◆ Apteva
-
-  Starting server on http://localhost:${PORT}
-  Data directory: ${DATA_DIR}
-`);
-
-const server = spawn(SERVER_BIN, [], {
-  stdio: "inherit",
-  env: {
-    ...process.env,
-    PORT: PORT,
-    CORE_CMD: CORE_BIN,
-    DB_PATH: DB_PATH,
-    DATA_DIR: DATA_DIR,
-  },
-});
-
-server.on("error", (err) => {
-  console.error("Failed to start apteva-server:", err.message);
-  process.exit(1);
-});
-
-server.on("exit", (code) => {
-  process.exit(code || 0);
-});
-
-// Forward signals
-process.on("SIGINT", () => server.kill("SIGINT"));
-process.on("SIGTERM", () => server.kill("SIGTERM"));
-
-// Open browser after a short delay
-setTimeout(() => {
-  const url = `http://localhost:${PORT}`;
+// Check if Go binary exists
+if (!fs.existsSync(BINARY_PATH)) {
+  console.log('Building apteva...');
   try {
-    if (os.platform() === "darwin") execSync(`open ${url}`);
-    else if (os.platform() === "linux") execSync(`xdg-open ${url}`);
-    else if (os.platform() === "win32") execSync(`start ${url}`);
-  } catch {
-    // Browser open is best-effort
+    execSync('go build -o ' + BINARY_NAME + ' .', {
+      cwd: __dirname,
+      stdio: 'inherit',
+    });
+  } catch (err) {
+    console.error('Failed to build apteva. Make sure Go is installed.');
+    console.error('Install Go: https://go.dev/dl/');
+    process.exit(1);
   }
-}, 1500);
+}
+
+// Run the binary, passing through all args and stdio
+const child = spawn(BINARY_PATH, process.argv.slice(2), {
+  stdio: 'inherit',
+  cwd: process.cwd(),
+});
+
+child.on('exit', (code) => process.exit(code || 0));
+child.on('error', (err) => {
+  console.error('Failed to start apteva:', err.message);
+  process.exit(1);
+});

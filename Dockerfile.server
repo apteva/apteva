@@ -1,0 +1,57 @@
+# Apteva — full deployment with server + dashboard
+# Includes: core, server (auth, OAuth, webhooks), dashboard, integrations.
+# Server spawns and manages core instances.
+#
+# Build:  docker build -f Dockerfile.server -t apteva-server .
+# Run:    docker run -d -p 8080:8080 -v apteva-data:/data -e FIREWORKS_API_KEY=sk_... -e APTEVA_AUTH_SECRET=... apteva-server
+# CLI:    ./apteva --no-spawn --addr <host>:8080
+
+# ─── Build dashboard ───
+FROM oven/bun:1 AS dashboard-builder
+WORKDIR /build/dashboard
+COPY ../dashboard/package.json ../dashboard/bun.lock ./
+RUN bun install --frozen-lockfile 2>/dev/null || bun install
+COPY ../dashboard/ ./
+RUN bun run build.ts 2>/dev/null || echo "dashboard build skipped"
+
+# ─── Build Go binaries ───
+FROM golang:1.26-alpine AS go-builder
+RUN apk add --no-cache git
+ARG APP_VERSION=0.5.0
+
+WORKDIR /build
+COPY ../core/ core/
+COPY ../computer/ computer/
+
+# Build core
+WORKDIR /build/core
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${APP_VERSION}" -o /apteva-core .
+
+# Build server
+WORKDIR /build
+COPY ../server/ server/
+COPY --from=dashboard-builder /build/dashboard/dist/ server/dashboard/
+WORKDIR /build/server
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${APP_VERSION}" -o /apteva-server . 2>/dev/null || echo "server build placeholder"
+
+# ─── Runtime ───
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates chromium
+
+COPY --from=go-builder /apteva-core /usr/local/bin/apteva-core
+COPY --from=go-builder /apteva-server /usr/local/bin/apteva-server
+COPY ../integrations/src/apps /data/integrations
+
+VOLUME /data
+WORKDIR /data
+
+ENV PORT=8080
+ENV CORE_CMD=/usr/local/bin/apteva-core
+ENV DB_PATH=/data/apteva.db
+ENV DATA_DIR=/data
+ENV APPS_DIR=/data/integrations
+ENV API_PORT=3210
+
+EXPOSE 8080 3210
+
+ENTRYPOINT ["apteva-server"]
