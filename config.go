@@ -9,9 +9,12 @@ import (
 // AptevaConfig holds the CLI/launcher config at ~/.apteva/apteva.json.
 type AptevaConfig struct {
 	Capabilities Capabilities `json:"capabilities"`
-	ServerPort   int          `json:"server_port,omitempty"`
-	APIKey       string       `json:"api_key,omitempty"`    // server API key for auth
-	InstanceID   int64        `json:"instance_id,omitempty"` // default instance ID
+	Remote       bool         `json:"remote,omitempty"`
+	ServerURL    string       `json:"server_url,omitempty"`  // remote server URL (e.g. "https://agents.example.com")
+	ServerPort   int          `json:"server_port,omitempty"` // local server port
+	APIKey       string       `json:"api_key,omitempty"`
+	InstanceID   int64        `json:"instance_id,omitempty"`
+	ProjectID    string       `json:"project_id,omitempty"`
 	UserID       int64        `json:"user_id,omitempty"`
 }
 
@@ -20,6 +23,7 @@ type Capabilities struct {
 	Browser      bool `json:"browser"`
 	Integrations bool `json:"integrations"`
 	Telegram     bool `json:"telegram"`
+	Projects     bool `json:"projects"`
 }
 
 // aptevaDir returns ~/.apteva/, creating it if needed.

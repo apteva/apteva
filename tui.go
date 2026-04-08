@@ -18,16 +18,131 @@ type statusMsg statusUpdate
 type connectedMsg struct{}
 type tickMsg time.Time
 type streamChunkMsg string    // incremental text from tool arg streaming
-type toolReasonMsg string     // _reason from a tool call, for spinner display
+type toolStartMsg struct {    // tool call started
+	ThreadID string
+	Name     string
+	Reason   string
+	CallID   string
+}
+type toolDoneMsg struct {     // tool call completed
+	ThreadID   string
+	Name       string
+	CallID     string
+	DurationMs int64
+	Success    bool
+}
 type eventReceivedMsg struct {    // event received by a thread
 	ThreadID string
 	Source   string
 	Message  string
 }
-type computerSelectMsg string    // re-dispatch /computer with selected value
+type settingsUpdatedMsg AptevaConfig    // settings toggled
+type providerPoolMsg struct {           // all providers fetched
+	providers []providerDetail
+}
+type providerDetail struct {
+	id                int64
+	ptype             string
+	name              string
+	isDefault         bool
+	currentLarge      string
+	currentMedium     string
+	currentSmall      string
+	builtinTools      []string
+	availableBuiltins []string
+	models            []struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		ContextSize int    `json:"context_size"`
+	}
+}
+type providerInfoMsg struct {           // single provider selected for editing
+	detail providerDetail
+}
+type providerModelSetMsg struct {       // model changed
+	tier  string // "large" or "small"
+	model string
+	err   error
+}
+type providerModelListMsg struct {      // model list ready for search modal
+	tier       string
+	providerID int64
+	items      []modalSearchItem
+	client     *coreClient
+}
+type providerAddMsg struct {            // add a new provider
+	client *coreClient
+}
+type providerAddedMsg struct {          // provider was added
+	ptype string
+	err   error
+}
+type providerNeedKeyMsg struct {        // need API key input for new provider
+	client *coreClient
+	ptype  string
+	envVar string
+	large  string
+	medium string
+	small  string
+}
+type builtinToolsToggleMsg struct {     // show toggle for built-in tools
+	providerID int64
+	available  []string
+	enabled    []string
+	items      []string
+	lines      []string
+	client     *coreClient
+}
+type projectsListMsg struct {           // projects fetched
+	projects []projectInfo
+}
+type projectInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+type projectSwitchedMsg struct {        // switched to a different project
+	projectID  string
+	projectName string
+	instanceID int64
+	err        error
+}
+type projectCreatedMsg struct {         // new project + instance created
+	projectID   string
+	projectName string
+	instanceID  int64
+	err         error
+}
+type integrateNextFieldMsg struct{}     // prompt next credential field
+type integrateFieldValueMsg string     // value entered for a credential field
+type directiveChangedMsg string        // directive evolved via SSE
+type modeChangedMsg string             // mode changed via SSE
+type threadDoneMsg string              // thread done via SSE
+type threadSpawnMsg struct {           // thread spawned via SSE
+	ID        string
+	Directive string
+}
+type sideSSEUpdate struct {            // side panel update from llm.done
+	ThreadID    string
+	Iteration   int
+	Rate        string
+	Model       string
+	MemoryCount int
+	ThreadCount int
+}
+type integrateListMsg struct {       // catalog fetched for searchable list
+	apps []struct {
+		Slug        string `json:"slug"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		ToolCount   int    `json:"tool_count"`
+	}
+	connected []string
+}
+type computerSelectMsg string       // re-dispatch /computer with selected value
 type browserbaseKeyMsg string    // API key entered, chain to project ID input
 type integrateConnectMsg struct { // integration connected result
 	slug  string
+	connID int64
 	tools int
 	err   error
 }
@@ -54,6 +169,42 @@ func (m integrateAppInfoMsg) Fields() []struct{ Name, Label, Description string 
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+type activeTool struct {
+	name     string
+	reason   string
+	callID   string
+	threadID string
+	lineIdx  int       // index in m.lines for in-place update
+	started  time.Time
+}
+
+type cmdDef struct {
+	name string
+	desc string
+	cap  string // required capability ("" = always shown)
+}
+
+var allCommands = []cmdDef{
+	{"/status", "core status", ""},
+	{"/config", "show config", ""},
+	{"/directive", "show/set directive", ""},
+	{"/mode", "set safety mode", ""},
+	{"/threads", "list/kill threads", ""},
+	{"/computer", "browser control", ""},
+	{"/provider", "switch provider/models", ""},
+	{"/integrate", "connect integrations", "integrations"},
+	{"/projects", "switch/create projects", "projects"},
+	{"/connect", "add gateway (telegram)", ""},
+	{"/disconnect", "remove gateway", ""},
+	{"/channels", "list channels", ""},
+	{"/mcp", "manage MCP servers", ""},
+	{"/settings", "toggle features", ""},
+	{"/pause", "toggle pause", ""},
+	{"/clear", "clear screen", ""},
+	{"/help", "all commands", ""},
+	{"/quit", "exit", ""},
+}
+
 type tuiModel struct {
 	th          theme
 	mcp         *mcpServer
@@ -71,7 +222,10 @@ type tuiModel struct {
 	streaming   bool // currently receiving streamed tool chunks
 	streamLine  int  // index into lines for the active streaming line
 	spinnerTick  int    // animation frame counter
-	toolReason   string // latest _reason from tool call, shown in spinner
+
+	// Tool call visualization
+	activeTools  map[string]*activeTool // callID → running tool
+	threadTools  map[string]string      // threadID → current tool display ("⟳ name")
 	statusLine   string
 	statusLevel  string
 	startTime    time.Time
@@ -93,8 +247,19 @@ type tuiModel struct {
 	aptevaCfg AptevaConfig
 	serverURL string // integration server URL (empty = no server)
 
+	// SSE reconnect support
+	sseDone    chan struct{}
+	teaProgram *tea.Program
+
 	// Gateways
 	telegramGW *TelegramGateway
+
+	// Integration credential collection (multi-field)
+	integrateSlug     string
+	integrateName     string
+	integrateFields   []struct{ Name, Label, Description string }
+	integrateCreds    map[string]string
+	integrateFieldIdx int
 
 	// Modal overlay — display, input, or select
 	modal        bool
@@ -108,6 +273,18 @@ type tuiModel struct {
 	modalItems   []string                    // selectable items
 	modalCursor  int                         // selected item index
 	modalOnSelect func(value string) tea.Cmd // callback when item selected
+
+	// Searchable list modal
+	modalSearch       bool                        // modal has search + filterable list
+	modalSearchAll    []modalSearchItem            // all items
+	modalSearchFiltered []modalSearchItem          // filtered items
+	modalSearchOnSelect     func(slug string) tea.Cmd  // callback
+	modalSearchCreateOnEmpty func(name string) tea.Cmd // callback when Enter with no results (create new)
+}
+
+type modalSearchItem struct {
+	slug  string
+	label string // display text
 }
 
 // sideData holds live data for the side panel.
@@ -176,14 +353,16 @@ func newTUI(th theme, mcp *mcpServer, client *coreClient, registry *ChannelRegis
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(th.Accent)
 
 	return tuiModel{
-		th:        th,
-		mcp:       mcp,
-		registry:  registry,
-		thoughts:  make(map[string]*threadThought),
-		events:    make(map[string]*threadEvent),
-		client:    client,
-		input:     ti,
-		startTime: time.Now(),
+		th:          th,
+		mcp:         mcp,
+		registry:    registry,
+		thoughts:    make(map[string]*threadThought),
+		events:      make(map[string]*threadEvent),
+		activeTools: make(map[string]*activeTool),
+		threadTools: make(map[string]string),
+		client:      client,
+		input:       ti,
+		startTime:   time.Now(),
 	}
 }
 
@@ -226,14 +405,36 @@ func pollSideData(client *coreClient) tea.Cmd {
 	return func() tea.Msg {
 		sd := &sideData{}
 
-		if st, err := client.status(); err == nil {
-			uptime, _ := st["uptime_seconds"].(float64)
-			iter, _ := st["iteration"].(float64)
-			rate, _ := st["rate"].(string)
-			model, _ := st["model"].(string)
-			mode, _ := st["mode"].(string)
-			paused, _ := st["paused"].(bool)
-			memories, _ := st["memories"].(float64)
+		// Run all three polls concurrently to avoid sequential blocking
+		type statusResult struct {
+			data map[string]any
+			err  error
+		}
+		type threadsResult struct {
+			data []map[string]any
+			err  error
+		}
+		type configResult struct {
+			data map[string]any
+			err  error
+		}
+
+		stCh := make(chan statusResult, 1)
+		thCh := make(chan threadsResult, 1)
+		cfgCh := make(chan configResult, 1)
+
+		go func() { d, e := client.status(); stCh <- statusResult{d, e} }()
+		go func() { d, e := client.threads(); thCh <- threadsResult{d, e} }()
+		go func() { d, e := client.getConfig(); cfgCh <- configResult{d, e} }()
+
+		if st := <-stCh; st.err == nil {
+			uptime, _ := st.data["uptime_seconds"].(float64)
+			iter, _ := st.data["iteration"].(float64)
+			rate, _ := st.data["rate"].(string)
+			model, _ := st.data["model"].(string)
+			mode, _ := st.data["mode"].(string)
+			paused, _ := st.data["paused"].(bool)
+			memories, _ := st.data["memories"].(float64)
 			sd.Uptime = formatDuration(time.Duration(uptime) * time.Second)
 			sd.Iteration = int(iter)
 			sd.Rate = rate
@@ -247,8 +448,8 @@ func pollSideData(client *coreClient) tea.Cmd {
 			}
 		}
 
-		if threads, err := client.threads(); err == nil {
-			for _, t := range threads {
+		if th := <-thCh; th.err == nil {
+			for _, t := range th.data {
 				id, _ := t["id"].(string)
 				rate, _ := t["rate"].(string)
 				iter, _ := t["iteration"].(float64)
@@ -256,10 +457,10 @@ func pollSideData(client *coreClient) tea.Cmd {
 			}
 		}
 
-		if cfg, err := client.getConfig(); err == nil {
-			directive, _ := cfg["directive"].(string)
+		if cfg := <-cfgCh; cfg.err == nil {
+			directive, _ := cfg.data["directive"].(string)
 			sd.Directive = directive
-			if comp, ok := cfg["computer"].(map[string]any); ok && comp != nil {
+			if comp, ok := cfg.data["computer"].(map[string]any); ok && comp != nil {
 				if connected, _ := comp["connected"].(bool); connected {
 					if t, ok := comp["type"].(string); ok {
 						sd.Computer = t
@@ -284,6 +485,24 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.closeModal()
 				return m, nil
 			case "enter":
+				// Search modal — select current item or create new
+				if m.modalSearch && m.modalSearchOnSelect != nil {
+					if len(m.modalSearchFiltered) > 0 && m.modalCursor < len(m.modalSearchFiltered) {
+						slug := m.modalSearchFiltered[m.modalCursor].slug
+						cb := m.modalSearchOnSelect
+						m.closeModal()
+						return m, cb(slug)
+					}
+					// No results — create new if handler exists
+					if m.modalSearchCreateOnEmpty != nil {
+						name := strings.TrimSpace(m.input.Value())
+						if name != "" {
+							cb := m.modalSearchCreateOnEmpty
+							m.closeModal()
+							return m, cb(name)
+						}
+					}
+				}
 				if m.modalInput && m.modalOnSubmit != nil {
 					value := strings.TrimSpace(m.input.Value())
 					m.input.SetValue("")
@@ -307,7 +526,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			case "up", "k":
-				if m.modalSelect {
+				if m.modalSearch || m.modalSelect {
 					if m.modalCursor > 0 {
 						m.modalCursor--
 					}
@@ -320,6 +539,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			case "down", "j":
+				if m.modalSearch {
+					if m.modalCursor < len(m.modalSearchFiltered)-1 {
+						m.modalCursor++
+					}
+					return m, nil
+				}
 				if m.modalSelect {
 					if m.modalCursor < len(m.modalItems)-1 {
 						m.modalCursor++
@@ -346,19 +571,69 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.modalInput {
 				var inputCmd tea.Cmd
 				m.input, inputCmd = m.input.Update(msg)
+				// Filter search results on every keystroke
+				if m.modalSearch {
+					query := strings.ToLower(strings.TrimSpace(m.input.Value()))
+					if query == "" {
+						m.modalSearchFiltered = m.modalSearchAll
+					} else {
+						var filtered []modalSearchItem
+						for _, item := range m.modalSearchAll {
+							if strings.Contains(strings.ToLower(item.slug), query) || strings.Contains(strings.ToLower(item.label), query) {
+								filtered = append(filtered, item)
+							}
+						}
+						m.modalSearchFiltered = filtered
+					}
+					m.modalCursor = 0
+				}
 				return m, inputCmd
 			}
 			return m, nil
 		}
-		switch msg.String() {
-		case "ctrl+c":
+		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+
+		switch msg.String() {
 		case "esc":
 			// no-op outside modal
+		case "tab":
+			// Autocomplete: fill first matching command
+			val := m.input.Value()
+			if strings.HasPrefix(val, "/") {
+				query := strings.ToLower(val)
+				for _, cmd := range allCommands {
+					if cmd.cap != "" {
+						switch cmd.cap {
+						case "integrations":
+							if !m.aptevaCfg.Capabilities.Integrations {
+								continue
+							}
+						}
+					}
+					if strings.HasPrefix(cmd.name, query) && cmd.name != query {
+						m.input.SetValue(cmd.name)
+						m.input.CursorEnd()
+						break
+					}
+				}
+			}
+			return m, nil
 		case "enter":
 			if m.waitingConnect {
+				text := strings.TrimSpace(m.input.Value())
+				if strings.HasPrefix(text, "/") {
+					// Command — run it without connecting
+					return m.handleInput()
+				}
+				// Connect first, then send the message if any
 				m.waitingConnect = false
 				go m.client.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Greet them now.", "main")
+				if text != "" {
+					// Also send the typed message
+					return m.handleInput()
+				}
 				return m, nil
 			}
 			return m.handleInput()
@@ -388,7 +663,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Start a new streaming line — add spacing if there's content above
 			m.streaming = true
 			m.waiting = false
-			m.toolReason = ""
+			// (tool reason now tracked via activeTools)
 			if len(m.lines) > 0 && m.lines[len(m.lines)-1].text != "" {
 				m.addLine("", "dim")
 			}
@@ -419,7 +694,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLine(string(msg), "output")
 		}
 		m.waiting = false
-		m.toolReason = ""
+		// (tool reason now tracked via activeTools)
 		m.scrollOff = 0
 		cmds = append(cmds, listenRespond(m.cliRespond))
 
@@ -453,8 +728,110 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case toolReasonMsg:
-		m.toolReason = string(msg)
+	case toolStartMsg:
+		isChannel := strings.HasPrefix(msg.Name, "channels_")
+		// Channel tools: update side panel only, don't add chat line
+		if isChannel {
+			m.threadTools[msg.ThreadID] = "⟳ " + msg.Name
+			if m.sideStatus != nil && msg.ThreadID != "main" {
+				found := false
+				for _, t := range m.sideStatus.Threads {
+					if t.ID == msg.ThreadID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					m.sideStatus.Threads = append(m.sideStatus.Threads, sideThread{ID: msg.ThreadID})
+				}
+			}
+			return m, nil
+		}
+		callID := msg.CallID
+		if callID == "" {
+			callID = msg.Name + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+		// Add a "running" line to chat
+		label := "  ⟳ " + msg.Name
+		if msg.Reason != "" {
+			label += " — " + msg.Reason
+		}
+		m.addLine(label, "tool-active")
+		lineIdx := len(m.lines) - 1
+
+		m.activeTools[callID] = &activeTool{
+			name:     msg.Name,
+			reason:   msg.Reason,
+			callID:   callID,
+			threadID: msg.ThreadID,
+			lineIdx:  lineIdx,
+			started:  time.Now(),
+		}
+		m.threadTools[msg.ThreadID] = "⟳ " + msg.Name
+		// Ensure thread exists in side panel
+		if m.sideStatus != nil && msg.ThreadID != "main" {
+			found := false
+			for _, t := range m.sideStatus.Threads {
+				if t.ID == msg.ThreadID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				m.sideStatus.Threads = append(m.sideStatus.Threads, sideThread{ID: msg.ThreadID})
+			}
+		}
+		m.scrollOff = 0
+		return m, nil
+
+	case toolDoneMsg:
+		if strings.HasPrefix(msg.Name, "channels_") {
+			// Clear thread tool in side panel
+			hasActive := false
+			for _, t := range m.activeTools {
+				if t.threadID == msg.ThreadID {
+					hasActive = true
+					break
+				}
+			}
+			if !hasActive {
+				delete(m.threadTools, msg.ThreadID)
+			}
+			return m, nil
+		}
+		callID := msg.CallID
+		at, ok := m.activeTools[callID]
+		if ok {
+			// Replace the running line in-place
+			dur := fmt.Sprintf("%dms", msg.DurationMs)
+			if msg.DurationMs >= 1000 {
+				dur = fmt.Sprintf("%.1fs", float64(msg.DurationMs)/1000)
+			}
+			doneText := "  ✓ " + msg.Name + " (" + dur + ")"
+			if at.lineIdx >= 0 && at.lineIdx < len(m.lines) {
+				m.lines[at.lineIdx].text = doneText
+				m.lines[at.lineIdx].style = "tool-done"
+			}
+			delete(m.activeTools, callID)
+			// Clear thread tool if no more active tools for this thread
+			hasActive := false
+			for _, t := range m.activeTools {
+				if t.threadID == msg.ThreadID {
+					hasActive = true
+					break
+				}
+			}
+			if !hasActive {
+				delete(m.threadTools, msg.ThreadID)
+			}
+		} else {
+			// No matching start — just show done line
+			dur := fmt.Sprintf("%dms", msg.DurationMs)
+			if msg.DurationMs >= 1000 {
+				dur = fmt.Sprintf("%.1fs", float64(msg.DurationMs)/1000)
+			}
+			m.addLine("  ✓ "+msg.Name+" ("+dur+")", "tool-done")
+		}
 		return m, nil
 
 	case integrateAppInfoMsg:
@@ -463,50 +840,67 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openModal("INTEGRATE", []string{"", "  No credential fields for " + msg.Name})
 			return m, nil
 		}
-		field := fields[0]
+		// Start collecting credentials — prompt for first field, chain the rest
+		m.integrateSlug = msg.Slug
+		m.integrateName = msg.Name
+		m.integrateFields = fields
+		m.integrateCreds = make(map[string]string)
+		m.integrateFieldIdx = 0
+		return m, func() tea.Msg { return integrateNextFieldMsg{} }
+
+	case integrateNextFieldMsg:
+		idx := m.integrateFieldIdx
+		fields := m.integrateFields
+		if idx >= len(fields) {
+			// All fields collected — create connection
+			cli := m.client
+			slug := m.integrateSlug
+			creds := m.integrateCreds
+			return m, func() tea.Msg {
+				body, _ := json.Marshal(map[string]any{
+					"app_slug":    slug,
+					"name":        slug,
+					"auth_type":   "api_key",
+					"credentials": creds,
+				})
+				respData, err := cli.serverPost("/connections", body)
+				if err != nil {
+					return integrateConnectMsg{slug: slug, err: err}
+				}
+				var result struct {
+					ID int64 `json:"id"`
+				}
+				json.Unmarshal(respData, &result)
+				if result.ID == 0 {
+					return integrateConnectMsg{slug: slug, err: fmt.Errorf("connection failed")}
+				}
+				return integrateConnectMsg{slug: slug, connID: result.ID}
+			}
+		}
+		// Prompt for current field
+		field := fields[idx]
 		label := field.Label
 		if label == "" {
 			label = field.Name
 		}
 		desc := field.Description
 		if desc == "" {
-			desc = fmt.Sprintf("Enter your %s %s", msg.Name, label)
+			desc = fmt.Sprintf("Enter your %s %s", m.integrateName, label)
 		}
-		cli := m.client
-		slug := msg.Slug
-		appName := msg.Name
-		fieldName := field.Name
-		m.openInputModal(
-			"CONNECT "+strings.ToUpper(appName),
-			[]string{"", "  " + desc, ""},
-			label,
-			func(value string) tea.Cmd {
-				return func() tea.Msg {
-					// Create connection via server API
-					body, _ := json.Marshal(map[string]any{
-						"app_slug":  slug,
-						"name":      slug,
-						"auth_type": "api_key",
-						"credentials": map[string]string{
-							fieldName: value,
-						},
-					})
-					respData, err := cli.serverPost("/connections", body)
-					if err != nil {
-						return integrateConnectMsg{slug: slug, err: err}
-					}
-					var result struct {
-						ID int64 `json:"id"`
-					}
-					json.Unmarshal(respData, &result)
-					if result.ID == 0 {
-						return integrateConnectMsg{slug: slug, err: fmt.Errorf("connection failed")}
-					}
-					return integrateConnectMsg{slug: slug, tools: 0} // tool count fetched later
-				}
-			},
-		)
+		title := fmt.Sprintf("CONNECT %s (%d/%d)", strings.ToUpper(m.integrateName), idx+1, len(fields))
+		m.openInputModal(title, []string{"", "  " + desc, ""}, label, func(value string) tea.Cmd {
+			return func() tea.Msg {
+				return integrateFieldValueMsg(value)
+			}
+		})
 		return m, nil
+
+	case integrateFieldValueMsg:
+		// Store the value and advance to next field
+		field := m.integrateFields[m.integrateFieldIdx]
+		m.integrateCreds[field.Name] = string(msg)
+		m.integrateFieldIdx++
+		return m, func() tea.Msg { return integrateNextFieldMsg{} }
 
 	case integrateConnectMsg:
 		if msg.err != nil {
@@ -514,13 +908,486 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.openModal(strings.ToUpper(msg.slug)+" CONNECTED", []string{
 				"",
-				fmt.Sprintf("  %d tools registered.", msg.tools),
+				"  Connection created.",
 				"",
-				"  The agent can now use this integration.",
+				"  The agent will discover and connect to it.",
 				"",
 				"  Press Esc to close.",
 			})
+			// Notify the agent with the MCP URL so it can connect directly
+			mcpURL := fmt.Sprintf("http://127.0.0.1:%d/mcp/%d", m.aptevaCfg.ServerPort, msg.connID)
+			go m.client.sendEvent(fmt.Sprintf(
+				"[system] New integration connected: %s. Connect to it now: [[connect name=\"%s\" url=\"%s\" transport=\"http\"]]",
+				msg.slug, msg.slug, mcpURL), "main")
 		}
+		return m, nil
+
+	case integrateListMsg:
+		// Auto-download catalog if empty
+		if len(msg.apps) == 0 && m.serverURL != "" {
+			m.addLine("Downloading integration catalog...", "dim")
+			cli := m.client
+			return m, func() tea.Msg {
+				cli.serverPost("/integrations/catalog/download", nil)
+				// Re-fetch after download
+				data, err := cli.serverGet("/integrations/catalog")
+				if err != nil {
+					return modalMsg{title: "INTEGRATIONS", text: "  Download failed."}
+				}
+				var apps []struct {
+					Slug        string `json:"slug"`
+					Name        string `json:"name"`
+					Description string `json:"description"`
+					ToolCount   int    `json:"tool_count"`
+				}
+				json.Unmarshal(data, &apps)
+				return integrateListMsg{apps: apps, connected: msg.connected}
+			}
+		}
+		// Build header with connected apps
+		var header []string
+		connSet := make(map[string]bool)
+		for _, s := range msg.connected {
+			connSet[s] = true
+		}
+		if len(msg.connected) > 0 {
+			header = append(header, fmt.Sprintf("  Connected: %d", len(msg.connected)))
+			for _, s := range msg.connected {
+				header = append(header, fmt.Sprintf("    ✓ %s", s))
+			}
+			header = append(header, "")
+		}
+		header = append(header, fmt.Sprintf("  Available: %d apps", len(msg.apps)))
+		header = append(header, "")
+		// Build search items
+		var items []modalSearchItem
+		for _, app := range msg.apps {
+			prefix := "  "
+			if connSet[app.Slug] {
+				prefix = "✓ "
+			}
+			items = append(items, modalSearchItem{
+				slug:  app.Slug,
+				label: fmt.Sprintf("%s%-18s %s (%d tools)", prefix, app.Slug, app.Name, app.ToolCount),
+			})
+		}
+		cli := m.client
+		connSetCopy := connSet
+		m.openSearchModal("INTEGRATIONS", header, items, func(slug string) tea.Cmd {
+			if connSetCopy[slug] {
+				// Already connected — disconnect
+				return func() tea.Msg {
+					// Find connection ID
+					data, err := cli.serverGet("/connections")
+					if err != nil {
+						return modalMsg{title: "INTEGRATE", text: "  ERROR: " + err.Error()}
+					}
+					var conns []struct {
+						ID      int64  `json:"id"`
+						AppSlug string `json:"app_slug"`
+					}
+					json.Unmarshal(data, &conns)
+					for _, c := range conns {
+						if c.AppSlug == slug {
+							cli.serverDelete(fmt.Sprintf("/connections/%d", c.ID))
+							return modalMsg{title: "DISCONNECTED", text: fmt.Sprintf("  %s disconnected.", slug)}
+						}
+					}
+					return modalMsg{title: "INTEGRATE", text: "  Connection not found."}
+				}
+			}
+			// Not connected — fetch app info and prompt for credentials
+			return func() tea.Msg {
+				data, err := cli.serverGet("/integrations/catalog/" + slug)
+				if err != nil {
+					return modalMsg{title: "INTEGRATE", text: fmt.Sprintf("  App not found: %s", slug)}
+				}
+				var info integrateAppInfoMsg
+				json.Unmarshal(data, &info)
+				if info.Name == "" {
+					return modalMsg{title: "INTEGRATE", text: fmt.Sprintf("  App not found: %s", slug)}
+				}
+				info.Slug = slug
+				return info
+			}
+		})
+		return m, nil
+
+	case projectsListMsg:
+		var lines []string
+		lines = append(lines, fmt.Sprintf("  %d projects", len(msg.projects)))
+		lines = append(lines, "")
+		lines = append(lines, "  Select to switch, or type a new name to create:")
+		lines = append(lines, "")
+		cli := m.client
+		mcpURL := m.mcp.url()
+		projects := msg.projects
+		// Build search items — include a "+" create option
+		var si []modalSearchItem
+		for _, p := range projects {
+			label := p.Name
+			if p.ID == m.aptevaCfg.ProjectID {
+				label = "✓ " + label
+			} else {
+				label = "  " + label
+			}
+			si = append(si, modalSearchItem{slug: p.ID, label: label})
+		}
+		m.openSearchModal("PROJECTS", lines, si, func(selected string) tea.Cmd {
+			// Check if selected is an existing project ID
+			for _, p := range projects {
+				if p.ID == selected {
+					if selected == m.aptevaCfg.ProjectID {
+						return func() tea.Msg {
+							return modalMsg{title: "PROJECTS", text: fmt.Sprintf("  Already on: %s", p.Name)}
+						}
+					}
+					name := p.Name
+					return func() tea.Msg {
+						data, err := cli.serverGet("/instances?project_id=" + selected)
+						if err != nil {
+							return projectSwitchedMsg{err: err}
+						}
+						var instances []struct {
+							ID int64 `json:"id"`
+						}
+						json.Unmarshal(data, &instances)
+						if len(instances) == 0 {
+							return projectSwitchedMsg{err: fmt.Errorf("no instance in project %s", name)}
+						}
+						cli.switchInstance(instances[0].ID, mcpName, mcpURL)
+						return projectSwitchedMsg{projectID: selected, projectName: name, instanceID: instances[0].ID}
+					}
+				}
+			}
+			// Not found — this is a search query, not a project ID
+			// If there are no filtered results, treat the search text as a new project name
+			return nil
+		})
+		// Override: when Enter is pressed with no matching result, create a new project
+		m.modalSearchCreateOnEmpty = func(name string) tea.Cmd {
+			return func() tea.Msg {
+				projBody, _ := json.Marshal(map[string]string{"name": name})
+				projData, err := cli.serverPost("/projects", projBody)
+				if err != nil {
+					return projectCreatedMsg{err: err}
+				}
+				var proj struct{ ID string `json:"id"` }
+				json.Unmarshal(projData, &proj)
+				instBody, _ := json.Marshal(map[string]any{
+					"name":       name,
+					"directive":  "You are a helpful assistant.",
+					"mode":       "autonomous",
+					"project_id": proj.ID,
+				})
+				instData, _ := cli.serverPost("/instances", instBody)
+				var inst struct{ ID int64 `json:"id"` }
+				json.Unmarshal(instData, &inst)
+				cli.switchInstance(inst.ID, mcpName, mcpURL)
+				return projectCreatedMsg{projectID: proj.ID, projectName: name, instanceID: inst.ID}
+			}
+		}
+		return m, nil
+
+	case projectSwitchedMsg:
+		if msg.err != nil {
+			m.openModal("PROJECT ERROR", []string{"", "  " + msg.err.Error()})
+		} else {
+			m.aptevaCfg.ProjectID = msg.projectID
+			m.aptevaCfg.InstanceID = msg.instanceID
+			saveAptevaConfig(m.aptevaCfg)
+			m.cleanProjectSwitch(msg.projectName)
+		}
+		return m, nil
+
+	case projectCreatedMsg:
+		if msg.err != nil {
+			m.openModal("PROJECT ERROR", []string{"", "  " + msg.err.Error()})
+		} else {
+			m.aptevaCfg.ProjectID = msg.projectID
+			m.aptevaCfg.InstanceID = msg.instanceID
+			saveAptevaConfig(m.aptevaCfg)
+			m.cleanProjectSwitch(msg.projectName)
+		}
+		return m, nil
+
+	case providerPoolMsg:
+		var lines []string
+		var items []string
+
+		for _, p := range msg.providers {
+			marker := "  ○"
+			if p.isDefault {
+				marker = "  ●"
+			}
+			label := fmt.Sprintf("%s %s", marker, p.ptype)
+			if p.isDefault {
+				label += " (default)"
+			}
+			lines = append(lines, label)
+			lg := p.currentLarge
+			if lg == "" {
+				lg = "(default)"
+			}
+			sm := p.currentSmall
+			if sm == "" {
+				sm = "(default)"
+			}
+			lines = append(lines, fmt.Sprintf("    large: %s  small: %s", lg, sm))
+			if len(p.builtinTools) > 0 {
+				lines = append(lines, fmt.Sprintf("    built-in: %s", strings.Join(p.builtinTools, ", ")))
+			}
+			lines = append(lines, "")
+			items = append(items, p.ptype)
+		}
+		items = append(items, "add provider")
+
+		allProviders := msg.providers
+		cli := m.client
+		m.openSelectModal("PROVIDERS", lines, items, "", func(selected string) tea.Cmd {
+			if selected == "add provider" {
+				return func() tea.Msg {
+					return providerAddMsg{client: cli}
+				}
+			}
+			// Find the selected provider
+			for _, p := range allProviders {
+				if p.ptype == selected {
+					detail := p
+					return func() tea.Msg {
+						return providerInfoMsg{detail: detail}
+					}
+				}
+			}
+			return nil
+		})
+		return m, nil
+
+	case providerInfoMsg:
+		p := msg.detail
+		var lines []string
+		lines = append(lines, fmt.Sprintf("  Provider: %s", p.ptype))
+		if p.isDefault {
+			lines = append(lines, "  Status:   default")
+		}
+		lines = append(lines, fmt.Sprintf("  Large:    %s", p.currentLarge))
+		lines = append(lines, fmt.Sprintf("  Medium:   %s", p.currentMedium))
+		lines = append(lines, fmt.Sprintf("  Small:    %s", p.currentSmall))
+		if len(p.builtinTools) > 0 {
+			lines = append(lines, fmt.Sprintf("  Built-in: %s", strings.Join(p.builtinTools, ", ")))
+		}
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("  %d models available", len(p.models)))
+		lines = append(lines, "")
+
+		items := []string{"large model", "medium model", "small model"}
+		if len(p.availableBuiltins) > 0 {
+			items = append(items, "toggle built-in tools")
+		}
+		if !p.isDefault {
+			items = append(items, "set as default")
+		}
+		items = append(items, "remove provider")
+
+		cli := m.client
+		providerID := p.id
+		models := p.models
+		builtins := p.builtinTools
+		availBuiltins := p.availableBuiltins
+		m.openSelectModal("PROVIDER — "+strings.ToUpper(p.ptype), lines, items, "", func(selected string) tea.Cmd {
+			if selected == "toggle built-in tools" {
+				enabledSet := make(map[string]bool)
+				for _, b := range builtins {
+					enabledSet[b] = true
+				}
+				var toggleItems []string
+				var toggleLines []string
+				toggleLines = append(toggleLines, "")
+				for _, b := range availBuiltins {
+					check := "[ ]"
+					if enabledSet[b] {
+						check = "[x]"
+					}
+					toggleLines = append(toggleLines, fmt.Sprintf("  %s %s", check, b))
+					toggleItems = append(toggleItems, b)
+				}
+				toggleLines = append(toggleLines, "")
+				toggleLines = append(toggleLines, "  Select to toggle:")
+				return func() tea.Msg {
+					return builtinToolsToggleMsg{providerID: providerID, available: availBuiltins, enabled: builtins, items: toggleItems, lines: toggleLines, client: cli}
+				}
+			}
+			if selected == "set as default" {
+				return func() tea.Msg {
+					// Move this provider to first position by deleting and re-creating
+					// For now, just show confirmation
+					return modalMsg{title: "DEFAULT", text: fmt.Sprintf("  Set %s as default.\n  Restart instance to apply.", p.ptype)}
+				}
+			}
+			if selected == "remove provider" {
+				return func() tea.Msg {
+					err := cli.serverDelete(fmt.Sprintf("/providers/%d", providerID))
+					if err != nil {
+						return modalMsg{title: "ERROR", text: "  " + err.Error()}
+					}
+					return modalMsg{title: "REMOVED", text: fmt.Sprintf("  Provider %s removed.\n  Restart instance to apply.", p.ptype)}
+				}
+			}
+			// Model change
+			tier := strings.TrimSuffix(selected, " model")
+			var si []modalSearchItem
+			for _, model := range models {
+				label := model.ID
+				if model.ContextSize > 0 {
+					label = fmt.Sprintf("%-40s %dK ctx", model.ID, model.ContextSize/1024)
+				}
+				si = append(si, modalSearchItem{slug: model.ID, label: label})
+			}
+			return func() tea.Msg {
+				return providerModelListMsg{tier: tier, providerID: providerID, items: si, client: cli}
+			}
+		})
+		return m, nil
+
+	case providerAddMsg:
+		cli := msg.client
+		providerTypes := []string{"fireworks", "openai", "anthropic", "google", "ollama"}
+		m.openSelectModal("ADD PROVIDER", []string{"", "  Select provider type:", ""}, providerTypes, "", func(selected string) tea.Cmd {
+			p := getProviderByName(selected)
+			if p == nil {
+				return func() tea.Msg {
+					return modalMsg{title: "ERROR", text: fmt.Sprintf("  Unknown provider: %s", selected)}
+				}
+			}
+			if selected == "ollama" {
+				// No API key needed
+				return func() tea.Msg {
+					body, _ := json.Marshal(map[string]any{
+						"type": selected, "name": selected,
+						"data": map[string]string{
+							"model_large":  p.Large,
+							"model_medium": p.Medium,
+							"model_small":  p.Small,
+						},
+					})
+					_, err := cli.serverPost("/providers", body)
+					return providerAddedMsg{ptype: selected, err: err}
+				}
+			}
+			// Need API key — return msg to trigger input modal
+			provName := selected
+			envVar := p.EnvVar
+			lg, md, sm := p.Large, p.Medium, p.Small
+			return func() tea.Msg {
+				return providerNeedKeyMsg{client: cli, ptype: provName, envVar: envVar, large: lg, medium: md, small: sm}
+			}
+		})
+		return m, nil
+
+	case providerNeedKeyMsg:
+		cli := msg.client
+		ptype := msg.ptype
+		envVar := msg.envVar
+		lg, md, sm := msg.large, msg.medium, msg.small
+		m.openInputModal(strings.ToUpper(ptype)+" API KEY", []string{"", "  Enter API key:", ""}, "Key", func(apiKey string) tea.Cmd {
+			return func() tea.Msg {
+				body, _ := json.Marshal(map[string]any{
+					"type": ptype, "name": ptype,
+					"data": map[string]string{
+						envVar:         apiKey,
+						"model_large":  lg,
+						"model_medium": md,
+						"model_small":  sm,
+					},
+				})
+				_, err := cli.serverPost("/providers", body)
+				return providerAddedMsg{ptype: ptype, err: err}
+			}
+		})
+		return m, nil
+
+	case providerAddedMsg:
+		if msg.err != nil {
+			m.openModal("ERROR", []string{"", "  " + msg.err.Error()})
+		} else {
+			m.openModal("PROVIDER ADDED", []string{"", fmt.Sprintf("  %s added successfully.", msg.ptype), "", "  Restart instance to apply."})
+		}
+		return m, nil
+
+	case providerModelListMsg:
+		m.openSearchModal(
+			fmt.Sprintf("%s MODEL", strings.ToUpper(msg.tier)),
+			[]string{"", "  Select a model:", ""},
+			msg.items,
+			func(modelID string) tea.Cmd {
+				cli := msg.client
+				providerID := msg.providerID
+				tier := msg.tier
+				return func() tea.Msg {
+					// Update provider
+					body, _ := json.Marshal(map[string]any{
+						"data_update": map[string]string{
+							"model_" + tier: modelID,
+						},
+					})
+					_, err := cli.serverPost(fmt.Sprintf("/providers/%d", providerID), body)
+					if err != nil {
+						return providerModelSetMsg{tier: tier, err: err}
+					}
+					return providerModelSetMsg{tier: tier, model: modelID}
+				}
+			},
+		)
+		return m, nil
+
+	case builtinToolsToggleMsg:
+		cli := msg.client
+		providerID := msg.providerID
+		enabled := msg.enabled
+		m.openSelectModal("BUILT-IN TOOLS", msg.lines, msg.items, "", func(tool string) tea.Cmd {
+			// Toggle: add if not present, remove if present
+			enabledSet := make(map[string]bool)
+			for _, b := range enabled {
+				enabledSet[b] = true
+			}
+			if enabledSet[tool] {
+				delete(enabledSet, tool)
+			} else {
+				enabledSet[tool] = true
+			}
+			var newEnabled []string
+			for b := range enabledSet {
+				newEnabled = append(newEnabled, b)
+			}
+			btJSON, _ := json.Marshal(newEnabled)
+			return func() tea.Msg {
+				body, _ := json.Marshal(map[string]any{
+					"data_update": map[string]string{
+						"builtin_tools": string(btJSON),
+					},
+				})
+				_, err := cli.serverPost(fmt.Sprintf("/providers/%d", providerID), body)
+				if err != nil {
+					return providerModelSetMsg{tier: "builtin", err: err}
+				}
+				return providerModelSetMsg{tier: "builtin", model: strings.Join(newEnabled, ", ")}
+			}
+		})
+		return m, nil
+
+	case providerModelSetMsg:
+		if msg.err != nil {
+			m.openModal("PROVIDER", []string{"", "  ERROR: " + msg.err.Error()})
+		} else {
+			m.openModal("PROVIDER", []string{"", fmt.Sprintf("  %s model set to: %s", msg.tier, msg.model), "", "  Restart instance to apply."})
+		}
+		return m, nil
+
+	case settingsUpdatedMsg:
+		m.aptevaCfg = AptevaConfig(msg)
+		status := fmt.Sprintf("  tools=%v  browser=%v  integrations=%v  telegram=%v  projects=%v",
+			msg.Capabilities.Tools, msg.Capabilities.Browser, msg.Capabilities.Integrations, msg.Capabilities.Telegram, msg.Capabilities.Projects)
+		m.openModal("SETTINGS UPDATED", []string{"", status, "", "  Changes take effect immediately.", "", "  Press Esc to close."})
 		return m, nil
 
 	case computerSelectMsg:
@@ -557,7 +1424,105 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case sideDataMsg:
-		m.sideStatus = msg
+		// Merge poll data into existing sideStatus to preserve SSE-injected state
+		if m.sideStatus == nil {
+			m.sideStatus = msg
+		} else {
+			m.sideStatus.Uptime = msg.Uptime
+			m.sideStatus.Status = msg.Status
+			m.sideStatus.Mode = msg.Mode
+			m.sideStatus.Directive = msg.Directive
+			m.sideStatus.Computer = msg.Computer
+			m.sideStatus.Memories = msg.Memories
+			// Only overwrite iteration/rate/model if poll has newer data
+			if msg.Iteration >= m.sideStatus.Iteration {
+				m.sideStatus.Iteration = msg.Iteration
+				m.sideStatus.Rate = msg.Rate
+				m.sideStatus.Model = msg.Model
+			}
+			// Merge thread list — update existing, add new, but don't remove SSE-added threads
+			pollThreads := make(map[string]sideThread)
+			for _, t := range msg.Threads {
+				pollThreads[t.ID] = t
+			}
+			for i, t := range m.sideStatus.Threads {
+				if pt, ok := pollThreads[t.ID]; ok {
+					m.sideStatus.Threads[i].Iter = pt.Iter
+					m.sideStatus.Threads[i].Rate = pt.Rate
+					delete(pollThreads, t.ID)
+				}
+			}
+			for _, pt := range pollThreads {
+				m.sideStatus.Threads = append(m.sideStatus.Threads, pt)
+			}
+		}
+		return m, nil
+
+	case sideSSEUpdate:
+		if m.sideStatus == nil {
+			m.sideStatus = &sideData{}
+		}
+		m.sideStatus.Status = "RUNNING"
+		m.sideStatus.Uptime = formatDuration(time.Since(m.startTime))
+		m.sideStatus.Memories = msg.MemoryCount
+		// Only update global status from main thread
+		if msg.ThreadID == "main" || msg.ThreadID == "" {
+			m.sideStatus.Iteration = msg.Iteration
+			m.sideStatus.Rate = msg.Rate
+			m.sideStatus.Model = msg.Model
+		}
+		// Update thread in list
+		found := false
+		for i, t := range m.sideStatus.Threads {
+			if t.ID == msg.ThreadID {
+				m.sideStatus.Threads[i].Iter = msg.Iteration
+				m.sideStatus.Threads[i].Rate = msg.Rate
+				found = true
+				break
+			}
+		}
+		if !found && msg.ThreadID != "" {
+			m.sideStatus.Threads = append(m.sideStatus.Threads, sideThread{
+				ID: msg.ThreadID, Rate: msg.Rate, Iter: msg.Iteration,
+			})
+		}
+		return m, nil
+
+	case threadSpawnMsg:
+		if m.sideStatus == nil {
+			m.sideStatus = &sideData{}
+		}
+		m.sideStatus.Threads = append(m.sideStatus.Threads, sideThread{
+			ID: msg.ID, Rate: "reactive", Iter: 0,
+		})
+		return m, nil
+
+	case threadDoneMsg:
+		if m.sideStatus != nil {
+			id := string(msg)
+			var kept []sideThread
+			for _, t := range m.sideStatus.Threads {
+				if t.ID != id {
+					kept = append(kept, t)
+				}
+			}
+			m.sideStatus.Threads = kept
+		}
+		// Clean up thought/event data
+		delete(m.thoughts, string(msg))
+		delete(m.events, string(msg))
+		return m, nil
+
+	case directiveChangedMsg:
+		if m.sideStatus != nil {
+			m.sideStatus.Directive = string(msg)
+		}
+		return m, nil
+
+	case modeChangedMsg:
+		if m.sideStatus != nil {
+			m.sideStatus.Mode = string(msg)
+		}
 		return m, nil
 
 	case thoughtMsg:
@@ -571,10 +1536,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.spinnerTick++
 		m.pollCounter++
-		// Poll every ~3s (20 ticks * 150ms)
-		if m.pollCounter-m.lastPollTick >= 20 {
+		// Poll every ~5s for thread list + status (SSE handles thoughts/events in real-time)
+		if m.pollCounter-m.lastPollTick >= 33 { // 33 * 150ms = ~5s
 			m.lastPollTick = m.pollCounter
 			cmds = append(cmds, pollSideData(m.client))
+		}
+		// Update uptime locally
+		if m.sideStatus != nil {
+			m.sideStatus.Uptime = formatDuration(time.Since(m.startTime))
 		}
 		cmds = append(cmds, tickEvery())
 
@@ -964,6 +1933,70 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 			m.openModal("COMPUTER", []string{"", fmt.Sprintf("  Unknown type: %s", rest), "", "  Available: local, browserbase, off"})
 		}
 
+	case "/provider":
+		cli := m.client
+		return *m, func() tea.Msg {
+			data, err := cli.serverGet("/providers")
+			if err != nil {
+				return modalMsg{title: "PROVIDERS", text: "  ERROR: " + err.Error()}
+			}
+			var providers []struct {
+				ID   int64  `json:"id"`
+				Type string `json:"type"`
+				Name string `json:"name"`
+			}
+			json.Unmarshal(data, &providers)
+			if len(providers) == 0 {
+				return modalMsg{title: "PROVIDERS", text: "  No provider configured.\n  Run /setup to add one."}
+			}
+
+			// Available built-in tools per provider type
+			availableBuiltins := map[string][]string{
+				"anthropic": {"code_execution", "web_search"},
+				"openai":    {"code_interpreter"},
+				"google":    {"code_execution"},
+			}
+
+			var details []providerDetail
+			for i, p := range providers {
+				// Only include LLM providers
+				switch strings.ToLower(p.Type) {
+				case "fireworks", "openai", "anthropic", "google", "ollama":
+				default:
+					continue
+				}
+
+				detail := providerDetail{
+					id:        p.ID,
+					ptype:     p.Type,
+					name:      p.Name,
+					isDefault: i == 0, // first LLM provider = default
+				}
+
+				// Get model list
+				modelData, _ := cli.serverGet(fmt.Sprintf("/providers/%d/models", p.ID))
+				json.Unmarshal(modelData, &detail.models)
+
+				// Get current config
+				cfgData, _ := cli.serverGet(fmt.Sprintf("/providers/%d", p.ID))
+				var provCfg struct {
+					Data map[string]string `json:"data"`
+				}
+				json.Unmarshal(cfgData, &provCfg)
+				detail.currentLarge = provCfg.Data["model_large"]
+				detail.currentMedium = provCfg.Data["model_medium"]
+				detail.currentSmall = provCfg.Data["model_small"]
+				if bt := provCfg.Data["builtin_tools"]; bt != "" {
+					json.Unmarshal([]byte(bt), &detail.builtinTools)
+				}
+				detail.availableBuiltins = availableBuiltins[p.Type]
+
+				details = append(details, detail)
+			}
+
+			return providerPoolMsg{providers: details}
+		}
+
 	case "/mcp":
 		rest := strings.TrimSpace(strings.TrimPrefix(text, "/mcp"))
 		cli := m.client
@@ -1065,36 +2098,32 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 		rest := strings.TrimSpace(strings.TrimPrefix(text, "/integrate"))
 		cli := m.client
 		if rest == "" {
-			// List connected + available via server API
+			// Fetch apps and show searchable list
 			return *m, func() tea.Msg {
-				var lines []string
 				// Fetch connected
+				var connectedSlugs []string
 				if data, err := cli.serverGet("/connections"); err == nil {
 					var connected []struct {
 						AppSlug string `json:"app_slug"`
-						AppName string `json:"app_name"`
 					}
 					json.Unmarshal(data, &connected)
-					if len(connected) > 0 {
-						lines = append(lines, fmt.Sprintf("  Connected: %d", len(connected)))
-						for _, c := range connected {
-							lines = append(lines, fmt.Sprintf("    ✓ %s (%s)", c.AppSlug, c.AppName))
-						}
-						lines = append(lines, "")
+					for _, c := range connected {
+						connectedSlugs = append(connectedSlugs, c.AppSlug)
 					}
 				}
-				// Fetch available count
-				if data, err := cli.serverGet("/integrations/catalog"); err == nil {
-					var apps []any
-					json.Unmarshal(data, &apps)
-					lines = append(lines, fmt.Sprintf("  Available: %d apps", len(apps)))
+				// Fetch catalog
+				data, err := cli.serverGet("/integrations/catalog")
+				if err != nil {
+					return modalMsg{title: "INTEGRATIONS", text: fmt.Sprintf("  ERROR: %v", err)}
 				}
-				lines = append(lines, "")
-				lines = append(lines, "  Usage:")
-				lines = append(lines, "  /integrate <app>          connect an app")
-				lines = append(lines, "  /integrate search <query> search apps")
-				lines = append(lines, "  /integrate disconnect <id>")
-				return modalMsg{title: "INTEGRATIONS", text: strings.Join(lines, "\n")}
+				var apps []struct {
+					Slug        string `json:"slug"`
+					Name        string `json:"name"`
+					Description string `json:"description"`
+					ToolCount   int    `json:"tool_count"`
+				}
+				json.Unmarshal(data, &apps)
+				return integrateListMsg{apps: apps, connected: connectedSlugs}
 			}
 		}
 		// /integrate disconnect <id>
@@ -1154,8 +2183,119 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 			return info
 		}
 
+	case "/projects":
+		if !m.aptevaCfg.Capabilities.Projects {
+			m.openModal("PROJECTS", []string{"", "  Projects not enabled.", "  Use /settings to enable."})
+			return *m, nil
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(text, "/projects"))
+		cli := m.client
+		mcpURL := m.mcp.url()
+		if rest != "" {
+			// /projects create <name>
+			if strings.HasPrefix(rest, "create ") {
+				name := strings.TrimPrefix(rest, "create ")
+				return *m, func() tea.Msg {
+					// Create project
+					projBody, _ := json.Marshal(map[string]string{"name": name})
+					projData, err := cli.serverPost("/projects", projBody)
+					if err != nil {
+						return projectCreatedMsg{err: err}
+					}
+					var proj struct{ ID string `json:"id"` }
+					json.Unmarshal(projData, &proj)
+					// Create instance in project
+					instBody, _ := json.Marshal(map[string]any{
+						"name":       name,
+						"directive":  "You are a helpful assistant.",
+						"mode":       "autonomous",
+						"project_id": proj.ID,
+					})
+					instData, _ := cli.serverPost("/instances", instBody)
+					var inst struct{ ID int64 `json:"id"` }
+					json.Unmarshal(instData, &inst)
+					// Switch to it
+					cli.switchInstance(inst.ID, mcpName, mcpURL)
+					return projectCreatedMsg{projectID: proj.ID, projectName: name, instanceID: inst.ID}
+				}
+			}
+			m.openModal("PROJECTS", []string{"", "  Usage: /projects or /projects create <name>"})
+			return *m, nil
+		}
+		// List projects
+		return *m, func() tea.Msg {
+			data, err := cli.serverGet("/projects")
+			if err != nil {
+				return modalMsg{title: "PROJECTS", text: "  ERROR: " + err.Error()}
+			}
+			var projects []projectInfo
+			json.Unmarshal(data, &projects)
+			return projectsListMsg{projects: projects}
+		}
+
+	case "/settings":
+		items := []string{"tools", "browser", "integrations", "telegram", "projects"}
+		var lines []string
+		lines = append(lines, "")
+		lines = append(lines, "  Toggle features on/off:")
+		lines = append(lines, "")
+		for _, item := range items {
+			check := "[ ]"
+			switch item {
+			case "tools":
+				if m.aptevaCfg.Capabilities.Tools {
+					check = "[x]"
+				}
+			case "browser":
+				if m.aptevaCfg.Capabilities.Browser {
+					check = "[x]"
+				}
+			case "integrations":
+				if m.aptevaCfg.Capabilities.Integrations {
+					check = "[x]"
+				}
+			case "telegram":
+				if m.aptevaCfg.Capabilities.Telegram {
+					check = "[x]"
+				}
+			case "projects":
+				if m.aptevaCfg.Capabilities.Projects {
+					check = "[x]"
+				}
+			}
+			label := map[string]string{
+				"tools":        "System tools (exec, web)",
+				"browser":      "Browser (local Chrome)",
+				"integrations": "Integrations (263+ apps)",
+				"telegram":     "Telegram gateway",
+				"projects":     "Projects (multi-project)",
+			}[item]
+			lines = append(lines, fmt.Sprintf("  %s %s", check, label))
+		}
+		lines = append(lines, "")
+		lines = append(lines, "  Select to toggle:")
+		m.openSelectModal("SETTINGS", lines, items, "", func(item string) tea.Cmd {
+			return func() tea.Msg {
+				cfg := loadAptevaConfig()
+				switch item {
+				case "tools":
+					cfg.Capabilities.Tools = !cfg.Capabilities.Tools
+				case "browser":
+					cfg.Capabilities.Browser = !cfg.Capabilities.Browser
+				case "integrations":
+					cfg.Capabilities.Integrations = !cfg.Capabilities.Integrations
+				case "telegram":
+					cfg.Capabilities.Telegram = !cfg.Capabilities.Telegram
+				case "projects":
+					cfg.Capabilities.Projects = !cfg.Capabilities.Projects
+				}
+				saveAptevaConfig(cfg)
+				return settingsUpdatedMsg(cfg)
+			}
+		})
+
 	case "/setup":
-		m.addLine("Re-run setup: ./apteva --setup", "dim")
+		m.addLine("Re-run full setup: ./apteva --setup", "dim")
 
 	case "/help":
 		m.modal = true
@@ -1165,6 +2305,7 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 			"  /config              show full config",
 			"  /directive [text]    show or set directive",
 			"  /mode [name]         show or set mode",
+			"  /provider            switch provider/models",
 			"  /computer [type]     connect browser (local/browserbase/off)",
 			"  /threads             list/kill threads",
 			"  /mcp                 manage MCP servers",
@@ -1172,12 +2313,16 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 		if m.aptevaCfg.Capabilities.Integrations {
 			m.modalLines = append(m.modalLines, "  /integrate [app]     manage integrations (263+ apps)")
 		}
+		if m.aptevaCfg.Capabilities.Projects {
+			m.modalLines = append(m.modalLines, "  /projects            switch/create projects")
+		}
 		m.modalLines = append(m.modalLines,
 			"  /pause               toggle pause/resume",
 			"  /connect <gateway>   connect a gateway (telegram)",
 			"  /disconnect <gw>    disconnect a gateway",
 			"  /channels            list connected channels",
-			"  /setup               re-run setup wizard",
+			"  /settings            toggle features on/off",
+			"  /setup               re-run full setup wizard",
 			"  /clear               clear screen",
 			"  /help                show this help",
 			"  /quit                disconnect and exit",
@@ -1196,6 +2341,30 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 	return *m, nil
 }
 
+func (m *tuiModel) cleanProjectSwitch(name string) {
+	m.lines = nil
+	m.sideStatus = nil
+	m.thoughts = make(map[string]*threadThought)
+	m.events = make(map[string]*threadEvent)
+	m.activeTools = make(map[string]*activeTool)
+	m.threadTools = make(map[string]string)
+	m.streaming = false
+	m.waiting = false
+	m.waitingConnect = true // require Enter to connect to new instance
+
+	// Restart SSE by closing old and starting new
+	if m.sseDone != nil {
+		close(m.sseDone)
+	}
+	m.sseDone = make(chan struct{})
+	if m.teaProgram != nil {
+		go streamToolChunks(m.client, m.teaProgram, m.sseDone)
+	}
+
+	m.addLine(fmt.Sprintf("Switched to: %s", name), "dim")
+	m.addLine("", "dim")
+}
+
 func (m *tuiModel) closeModal() {
 	m.modal = false
 	m.modalLines = nil
@@ -1207,6 +2376,11 @@ func (m *tuiModel) closeModal() {
 	m.modalItems = nil
 	m.modalCursor = 0
 	m.modalOnSelect = nil
+	m.modalSearch = false
+	m.modalSearchAll = nil
+	m.modalSearchFiltered = nil
+	m.modalSearchOnSelect = nil
+	m.modalSearchCreateOnEmpty = nil
 	m.input.SetValue("")
 	m.input.Placeholder = ""
 }
@@ -1235,6 +2409,22 @@ func (m *tuiModel) openSelectModal(title string, lines []string, items []string,
 			break
 		}
 	}
+}
+
+func (m *tuiModel) openSearchModal(title string, header []string, items []modalSearchItem, onSelect func(string) tea.Cmd) {
+	m.modal = true
+	m.modalTitle = title
+	m.modalLines = header
+	m.modalScroll = 0
+	m.modalSearch = true
+	m.modalSearchAll = items
+	m.modalSearchFiltered = items
+	m.modalCursor = 0
+	m.modalSearchOnSelect = onSelect
+	m.modalInput = true
+	m.modalPrompt = "Search"
+	m.input.SetValue("")
+	m.input.Placeholder = "type to filter..."
 }
 
 func (m *tuiModel) openInputModal(title string, lines []string, prompt string, onSubmit func(string) tea.Cmd) {
@@ -1401,7 +2591,7 @@ func (m tuiModel) View() string {
 	}
 
 	// Visible region
-	chatContentH := contentHeight - 2 // -2 for status line + input separator inside chat
+	chatContentH := contentHeight - 2 // -2 for separator + input
 	if chatContentH < 1 {
 		chatContentH = 1
 	}
@@ -1430,6 +2620,23 @@ func (m tuiModel) View() string {
 			styled = warn.Render(line.text)
 		case "alert":
 			styled = alert.Render(line.text)
+		case "tool-active":
+			// Smooth breathing: cycle through 8 phases (150ms * 8 = 1.2s full cycle)
+			phase := m.spinnerTick % 8
+			var toolColor lipgloss.Color
+			switch {
+			case phase < 2:
+				toolColor = m.th.ToolActive // bright
+			case phase < 4:
+				toolColor = m.th.ToolDim // fading
+			case phase < 6:
+				toolColor = m.th.ToolDim // dim
+			default:
+				toolColor = m.th.ToolActive // rising
+			}
+			styled = lipgloss.NewStyle().Foreground(toolColor).Render(line.text)
+		case "tool-done":
+			styled = lipgloss.NewStyle().Foreground(m.th.ToolDone).Render(line.text)
 		default:
 			styled = line.text
 		}
@@ -1531,9 +2738,11 @@ func (m tuiModel) renderModal() string {
 	if boxH < 5 {
 		boxH = m.height - 2
 	}
-	// Reserve space for input/select rows if needed
+	// Reserve space for input/select/search rows if needed
 	extraRows := 0
-	if m.modalInput {
+	if m.modalSearch {
+		extraRows = 2 + min(len(m.modalSearchFiltered)+1, 12) // separator + input + results
+	} else if m.modalInput {
 		extraRows = 2 // separator + input line
 	}
 	if m.modalSelect {
@@ -1611,9 +2820,52 @@ func (m tuiModel) renderModal() string {
 		}
 	}
 
+	// Search results inside modal
+	if m.modalSearch {
+		maxShow := 10
+		filtered := m.modalSearchFiltered
+		if len(filtered) > maxShow {
+			filtered = filtered[:maxShow]
+		}
+		for i, item := range filtered {
+			var label string
+			if i == m.modalCursor {
+				label = accent.Bold(true).Render("  > " + item.label)
+			} else {
+				label = primary.Render("    " + item.label)
+			}
+			if lipgloss.Width(label) > innerW {
+				label = truncateToWidth(label, innerW)
+			}
+			itemPad := innerW - lipgloss.Width(label)
+			if itemPad < 0 {
+				itemPad = 0
+			}
+			contentLines = append(contentLines, dim.Render("│ ")+label+strings.Repeat(" ", itemPad)+dim.Render(" │"))
+		}
+		if len(m.modalSearchFiltered) > maxShow {
+			more := fmt.Sprintf("    ...%d more", len(m.modalSearchFiltered)-maxShow)
+			pad := innerW - len(more)
+			if pad < 0 {
+				pad = 0
+			}
+			contentLines = append(contentLines, dim.Render("│ ")+dim.Render(more)+strings.Repeat(" ", pad)+dim.Render(" │"))
+		}
+		if len(m.modalSearchFiltered) == 0 {
+			noResults := "    no results"
+			pad := innerW - len(noResults)
+			if pad < 0 {
+				pad = 0
+			}
+			contentLines = append(contentLines, dim.Render("│ ")+dim.Render(noResults)+strings.Repeat(" ", pad)+dim.Render(" │"))
+		}
+	}
+
 	// Footer
 	footer := dim.Render("  esc to close")
-	if m.modalInput {
+	if m.modalSearch {
+		footer = dim.Render("  type to filter · ↑↓ select · enter to connect · esc to close")
+	} else if m.modalInput {
 		footer = dim.Render("  enter to submit · esc to cancel")
 	} else if m.modalSelect {
 		footer = dim.Render("  ↑↓ to select · enter to confirm · esc to cancel")
@@ -1695,8 +2947,18 @@ func (m tuiModel) renderSidePanel(w, h int, dim, primary, accent, warn lipgloss.
 		lines = append(lines, "")
 		for _, t := range sd.Threads {
 			label := primary.Render(fmt.Sprintf("%-10s", t.ID))
-			info := dim.Render(fmt.Sprintf("#%d %s", t.Iter, t.Rate))
-			lines = append(lines, label+info)
+			// Show active tool or rate
+			if toolLabel, ok := m.threadTools[t.ID]; ok {
+				phase := m.spinnerTick % 8
+				toolColor := m.th.ToolActive
+				if phase >= 2 && phase < 6 {
+					toolColor = m.th.ToolDim
+				}
+				lines = append(lines, label+lipgloss.NewStyle().Foreground(toolColor).Render(toolLabel))
+			} else {
+				info := dim.Render(fmt.Sprintf("#%d %s", t.Iter, t.Rate))
+				lines = append(lines, label+info)
+			}
 
 			// Show latest thought with decay
 			if thought, ok := m.thoughts[t.ID]; ok {

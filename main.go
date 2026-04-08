@@ -24,8 +24,11 @@ const defaultServerPort = 5280
 func main() {
 	themeName := flag.String("theme", "orange", "color theme: orange, amber, white")
 	noSpawn := flag.Bool("no-spawn", false, "don't auto-start server, connect to existing")
-	serverAddr := flag.String("server", "", "server address (e.g. localhost:8080)")
+	serverAddr := flag.String("server", "", "server address (e.g. localhost:5280)")
 	serverBin := flag.String("server-bin", "", "path to apteva-server binary")
+	remote := flag.Bool("remote", false, "connect to remote server")
+	remoteURL := flag.String("remote-url", "", "remote server URL")
+	remoteKey := flag.String("key", "", "API key for remote server")
 	setup := flag.Bool("setup", false, "run setup wizard")
 	flag.Parse()
 
@@ -34,9 +37,22 @@ func main() {
 
 	// Load or init config
 	aptevaCfg := loadAptevaConfig()
-	cliLog("MAIN", fmt.Sprintf("config loaded: instanceID=%d apiKey=%v port=%d", aptevaCfg.InstanceID, aptevaCfg.APIKey != "", aptevaCfg.ServerPort))
+	cliLog("MAIN", fmt.Sprintf("config loaded: instanceID=%d apiKey=%v port=%d remote=%v", aptevaCfg.InstanceID, aptevaCfg.APIKey != "", aptevaCfg.ServerPort, aptevaCfg.Remote))
 	if aptevaCfg.ServerPort == 0 {
 		aptevaCfg.ServerPort = defaultServerPort
+	}
+
+	// Handle --remote flag
+	if *remote {
+		aptevaCfg.Remote = true
+		if *remoteURL != "" {
+			aptevaCfg.ServerURL = *remoteURL
+		}
+		if *remoteKey != "" {
+			aptevaCfg.APIKey = *remoteKey
+		}
+		aptevaCfg.InstanceID = 0
+		saveAptevaConfig(aptevaCfg)
 	}
 
 	th, ok := themes[*themeName]
@@ -46,8 +62,12 @@ func main() {
 	}
 
 	// Determine server address
-	srvAddr := *serverAddr
-	if srvAddr == "" {
+	var srvAddr string
+	if aptevaCfg.Remote && aptevaCfg.ServerURL != "" {
+		srvAddr = aptevaCfg.ServerURL
+	} else if *serverAddr != "" {
+		srvAddr = *serverAddr
+	} else {
 		srvAddr = fmt.Sprintf("localhost:%d", aptevaCfg.ServerPort)
 	}
 
@@ -66,7 +86,7 @@ func main() {
 	var serverProc *exec.Cmd
 	if err := client.health(); err != nil {
 		cliLog("MAIN", fmt.Sprintf("server not reachable: %v", err))
-		if *noSpawn {
+		if aptevaCfg.Remote || *noSpawn {
 			fmt.Fprintf(os.Stderr, "cannot reach server at %s\n", srvAddr)
 			os.Exit(1)
 		}
@@ -85,6 +105,8 @@ func main() {
 			"DB_PATH="+filepath.Join(aptevaDir(), "apteva.db"),
 			"DATA_DIR="+aptevaDir(),
 			"CORE_CMD="+findCoreBinary(""),
+			"APPS_DIR="+findAppsDir(),
+			"APTEVA_REGISTRATION=open", // local mode — same machine, safe to auto-register
 			"QUIET=1",
 		)
 		serverProc.Stdout = nil
@@ -134,17 +156,28 @@ func main() {
 	}
 
 	if needsAuth {
-		cliLog("MAIN", "bootstrapping auth")
-		apiKey, userID, err := bootstrapLocalAuth(client)
-		if err != nil {
-			cliLog("MAIN", fmt.Sprintf("auth bootstrap failed: %v", err))
-			fmt.Fprintf(os.Stderr, "auth setup failed: %v\n", err)
-			os.Exit(1)
+		if aptevaCfg.Remote {
+			// Remote mode — need setup to get credentials
+			cliLog("MAIN", "remote mode needs auth, running setup")
+			if err := runSetup(client, &aptevaCfg); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(0)
+			}
+			saveAptevaConfig(aptevaCfg)
+			client.apiKey = aptevaCfg.APIKey
+		} else {
+			cliLog("MAIN", "bootstrapping local auth")
+			apiKey, userID, err := bootstrapLocalAuth(client)
+			if err != nil {
+				cliLog("MAIN", fmt.Sprintf("auth bootstrap failed: %v", err))
+				fmt.Fprintf(os.Stderr, "auth setup failed: %v\n", err)
+				os.Exit(1)
+			}
+			aptevaCfg.APIKey = apiKey
+			aptevaCfg.UserID = userID
+			saveAptevaConfig(aptevaCfg)
+			cliLog("MAIN", fmt.Sprintf("auth bootstrapped: userID=%d keyPrefix=%s", userID, apiKey[:min(11, len(apiKey))]))
 		}
-		aptevaCfg.APIKey = apiKey
-		aptevaCfg.UserID = userID
-		saveAptevaConfig(aptevaCfg)
-		cliLog("MAIN", fmt.Sprintf("auth bootstrapped: userID=%d keyPrefix=%s", userID, apiKey[:min(11, len(apiKey))]))
 	}
 	client.apiKey = aptevaCfg.APIKey
 
@@ -211,20 +244,17 @@ func main() {
 		cleanupDone = true
 		cliLog("MAIN", "cleanup: shutting down")
 		close(sseDone)
-		mcp.close()
 
-		// Use a short timeout client for cleanup calls
+		// Notify core before killing anything (synchronous, short timeout)
 		fastClient := &http.Client{Timeout: 2 * time.Second}
+		req, _ := http.NewRequest("POST", client.coreURL("/event"), bytes.NewReader([]byte(`{"message":"[cli] root user disconnected from terminal","thread_id":"main"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		if client.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+client.apiKey)
+		}
+		fastClient.Do(req)
 
-		// Best-effort: notify core and unregister MCP
-		go func() {
-			req, _ := http.NewRequest("POST", client.coreURL("/event"), bytes.NewReader([]byte(`{"message":"[cli] root user disconnected","thread_id":"main"}`)))
-			req.Header.Set("Content-Type", "application/json")
-			if client.apiKey != "" {
-				req.Header.Set("Authorization", "Bearer "+client.apiKey)
-			}
-			fastClient.Do(req)
-		}()
+		mcp.close()
 
 		if serverProc != nil {
 			cliLog("MAIN", "cleanup: killing server process group")
@@ -254,8 +284,10 @@ func main() {
 	m.cliStatusCh = cliStatusCh
 	m.aptevaCfg = aptevaCfg
 	m.serverURL = "http://" + srvAddr
+	m.sseDone = sseDone
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
+	m.teaProgram = p
 	go streamToolChunks(client, p, sseDone)
 	go func() { p.Send(connectedMsg{}) }()
 
@@ -416,6 +448,33 @@ func findServerBinary(explicit string) string {
 	}
 	if p, err := exec.LookPath("apteva-server"); err == nil {
 		return p
+	}
+	return ""
+}
+
+// findAppsDir locates the integrations app JSON directory.
+func findAppsDir() string {
+	self, _ := os.Executable()
+	if self != "" {
+		dir := filepath.Dir(self)
+		for _, c := range []string{
+			filepath.Join(dir, "..", "integrations", "src", "apps"),
+			filepath.Join(dir, "..", "..", "integrations", "src", "apps"),
+		} {
+			if info, err := os.Stat(c); err == nil && info.IsDir() {
+				abs, _ := filepath.Abs(c)
+				return abs
+			}
+		}
+	}
+	for _, c := range []string{
+		"../integrations/src/apps",
+		"../../integrations/src/apps",
+	} {
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			abs, _ := filepath.Abs(c)
+			return abs
+		}
 	}
 	return ""
 }

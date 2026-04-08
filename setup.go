@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -12,13 +14,20 @@ import (
 
 // setupConfig holds the choices made during onboarding.
 type setupConfig struct {
+	Remote       bool
+	RemoteURL    string
+	RemoteEmail  string
+	RemotePass   string
+	RemoteAPIKey string
 	Provider     string
 	APIKey       string
 	ModelLarge   string
+	ModelMedium  string
 	ModelSmall   string
 	Computer     bool
 	Integrations bool
 	Telegram     bool
+	Projects     bool
 	Directive    string
 }
 
@@ -27,23 +36,31 @@ type providerOption struct {
 	Label  string
 	EnvVar string
 	Large  string
+	Medium string
 	Small  string
 }
 
 var providers = []providerOption{
-	{Name: "fireworks", Label: "Fireworks (Kimi K2.5)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/models/kimi-k2p5", Small: "accounts/fireworks/models/kimi-k2p5"},
-	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-sonnet-4-20250514", Small: "claude-haiku-4-5-20251001"},
-	{Name: "openai", Label: "OpenAI (GPT-4)", EnvVar: "OPENAI_API_KEY", Large: "gpt-4.1", Small: "gpt-4.1-mini"},
-	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-2.5-pro-preview-05-06", Small: "gemini-2.5-flash-preview-04-17"},
+	{Name: "fireworks", Label: "Fireworks (Kimi K2.5)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/models/kimi-k2p5", Medium: "accounts/fireworks/models/kimi-k2p5", Small: "accounts/fireworks/routers/kimi-k2p5-turbo"},
+	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-opus-4-6", Medium: "claude-sonnet-4-20250514", Small: "claude-haiku-4-5-20251001"},
+	{Name: "openai", Label: "OpenAI (GPT-4)", EnvVar: "OPENAI_API_KEY", Large: "gpt-4.1", Medium: "gpt-4.1-mini", Small: "gpt-4.1-nano"},
+	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-2.5-pro-preview-05-06", Medium: "gemini-2.5-flash-preview-04-17", Small: "gemini-2.5-flash-preview-04-17"},
 }
 
 type setupStep int
 
 const (
-	stepProvider setupStep = iota
-	stepAPIKey
-	stepCapabilities
-	stepDirective
+	stepMode setupStep = iota // local vs remote
+	stepRemoteURL             // remote server URL
+	stepRemoteAuth            // login or API key
+	stepRemoteLogin           // email input
+	stepRemotePassword        // password input
+	stepRemoteKey             // API key input
+	stepRemoteInstance        // select instance
+	stepProvider              // local: LLM provider
+	stepAPIKey                // local: API key
+	stepCapabilities          // local: features
+	stepDirective             // local: directive
 	stepDone
 )
 
@@ -71,8 +88,17 @@ func newSetupModel(client *coreClient, aptevaCfg *AptevaConfig) setupModel {
 	ti.Prompt = ""
 	ti.Focus()
 
+	startStep := stepMode
+	if aptevaCfg.Remote {
+		if aptevaCfg.ServerURL != "" && aptevaCfg.APIKey == "" {
+			startStep = stepRemoteAuth // have URL, need auth
+		} else if aptevaCfg.ServerURL == "" {
+			startStep = stepRemoteURL // need URL
+		}
+	}
+
 	return setupModel{
-		step:      stepProvider,
+		step:      startStep,
 		input:     ti,
 		client:    client,
 		aptevaCfg: aptevaCfg,
@@ -81,6 +107,7 @@ func newSetupModel(client *coreClient, aptevaCfg *AptevaConfig) setupModel {
 			{label: "Browser (local Chrome)", key: "browser", enabled: false},
 			{label: "Integrations (GitHub, Stripe, 263+ apps)", key: "integrations", enabled: false},
 			{label: "Telegram gateway", key: "telegram", enabled: false},
+		{label: "Projects (multi-project)", key: "projects", enabled: false},
 		},
 	}
 }
@@ -107,12 +134,18 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "up", "k":
-			if m.step == stepProvider || m.step == stepCapabilities {
+			if m.step == stepMode || m.step == stepRemoteAuth || m.step == stepProvider || m.step == stepCapabilities {
 				if m.cursor > 0 {
 					m.cursor--
 				}
 			}
 		case "down", "j":
+			if m.step == stepMode && m.cursor < 1 {
+				m.cursor++
+			}
+			if m.step == stepRemoteAuth && m.cursor < 1 {
+				m.cursor++
+			}
 			if m.step == stepProvider && m.cursor < len(providers)-1 {
 				m.cursor++
 			}
@@ -127,10 +160,88 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter":
 			switch m.step {
+			case stepMode:
+				if m.cursor == 0 {
+					// Local
+					m.config.Remote = false
+					m.step = stepProvider
+					m.cursor = 0
+				} else {
+					// Remote
+					m.config.Remote = true
+					m.step = stepRemoteURL
+					m.input.SetValue("")
+				}
+				return m, nil
+
+			case stepRemoteURL:
+				url := strings.TrimSpace(m.input.Value())
+				if url != "" {
+					// Add https:// if no scheme
+					if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+						url = "https://" + url
+					}
+					m.config.RemoteURL = url
+					m.input.SetValue("")
+					m.step = stepRemoteAuth
+					m.cursor = 0
+				}
+				return m, nil
+
+			case stepRemoteAuth:
+				if m.cursor == 0 {
+					// Login
+					m.step = stepRemoteLogin
+					m.input.SetValue("")
+				} else {
+					// API key
+					m.step = stepRemoteKey
+					m.input.SetValue("")
+				}
+				return m, nil
+
+			case stepRemoteLogin:
+				email := strings.TrimSpace(m.input.Value())
+				if email != "" {
+					m.config.RemoteEmail = email
+					m.input.SetValue("")
+					m.step = stepRemotePassword
+				}
+				return m, nil
+
+			case stepRemotePassword:
+				pass := strings.TrimSpace(m.input.Value())
+				if pass != "" {
+					m.config.RemotePass = pass
+					m.input.SetValue("")
+					m.applyRemoteAuth()
+					m.step = stepDone
+					return m, tea.Quit
+				}
+				return m, nil
+
+			case stepRemoteKey:
+				key := strings.TrimSpace(m.input.Value())
+				if key != "" {
+					m.config.RemoteAPIKey = key
+					m.input.SetValue("")
+					m.aptevaCfg.Remote = true
+					m.aptevaCfg.ServerURL = m.config.RemoteURL
+					m.aptevaCfg.APIKey = key
+					// Verify and get instance
+					m.client.apiKey = key
+					m.client.base = m.config.RemoteURL
+					m.applyRemoteInstance()
+					m.step = stepDone
+					return m, tea.Quit
+				}
+				return m, nil
+
 			case stepProvider:
 				p := providers[m.cursor]
 				m.config.Provider = p.Name
 				m.config.ModelLarge = p.Large
+				m.config.ModelMedium = p.Medium
 				m.config.ModelSmall = p.Small
 				m.input.SetValue("")
 				m.step = stepAPIKey
@@ -155,6 +266,8 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.config.Integrations = c.enabled
 					case "telegram":
 						m.config.Telegram = c.enabled
+					case "projects":
+						m.config.Projects = c.enabled
 					}
 				}
 				m.input.SetValue("")
@@ -174,7 +287,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.step == stepAPIKey || m.step == stepDirective {
+	if m.step == stepAPIKey || m.step == stepDirective || m.step == stepRemoteURL || m.step == stepRemoteLogin || m.step == stepRemotePassword || m.step == stepRemoteKey {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -191,6 +304,14 @@ func (m *setupModel) applyConfig() {
 		Browser:      m.config.Computer,
 		Integrations: m.config.Integrations,
 		Telegram:     m.config.Telegram,
+		Projects:     m.config.Projects,
+	}
+
+	// Download integration catalog if enabled
+	if m.config.Integrations {
+		cliLog("SETUP", "downloading integration catalog from GitHub...")
+		m.client.serverPost("/integrations/catalog/download", nil)
+		cliLog("SETUP", "catalog download complete")
 	}
 
 	// Create provider on server
@@ -204,9 +325,10 @@ func (m *setupModel) applyConfig() {
 		"type": m.config.Provider,
 		"name": m.config.Provider,
 		"data": map[string]string{
-			envVar:       m.config.APIKey,
-			"MODEL_LARGE": m.config.ModelLarge,
-			"MODEL_SMALL": m.config.ModelSmall,
+			envVar:         m.config.APIKey,
+			"model_large":  m.config.ModelLarge,
+			"model_medium": m.config.ModelMedium,
+			"model_small":  m.config.ModelSmall,
 		},
 	})
 	providerData, err := m.client.serverPost("/providers", providerBody)
@@ -254,6 +376,71 @@ func (m setupModel) View() string {
 	var lines []string
 
 	switch m.step {
+	case stepMode:
+		title = "SETUP"
+		modeOptions := []string{"Start locally", "Connect to remote server"}
+		lines = append(lines, "")
+		for i, opt := range modeOptions {
+			if i == m.cursor {
+				lines = append(lines, selected.Render("  > "+opt))
+			} else {
+				lines = append(lines, primary.Render("    "+opt))
+			}
+		}
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  ↑↓ to select · enter to confirm"))
+
+	case stepRemoteURL:
+		title = "REMOTE SERVER"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Enter the server URL:"))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("URL: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  e.g. agents.example.com"))
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
+
+	case stepRemoteAuth:
+		title = "AUTHENTICATE"
+		authOptions := []string{"Login with email/password", "Use API key"}
+		lines = append(lines, "")
+		for i, opt := range authOptions {
+			if i == m.cursor {
+				lines = append(lines, selected.Render("  > "+opt))
+			} else {
+				lines = append(lines, primary.Render("    "+opt))
+			}
+		}
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  ↑↓ to select · enter to confirm"))
+
+	case stepRemoteLogin:
+		title = "LOGIN"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Enter your email:"))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("Email: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
+
+	case stepRemotePassword:
+		title = "LOGIN"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Enter your password:"))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("Password: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
+
+	case stepRemoteKey:
+		title = "API KEY"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Paste your API key:"))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("Key: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
+
 	case stepProvider:
 		title = "LLM PROVIDER"
 		lines = append(lines, "")
@@ -353,6 +540,88 @@ func (m setupModel) View() string {
 		out = append(out, "")
 	}
 	return strings.Join(out[:m.height], "\n")
+}
+
+// applyRemoteAuth logs in with email/password, creates API key, finds first instance.
+func (m *setupModel) applyRemoteAuth() {
+	cliLog("SETUP", fmt.Sprintf("remote auth: logging in to %s", m.config.RemoteURL))
+
+	m.client.base = m.config.RemoteURL
+
+	// Login
+	loginBody, _ := json.Marshal(map[string]string{
+		"email":    m.config.RemoteEmail,
+		"password": m.config.RemotePass,
+	})
+	resp, err := m.client.client.Post(m.client.base+"/auth/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		cliLog("SETUP", fmt.Sprintf("login failed: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	var loginResult struct {
+		UserID int64 `json:"user_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&loginResult)
+
+	// Get session cookie
+	var sessionCookie string
+	for _, c := range resp.Cookies() {
+		if c.Name == "session" {
+			sessionCookie = c.Value
+		}
+	}
+
+	// Create API key
+	keyBody, _ := json.Marshal(map[string]string{"name": "cli-remote"})
+	keyReq, _ := http.NewRequest("POST", m.client.base+"/auth/keys", bytes.NewReader(keyBody))
+	keyReq.Header.Set("Content-Type", "application/json")
+	if sessionCookie != "" {
+		keyReq.AddCookie(&http.Cookie{Name: "session", Value: sessionCookie})
+	}
+	keyResp, err := m.client.client.Do(keyReq)
+	if err != nil {
+		cliLog("SETUP", fmt.Sprintf("create key failed: %v", err))
+		return
+	}
+	defer keyResp.Body.Close()
+
+	var keyResult struct {
+		Key string `json:"key"`
+	}
+	json.NewDecoder(keyResp.Body).Decode(&keyResult)
+
+	m.aptevaCfg.Remote = true
+	m.aptevaCfg.ServerURL = m.config.RemoteURL
+	m.aptevaCfg.APIKey = keyResult.Key
+	m.aptevaCfg.UserID = loginResult.UserID
+	m.client.apiKey = keyResult.Key
+
+	cliLog("SETUP", fmt.Sprintf("remote auth OK: userID=%d", loginResult.UserID))
+
+	m.applyRemoteInstance()
+}
+
+// applyRemoteInstance finds the first running instance and sets it.
+func (m *setupModel) applyRemoteInstance() {
+	data, err := m.client.serverGet("/instances")
+	if err != nil {
+		cliLog("SETUP", fmt.Sprintf("list instances failed: %v", err))
+		return
+	}
+	var instances []struct {
+		ID        int64  `json:"id"`
+		Name      string `json:"name"`
+		ProjectID string `json:"project_id"`
+	}
+	json.Unmarshal(data, &instances)
+
+	if len(instances) > 0 {
+		m.aptevaCfg.InstanceID = instances[0].ID
+		m.aptevaCfg.ProjectID = instances[0].ProjectID
+		cliLog("SETUP", fmt.Sprintf("using instance %d (%s)", instances[0].ID, instances[0].Name))
+	}
 }
 
 func getProviderByName(name string) *providerOption {

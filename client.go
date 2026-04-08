@@ -56,6 +56,33 @@ func (c *coreClient) health() error {
 	return nil
 }
 
+// switchInstance disconnects MCP from current instance and connects to a new one.
+func (c *coreClient) switchInstance(instanceID int64, mcpName, mcpURL string) error {
+	// Disconnect from old instance
+	c.sendEvent("[cli] root user disconnected from terminal", "main")
+	c.disconnectMCP(mcpName)
+
+	// Switch to new instance
+	c.instancePrefix = fmt.Sprintf("/instances/%d", instanceID)
+
+	// Start it if needed
+	startInstance(c, instanceID)
+
+	// Wait for it
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := c.health(); err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Register MCP + send connect
+	c.connectMCP(mcpName, mcpURL)
+	c.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Greet them now.", "main")
+	return nil
+}
+
 // startInstance starts a stopped instance via server API.
 func startInstance(client *coreClient, instanceID int64) error {
 	req, _ := http.NewRequest("POST", client.base+fmt.Sprintf("/instances/%d/start", instanceID), nil)
@@ -339,12 +366,40 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 			switch typ {
 			case "tool.call":
 				if data != nil {
-					reason, _ := data["reason"].(string)
+					threadID, _ := ev["thread_id"].(string)
+					if threadID == "" {
+						threadID = "main"
+					}
 					name, _ := data["name"].(string)
-					if reason != "" {
-						p.Send(toolReasonMsg(reason))
-					} else if name != "" {
-						p.Send(toolReasonMsg(name))
+					reason, _ := data["reason"].(string)
+					callID, _ := data["id"].(string)
+					if name != "" {
+						p.Send(toolStartMsg{
+							ThreadID: threadID,
+							Name:     name,
+							Reason:   reason,
+							CallID:   callID,
+						})
+					}
+				}
+			case "tool.result":
+				if data != nil {
+					threadID, _ := ev["thread_id"].(string)
+					if threadID == "" {
+						threadID = "main"
+					}
+					name, _ := data["name"].(string)
+					callID, _ := data["id"].(string)
+					durMs, _ := data["duration_ms"].(float64)
+					success, _ := data["success"].(bool)
+					if name != "" {
+						p.Send(toolDoneMsg{
+							ThreadID:   threadID,
+							Name:       name,
+							CallID:     callID,
+							DurationMs: int64(durMs),
+							Success:    success,
+						})
 					}
 				}
 			case "llm.done":
@@ -355,11 +410,49 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 					}
 					msg, _ := data["message"].(string)
 					if msg != "" {
-						// Truncate to first 200 chars
 						if len(msg) > 200 {
 							msg = msg[:200] + "..."
 						}
 						p.Send(thoughtMsg{ThreadID: threadID, Text: msg})
+					}
+					// Update side panel from llm.done data
+					iter, _ := data["iteration"].(float64)
+					rate, _ := data["rate"].(string)
+					model, _ := data["model"].(string)
+					memCount, _ := data["memory_count"].(float64)
+					threadCount, _ := data["thread_count"].(float64)
+					p.Send(sideSSEUpdate{
+						ThreadID:    threadID,
+						Iteration:   int(iter),
+						Rate:        rate,
+						Model:       model,
+						MemoryCount: int(memCount),
+						ThreadCount: int(threadCount),
+					})
+				}
+			case "thread.spawn":
+				if data != nil {
+					id, _ := data["id"].(string)
+					directive, _ := data["directive"].(string)
+					p.Send(threadSpawnMsg{ID: id, Directive: directive})
+				}
+			case "thread.done":
+				if data != nil {
+					id, _ := data["id"].(string)
+					p.Send(threadDoneMsg(id))
+				}
+			case "directive.evolved":
+				if data != nil {
+					newDir, _ := data["new"].(string)
+					if newDir != "" {
+						p.Send(directiveChangedMsg(newDir))
+					}
+				}
+			case "mode.changed":
+				if data != nil {
+					mode, _ := data["mode"].(string)
+					if mode != "" {
+						p.Send(modeChangedMsg(mode))
 					}
 				}
 			case "event.received":
