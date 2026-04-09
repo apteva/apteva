@@ -108,17 +108,26 @@ func main() {
 		serverProc = exec.Command(bin)
 		serverProc.Dir = filepath.Dir(bin)
 		serverProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // process group leader
-		serverProc.Env = append(os.Environ(),
-			"PORT="+fmt.Sprintf("%d", aptevaCfg.ServerPort),
-			"DB_PATH="+filepath.Join(aptevaDir(), "apteva.db"),
-			"DATA_DIR="+aptevaDir(),
-			"CORE_CMD="+findCoreBinary(""),
-			"APPS_DIR="+findAppsDir(),
+		serverEnv := []string{
+			"PORT=" + fmt.Sprintf("%d", aptevaCfg.ServerPort),
+			"DB_PATH=" + filepath.Join(aptevaDir(), "apteva.db"),
+			"DATA_DIR=" + aptevaDir(),
+			"CORE_CMD=" + findCoreBinary(""),
+			"APPS_DIR=" + findAppsDir(),
 			"APTEVA_REGISTRATION=open", // local mode — same machine, safe to auto-register
-			"QUIET=1",
-		)
-		serverProc.Stdout = nil
-		serverProc.Stderr = nil
+		}
+		if !*headless {
+			serverEnv = append(serverEnv, "QUIET=1")
+		}
+		serverProc.Env = append(os.Environ(), serverEnv...)
+		if *headless {
+			// Headless: pipe server output to our stderr so telemetry logs are visible
+			serverProc.Stdout = os.Stdout
+			serverProc.Stderr = os.Stderr
+		} else {
+			serverProc.Stdout = nil
+			serverProc.Stderr = nil
+		}
 
 		cliLog("MAIN", fmt.Sprintf("spawning server: %s", bin))
 		cliLog("MAIN", fmt.Sprintf("server env: PORT=%d DB_PATH=%s CORE_CMD=%s", aptevaCfg.ServerPort, filepath.Join(aptevaDir(), "apteva.db"), findCoreBinary("")))
