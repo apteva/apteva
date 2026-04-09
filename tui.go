@@ -3090,7 +3090,7 @@ func (m tuiModel) View() string {
 		chatLines = append(chatLines, dim.Render("  Press Enter to connect."))
 		if m.serverURL != "" {
 			chatLines = append(chatLines, "")
-			chatLines = append(chatLines, dim.Render("  Dashboard: "+m.serverURL+"/app/"))
+			chatLines = append(chatLines, dim.Render("  Dashboard: "+m.serverURL))
 		}
 	}
 
