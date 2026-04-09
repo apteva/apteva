@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,10 +58,9 @@ func (c *coreClient) health() error {
 }
 
 // switchInstance disconnects MCP from current instance and connects to a new one.
-func (c *coreClient) switchInstance(instanceID int64, mcpName, mcpURL string) error {
+func (c *coreClient) switchInstance(instanceID int64) error {
 	// Disconnect from old instance
 	c.sendEvent("[cli] root user disconnected from terminal", "main")
-	c.disconnectMCP(mcpName)
 
 	// Switch to new instance
 	c.instancePrefix = fmt.Sprintf("/instances/%d", instanceID)
@@ -77,8 +77,7 @@ func (c *coreClient) switchInstance(instanceID int64, mcpName, mcpURL string) er
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// Register MCP + send connect
-	c.connectMCP(mcpName, mcpURL)
+	// Channels MCP is server-managed — just send the connect event
 	c.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Greet them now.", "main")
 	return nil
 }
@@ -92,6 +91,90 @@ func startInstance(client *coreClient, instanceID int64) error {
 	}
 	resp.Body.Close()
 	return nil
+}
+
+// submitCLIReply sends the user's answer to a pending channels_ask call.
+func (c *coreClient) submitCLIReply(text string) error {
+	body, _ := json.Marshal(map[string]string{"text": text})
+	req, _ := http.NewRequest("POST", c.coreURL("/channels/cli/reply"), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// pushProvidersToCore fetches all LLM providers from server and pushes config to core (hot-reload).
+func (c *coreClient) pushProvidersToCore() {
+	data, err := c.serverGet("/providers")
+	if err != nil {
+		return
+	}
+	var provs []struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
+	}
+	json.Unmarshal(data, &provs)
+
+	// Get current default from core
+	defaultProv := ""
+	if coreCfg, err := c.getConfig(); err == nil {
+		if ps, ok := coreCfg["providers"].([]any); ok {
+			for _, raw := range ps {
+				if pm, ok := raw.(map[string]any); ok {
+					if def, _ := pm["default"].(bool); def {
+						defaultProv, _ = pm["name"].(string)
+					}
+				}
+			}
+		}
+	}
+
+	var configs []map[string]any
+	for _, p := range provs {
+		switch p.Type {
+		case "fireworks", "openai", "anthropic", "google", "ollama":
+			detail, _ := c.serverGet(fmt.Sprintf("/providers/%d", p.ID))
+			var pd struct{ Data map[string]string `json:"data"` }
+			json.Unmarshal(detail, &pd)
+			entry := map[string]any{
+				"name":    p.Type,
+				"default": p.Type == defaultProv,
+				"models": map[string]string{
+					"large":  pd.Data["model_large"],
+					"medium": pd.Data["model_medium"],
+					"small":  pd.Data["model_small"],
+				},
+			}
+			configs = append(configs, entry)
+		}
+	}
+	if len(configs) > 0 {
+		body, _ := json.Marshal(map[string]any{"providers": configs})
+		c.do(c.putRequest("/config", body))
+	}
+}
+
+// connectTelegram tells the server to start a Telegram gateway for this instance.
+func (c *coreClient) connectTelegram(token string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"token": token})
+	req, _ := http.NewRequest("POST", c.coreURL("/channels/telegram"), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		BotName string `json:"bot_name"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("server error: HTTP %d", resp.StatusCode)
+	}
+	return result.BotName, nil
 }
 
 // status fetches core status.
@@ -297,7 +380,11 @@ func (c *coreClient) putRequest(path string, body []byte) *http.Request {
 
 // streamEvents opens SSE connection and sends events to a channel.
 func (c *coreClient) streamEvents(ch chan<- map[string]any, done <-chan struct{}) {
-	req, _ := http.NewRequest("GET", c.coreURL("/events"), nil)
+	// Use context so closing done cancels the HTTP request and unblocks Read
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-done; cancel() }()
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", c.coreURL("/events"), nil)
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
@@ -351,6 +438,7 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 	go client.streamEvents(evCh, done)
 
 	ext := &textExtractor{}
+	respondingToCLI := true // default true — only set false when we see non-cli channel
 
 	for {
 		select {
@@ -381,6 +469,30 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 							CallID:   callID,
 						})
 					}
+					// Track if channels_respond targets cli (for streaming filter)
+					// Note: tool.call arrives AFTER llm.tool_chunk, so we only use it
+					// to turn OFF streaming for non-cli channels
+					if name == "channels_respond" {
+						args, _ := data["args"].(map[string]any)
+						if args != nil {
+							ch, _ := args["channel"].(string)
+							if ch != "" && ch != "cli" {
+								respondingToCLI = false
+							}
+						}
+					}
+					// Channel tools: signal CLI for status
+					if name == "channels_status" {
+						args, _ := data["args"].(map[string]any)
+						if args != nil {
+							line, _ := args["line"].(string)
+							level, _ := args["level"].(string)
+							if level == "" {
+								level = "info"
+							}
+							p.Send(statusMsg(statusUpdate{Line: line, Level: level}))
+						}
+					}
 				}
 			case "tool.result":
 				if data != nil {
@@ -400,6 +512,14 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 							DurationMs: int64(durMs),
 							Success:    success,
 						})
+					}
+					// channels_respond result → finalize stream + reset extractor
+					if name == "channels_respond" {
+						ext.reset()
+						if respondingToCLI {
+							p.Send(respondMsg(""))
+						}
+						respondingToCLI = true // reset for next call
 					}
 				}
 			case "llm.done":
@@ -433,8 +553,9 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 			case "thread.spawn":
 				if data != nil {
 					id, _ := data["id"].(string)
+					parentID, _ := data["parent_id"].(string)
 					directive, _ := data["directive"].(string)
-					p.Send(threadSpawnMsg{ID: id, Directive: directive})
+					p.Send(threadSpawnMsg{ID: id, ParentID: parentID, Directive: directive})
 				}
 			case "thread.done":
 				if data != nil {
@@ -476,7 +597,7 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 				}
 				tool, _ := data["tool"].(string)
 				chunk, _ := data["chunk"].(string)
-				if tool != "channels_respond" || chunk == "" {
+				if tool != "channels_respond" || chunk == "" || !respondingToCLI {
 					continue
 				}
 
@@ -499,6 +620,13 @@ type textExtractor struct {
 	inText     bool // we've found "text":" and are extracting
 	emitted    int  // how many bytes of the text value we've already emitted
 	pendingEsc bool // previous chunk ended with a backslash
+}
+
+func (e *textExtractor) reset() {
+	e.buf.Reset()
+	e.inText = false
+	e.emitted = 0
+	e.pendingEsc = false
 }
 
 func (e *textExtractor) feed(chunk string) string {

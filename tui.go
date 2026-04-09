@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -14,6 +17,11 @@ import (
 // Messages
 type respondMsg string
 type askMsg string
+
+type statusUpdate struct {
+	Line  string
+	Level string
+}
 type statusMsg statusUpdate
 type connectedMsg struct{}
 type tickMsg time.Time
@@ -70,6 +78,14 @@ type providerModelListMsg struct {      // model list ready for search modal
 	items      []modalSearchItem
 	client     *coreClient
 }
+type credentialUpdateMsg struct {       // chain through credential fields
+	providerID int64
+	ptype      string
+	fields     []string
+	values     map[string]string
+	fieldIdx   int
+	client     *coreClient
+}
 type providerAddMsg struct {            // add a new provider
 	client *coreClient
 }
@@ -119,6 +135,7 @@ type modeChangedMsg string             // mode changed via SSE
 type threadDoneMsg string              // thread done via SSE
 type threadSpawnMsg struct {           // thread spawned via SSE
 	ID        string
+	ParentID  string
 	Directive string
 }
 type sideSSEUpdate struct {            // side panel update from llm.done
@@ -139,7 +156,14 @@ type integrateListMsg struct {       // catalog fetched for searchable list
 	connected []string
 }
 type computerSelectMsg string       // re-dispatch /computer with selected value
-type browserbaseKeyMsg string    // API key entered, chain to project ID input
+type computerMenuMsg struct {      // computer menu data loaded
+	current      string
+	bbLabel      string
+	hasBBProvider bool
+	bbProviderID int64
+}
+type browserbaseKeyMsg string     // trigger credential prompt (empty = no saved provider)
+type browserbaseProjectMsg string // API key entered, chain to project ID input
 type integrateConnectMsg struct { // integration connected result
 	slug  string
 	connID int64
@@ -201,15 +225,16 @@ var allCommands = []cmdDef{
 	{"/settings", "toggle features", ""},
 	{"/pause", "toggle pause", ""},
 	{"/clear", "clear screen", ""},
+	{"/stats", "usage stats (cost, tokens, calls)", ""},
+	{"/history", "browse past activity", ""},
+	{"/dashboard", "open web dashboard", ""},
 	{"/help", "all commands", ""},
 	{"/quit", "exit", ""},
 }
 
 type tuiModel struct {
 	th          theme
-	mcp         *mcpServer
 	client      *coreClient
-	registry    *ChannelRegistry
 	input       textinput.Model
 	lines       []styledLine // scrollback buffer
 	scrollOff   int
@@ -237,11 +262,8 @@ type tuiModel struct {
 	thoughts      map[string]*threadThought // latest thought per thread
 	events        map[string]*threadEvent  // latest event per thread
 
-	// CLI channel pipes (set by main after construction)
-	cliRespond  chan string
-	cliAskCh    chan string
-	cliAskReply chan string
-	cliStatusCh chan statusUpdate
+	// CLI ask reply — set when agent asks a question via channels_ask
+	askPending bool
 
 	// Apteva config
 	aptevaCfg AptevaConfig
@@ -250,9 +272,6 @@ type tuiModel struct {
 	// SSE reconnect support
 	sseDone    chan struct{}
 	teaProgram *tea.Program
-
-	// Gateways
-	telegramGW *TelegramGateway
 
 	// Integration credential collection (multi-field)
 	integrateSlug     string
@@ -302,9 +321,11 @@ type sideData struct {
 }
 
 type sideThread struct {
-	ID   string
-	Rate string
-	Iter int
+	ID       string
+	ParentID string
+	Depth    int
+	Rate     string
+	Iter     int
 }
 
 type sideDataMsg *sideData
@@ -329,7 +350,6 @@ type connectResultMsg struct {
 	gateway string
 	botName string
 	err     error
-	gw      *TelegramGateway
 }
 
 type modalMsg struct {
@@ -343,7 +363,7 @@ type styledLine struct {
 	ts    time.Time
 }
 
-func newTUI(th theme, mcp *mcpServer, client *coreClient, registry *ChannelRegistry) tuiModel {
+func newTUI(th theme, client *coreClient) tuiModel {
 	ti := textinput.New()
 	ti.Placeholder = ""
 	ti.CharLimit = 1000
@@ -354,8 +374,6 @@ func newTUI(th theme, mcp *mcpServer, client *coreClient, registry *ChannelRegis
 
 	return tuiModel{
 		th:          th,
-		mcp:         mcp,
-		registry:    registry,
 		thoughts:    make(map[string]*threadThought),
 		events:      make(map[string]*threadEvent),
 		activeTools: make(map[string]*activeTool),
@@ -369,31 +387,13 @@ func newTUI(th theme, mcp *mcpServer, client *coreClient, registry *ChannelRegis
 func (m tuiModel) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
-		listenRespond(m.cliRespond),
-		listenAsk(m.cliAskCh),
-		listenStatus(m.cliStatusCh),
 		tickEvery(),
 		pollSideData(m.client),
 	)
 }
 
-func listenRespond(ch chan string) tea.Cmd {
-	return func() tea.Msg {
-		return respondMsg(<-ch)
-	}
-}
-
-func listenAsk(ch chan string) tea.Cmd {
-	return func() tea.Msg {
-		return askMsg(<-ch)
-	}
-}
-
-func listenStatus(ch chan statusUpdate) tea.Cmd {
-	return func() tea.Msg {
-		return statusMsg(<-ch)
-	}
-}
+// respondMsg, askMsg, statusMsg are now sent by the SSE handler in client.go
+// when it sees tool.call/tool.result for channels_respond/channels_ask/channels_status.
 
 func tickEvery() tea.Cmd {
 	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
@@ -453,7 +453,12 @@ func pollSideData(client *coreClient) tea.Cmd {
 				id, _ := t["id"].(string)
 				rate, _ := t["rate"].(string)
 				iter, _ := t["iteration"].(float64)
-				sd.Threads = append(sd.Threads, sideThread{ID: id, Rate: rate, Iter: int(iter)})
+				parentID, _ := t["parent_id"].(string)
+				depth, _ := t["depth"].(float64)
+				if id == "main" {
+					continue // main is shown separately
+				}
+				sd.Threads = append(sd.Threads, sideThread{ID: id, ParentID: parentID, Depth: int(depth), Rate: rate, Iter: int(iter)})
 			}
 		}
 
@@ -525,7 +530,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.closeModal()
 					return m, nil
 				}
-			case "up", "k":
+			case "up":
 				if m.modalSearch || m.modalSelect {
 					if m.modalCursor > 0 {
 						m.modalCursor--
@@ -538,7 +543,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				}
-			case "down", "j":
+			case "k":
+				// Only use k for navigation when no input is active
+				if !m.modalInput && !m.modalSearch {
+					if m.modalSelect {
+						if m.modalCursor > 0 {
+							m.modalCursor--
+						}
+						return m, nil
+					}
+					if m.modalScroll > 0 {
+						m.modalScroll--
+					}
+					return m, nil
+				}
+			case "down":
 				if m.modalSearch {
 					if m.modalCursor < len(m.modalSearchFiltered)-1 {
 						m.modalCursor++
@@ -552,6 +571,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if !m.modalInput {
+					m.modalScroll++
+					return m, nil
+				}
+			case "j":
+				if !m.modalInput && !m.modalSearch {
+					if m.modalSelect {
+						if m.modalCursor < len(m.modalItems)-1 {
+							m.modalCursor++
+						}
+						return m, nil
+					}
 					m.modalScroll++
 					return m, nil
 				}
@@ -627,12 +657,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Command — run it without connecting
 					return m.handleInput()
 				}
-				// Connect first, then send the message if any
 				m.waitingConnect = false
-				go m.client.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Greet them now.", "main")
 				if text != "" {
-					// Also send the typed message
-					return m.handleInput()
+					// Include the message in the connect event — single event, no race
+					m.input.SetValue("")
+					if len(m.lines) > 0 {
+						m.addLine("", "dim")
+					}
+					m.addLine("> "+text, "input")
+					m.addLine("", "dim")
+					m.waiting = true
+					m.scrollOff = 0
+					go m.client.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Their first message: "+text, "main")
+				} else {
+					go m.client.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Greet them now.", "main")
 				}
 				return m, nil
 			}
@@ -683,7 +721,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scrollOff = 0
 
 	case respondMsg:
-		// Full response arrived via MCP tool call — if we were streaming, just finalize
+		// Response arrived — if streaming, just finalize; otherwise display text
 		if m.streaming {
 			m.streaming = false
 			m.streamLine = -1
@@ -694,21 +732,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLine(string(msg), "output")
 		}
 		m.waiting = false
-		// (tool reason now tracked via activeTools)
 		m.scrollOff = 0
-		cmds = append(cmds, listenRespond(m.cliRespond))
 
 	case askMsg:
 		m.asking = true
+		m.askPending = true
 		m.waiting = false
 		m.addLine(string(msg), "output")
 		m.scrollOff = 0
-		cmds = append(cmds, listenAsk(m.cliAskCh))
 
 	case statusMsg:
 		m.statusLine = msg.Line
 		m.statusLevel = msg.Level
-		cmds = append(cmds, listenStatus(m.cliStatusCh))
 
 	case connectedMsg:
 		m.connected = true
@@ -718,13 +753,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.openModal("CONNECT ERROR", []string{"", "  " + msg.err.Error(), "", "  Press Esc to close."})
 		} else {
-			if msg.gw != nil {
-				m.telegramGW = msg.gw
-				m.registry.AddFactory(msg.gw.ChannelFactory())
-			}
 			m.openModal(strings.ToUpper(msg.gateway)+" CONNECTED", []string{"", fmt.Sprintf("  Bot @%s online.", msg.botName), "", "  Press Esc to close."})
-			m.client.sendEvent(fmt.Sprintf("[%s] gateway connected. Bot @%s online. The agent can send messages to any telegram user who has started this bot using channels_respond(channel=\"%s:<chat_id>\"). When a user messages the bot, their chat_id appears in the event prefix.",
-				msg.gateway, msg.botName, msg.gateway), "main")
 		}
 		return m, nil
 
@@ -1020,7 +1049,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		lines = append(lines, "  Select to switch, or type a new name to create:")
 		lines = append(lines, "")
 		cli := m.client
-		mcpURL := m.mcp.url()
 		projects := msg.projects
 		// Build search items — include a "+" create option
 		var si []modalSearchItem
@@ -1055,7 +1083,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if len(instances) == 0 {
 							return projectSwitchedMsg{err: fmt.Errorf("no instance in project %s", name)}
 						}
-						cli.switchInstance(instances[0].ID, mcpName, mcpURL)
+						cli.switchInstance(instances[0].ID)
 						return projectSwitchedMsg{projectID: selected, projectName: name, instanceID: instances[0].ID}
 					}
 				}
@@ -1083,7 +1111,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				instData, _ := cli.serverPost("/instances", instBody)
 				var inst struct{ ID int64 `json:"id"` }
 				json.Unmarshal(instData, &inst)
-				cli.switchInstance(inst.ID, mcpName, mcpURL)
+				cli.switchInstance(inst.ID)
 				return projectCreatedMsg{projectID: proj.ID, projectName: name, instanceID: inst.ID}
 			}
 		}
@@ -1218,10 +1246,43 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if selected == "set as default" {
+				ptype := p.ptype
 				return func() tea.Msg {
-					// Move this provider to first position by deleting and re-creating
-					// For now, just show confirmation
-					return modalMsg{title: "DEFAULT", text: fmt.Sprintf("  Set %s as default.\n  Restart instance to apply.", p.ptype)}
+					// Fetch all providers, rebuild with this one as default, push to core
+					data, err := cli.serverGet("/providers")
+					if err != nil {
+						return modalMsg{title: "ERROR", text: "  " + err.Error()}
+					}
+					var provs []struct {
+						ID   int64  `json:"id"`
+						Type string `json:"type"`
+					}
+					json.Unmarshal(data, &provs)
+
+					var configs []map[string]any
+					for _, p := range provs {
+						switch p.Type {
+						case "fireworks", "openai", "anthropic", "google", "ollama":
+							detail, _ := cli.serverGet(fmt.Sprintf("/providers/%d", p.ID))
+							var pd struct{ Data map[string]string `json:"data"` }
+							json.Unmarshal(detail, &pd)
+							entry := map[string]any{
+								"name":    p.Type,
+								"default": p.Type == ptype,
+								"models": map[string]string{
+									"large":  pd.Data["model_large"],
+									"medium": pd.Data["model_medium"],
+									"small":  pd.Data["model_small"],
+								},
+							}
+							configs = append(configs, entry)
+						}
+					}
+					if len(configs) > 0 {
+						body, _ := json.Marshal(map[string]any{"providers": configs})
+						cli.do(cli.putRequest("/config", body))
+					}
+					return modalMsg{title: "DEFAULT", text: fmt.Sprintf("  %s is now the default provider.", ptype)}
 				}
 			}
 			if selected == "remove provider" {
@@ -1247,6 +1308,74 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return providerModelListMsg{tier: tier, providerID: providerID, items: si, client: cli}
 			}
 		})
+		return m, nil
+
+	case credentialUpdateMsg:
+		if msg.fieldIdx >= len(msg.fields) {
+			// All fields collected — update provider + hot-connect
+			cli := msg.client
+			pid := msg.providerID
+			ptype := msg.ptype
+			values := msg.values
+			return m, func() tea.Msg {
+				// Read existing, merge, PUT back
+				detail, err := cli.serverGet(fmt.Sprintf("/providers/%d", pid))
+				if err != nil {
+					return modalMsg{title: "ERROR", text: "  " + err.Error()}
+				}
+				var pd struct {
+					Type string            `json:"type"`
+					Name string            `json:"name"`
+					Data map[string]string `json:"data"`
+				}
+				json.Unmarshal(detail, &pd)
+				if pd.Data == nil {
+					pd.Data = map[string]string{}
+				}
+				for k, v := range values {
+					pd.Data[k] = v
+				}
+				putBody, _ := json.Marshal(pd)
+				req, _ := http.NewRequest("PUT", cli.base+fmt.Sprintf("/providers/%d", pid), bytes.NewReader(putBody))
+				req.Header.Set("Content-Type", "application/json")
+				if cli.apiKey != "" {
+					req.Header.Set("Authorization", "Bearer "+cli.apiKey)
+				}
+				resp, err := cli.do(req)
+				if err != nil {
+					return modalMsg{title: "ERROR", text: "  " + err.Error()}
+				}
+				resp.Body.Close()
+				// Auto-connect if browser provider
+				if ptype == "browserbase" || ptype == "browser" {
+					apiKey := values["BROWSERBASE_API_KEY"]
+					projectID := values["BROWSERBASE_PROJECT_ID"]
+					if apiKey != "" {
+						err := cli.setComputer(map[string]any{
+							"type": "browserbase", "api_key": apiKey,
+							"project_id": projectID, "width": 1280, "height": 800,
+						})
+						if err != nil {
+							return modalMsg{title: "CREDENTIALS", text: fmt.Sprintf("  Credentials saved but connect failed: %v", err)}
+						}
+						return modalMsg{title: "BROWSERBASE", text: "  Credentials updated and connected."}
+					}
+				}
+				return modalMsg{title: "CREDENTIALS", text: "  Credentials updated."}
+			}
+		}
+		field := msg.fields[msg.fieldIdx]
+		remaining := msg
+		m.openInputModal(
+			"CREDENTIALS — "+strings.ToUpper(msg.ptype),
+			[]string{"", fmt.Sprintf("  Field %d/%d: %s", msg.fieldIdx+1, len(msg.fields), field), ""},
+			field,
+			func(value string) tea.Cmd {
+				remaining.values[field] = value
+				remaining.fieldIdx++
+				return func() tea.Msg { return remaining }
+			},
+		)
 		return m, nil
 
 	case providerAddMsg:
@@ -1310,7 +1439,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.openModal("ERROR", []string{"", "  " + msg.err.Error()})
 		} else {
-			m.openModal("PROVIDER ADDED", []string{"", fmt.Sprintf("  %s added successfully.", msg.ptype), "", "  Restart instance to apply."})
+			go m.client.pushProvidersToCore()
+			m.openModal("PROVIDER ADDED", []string{"", fmt.Sprintf("  %s added and activated.", msg.ptype)})
 		}
 		return m, nil
 
@@ -1324,16 +1454,32 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				providerID := msg.providerID
 				tier := msg.tier
 				return func() tea.Msg {
-					// Update provider
-					body, _ := json.Marshal(map[string]any{
-						"data_update": map[string]string{
-							"model_" + tier: modelID,
-						},
-					})
-					_, err := cli.serverPost(fmt.Sprintf("/providers/%d", providerID), body)
+					// Read existing provider data, merge change, PUT back
+					detail, err := cli.serverGet(fmt.Sprintf("/providers/%d", providerID))
 					if err != nil {
 						return providerModelSetMsg{tier: tier, err: err}
 					}
+					var pd struct {
+						Type string            `json:"type"`
+						Name string            `json:"name"`
+						Data map[string]string `json:"data"`
+					}
+					json.Unmarshal(detail, &pd)
+					if pd.Data == nil {
+						pd.Data = map[string]string{}
+					}
+					pd.Data["model_"+tier] = modelID
+					body, _ := json.Marshal(pd)
+					req, _ := http.NewRequest("PUT", cli.base+fmt.Sprintf("/providers/%d", providerID), bytes.NewReader(body))
+					req.Header.Set("Content-Type", "application/json")
+					if cli.apiKey != "" {
+						req.Header.Set("Authorization", "Bearer "+cli.apiKey)
+					}
+					resp, err := cli.do(req)
+					if err != nil {
+						return providerModelSetMsg{tier: tier, err: err}
+					}
+					resp.Body.Close()
 					return providerModelSetMsg{tier: tier, model: modelID}
 				}
 			},
@@ -1361,15 +1507,32 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			btJSON, _ := json.Marshal(newEnabled)
 			return func() tea.Msg {
-				body, _ := json.Marshal(map[string]any{
-					"data_update": map[string]string{
-						"builtin_tools": string(btJSON),
-					},
-				})
-				_, err := cli.serverPost(fmt.Sprintf("/providers/%d", providerID), body)
+				// Read existing, merge, PUT back
+				detail, err := cli.serverGet(fmt.Sprintf("/providers/%d", providerID))
 				if err != nil {
 					return providerModelSetMsg{tier: "builtin", err: err}
 				}
+				var pd struct {
+					Type string            `json:"type"`
+					Name string            `json:"name"`
+					Data map[string]string `json:"data"`
+				}
+				json.Unmarshal(detail, &pd)
+				if pd.Data == nil {
+					pd.Data = map[string]string{}
+				}
+				pd.Data["builtin_tools"] = string(btJSON)
+				body, _ := json.Marshal(pd)
+				req, _ := http.NewRequest("PUT", cli.base+fmt.Sprintf("/providers/%d", providerID), bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				if cli.apiKey != "" {
+					req.Header.Set("Authorization", "Bearer "+cli.apiKey)
+				}
+				resp, err := cli.do(req)
+				if err != nil {
+					return providerModelSetMsg{tier: "builtin", err: err}
+				}
+				resp.Body.Close()
 				return providerModelSetMsg{tier: "builtin", model: strings.Join(newEnabled, ", ")}
 			}
 		})
@@ -1379,7 +1542,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.openModal("PROVIDER", []string{"", "  ERROR: " + msg.err.Error()})
 		} else {
-			m.openModal("PROVIDER", []string{"", fmt.Sprintf("  %s model set to: %s", msg.tier, msg.model), "", "  Restart instance to apply."})
+			go m.client.pushProvidersToCore()
+			m.openModal("PROVIDER", []string{"", fmt.Sprintf("  %s model set to: %s", msg.tier, msg.model)})
 		}
 		return m, nil
 
@@ -1394,7 +1558,62 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-dispatch as if user typed /computer <value>
 		return m.handleCommand("/computer " + string(msg))
 
+	case computerMenuMsg:
+		items := []string{"local", "browserbase", "off"}
+		if msg.hasBBProvider {
+			items = append(items, "update credentials")
+		}
+		m.openSelectModal(
+			"COMPUTER",
+			[]string{
+				"",
+				fmt.Sprintf("  Current: %s", msg.current),
+				"",
+				"  local        — launch local Chrome via CDP",
+				"  " + msg.bbLabel,
+				"  off          — disconnect",
+				"",
+			},
+			items,
+			msg.current,
+			func(value string) tea.Cmd {
+				if value == "update credentials" {
+					return func() tea.Msg {
+						return credentialUpdateMsg{
+							providerID: msg.bbProviderID,
+							ptype:      "browserbase",
+							fields:     []string{"BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"},
+							values:     map[string]string{},
+							fieldIdx:   0,
+							client:     m.client,
+						}
+					}
+				}
+				return func() tea.Msg {
+					return computerSelectMsg(value)
+				}
+			},
+		)
+		return m, nil
+
 	case browserbaseKeyMsg:
+		m.openInputModal(
+			"BROWSERBASE",
+			[]string{
+				"",
+				"  Enter your Browserbase API key.",
+				"",
+			},
+			"API key",
+			func(apiKey string) tea.Cmd {
+				return func() tea.Msg {
+					return browserbaseProjectMsg(apiKey)
+				}
+			},
+		)
+		return m, nil
+
+	case browserbaseProjectMsg:
 		apiKey := string(msg)
 		cli := m.client
 		m.openInputModal(
@@ -1407,17 +1626,39 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			"Project ID",
 			func(projectID string) tea.Cmd {
 				return func() tea.Msg {
+					// Remove old browser provider if exists
+					if provData, err := cli.serverGet("/providers"); err == nil {
+						var provs []struct {
+							ID   int64  `json:"id"`
+							Type string `json:"type"`
+						}
+						json.Unmarshal(provData, &provs)
+						for _, p := range provs {
+							if p.Type == "browserbase" || p.Type == "browser" {
+								cli.serverDelete(fmt.Sprintf("/providers/%d", p.ID))
+							}
+						}
+					}
+
+					// Save new provider
+					provBody, _ := json.Marshal(map[string]any{
+						"type": "browserbase", "name": "Browserbase",
+						"data": map[string]string{
+							"BROWSERBASE_API_KEY":    apiKey,
+							"BROWSERBASE_PROJECT_ID": projectID,
+						},
+					})
+					cli.serverPost("/providers", provBody)
+
+					// Connect to core
 					err := cli.setComputer(map[string]any{
-						"type":       "browserbase",
-						"api_key":    apiKey,
-						"project_id": projectID,
-						"width":      1280,
-						"height":     800,
+						"type": "browserbase", "api_key": apiKey,
+						"project_id": projectID, "width": 1280, "height": 800,
 					})
 					if err != nil {
 						return modalMsg{title: "BROWSERBASE", text: fmt.Sprintf("  ERROR: %v", err)}
 					}
-					return modalMsg{title: "BROWSERBASE", text: "  Browserbase connected (1280x800)."}
+					return modalMsg{title: "BROWSERBASE", text: "  Browserbase connected and credentials saved."}
 				}
 			},
 		)
@@ -1440,21 +1681,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sideStatus.Rate = msg.Rate
 				m.sideStatus.Model = msg.Model
 			}
-			// Merge thread list — update existing, add new, but don't remove SSE-added threads
-			pollThreads := make(map[string]sideThread)
-			for _, t := range msg.Threads {
-				pollThreads[t.ID] = t
-			}
-			for i, t := range m.sideStatus.Threads {
-				if pt, ok := pollThreads[t.ID]; ok {
-					m.sideStatus.Threads[i].Iter = pt.Iter
-					m.sideStatus.Threads[i].Rate = pt.Rate
-					delete(pollThreads, t.ID)
-				}
-			}
-			for _, pt := range pollThreads {
-				m.sideStatus.Threads = append(m.sideStatus.Threads, pt)
-			}
+			// Replace thread list from poll — poll is authoritative for which threads exist
+			m.sideStatus.Threads = msg.Threads
 		}
 		return m, nil
 
@@ -1492,8 +1720,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sideStatus == nil {
 			m.sideStatus = &sideData{}
 		}
+		// Calculate depth from parent chain
+		depth := 0
+		if msg.ParentID != "" && msg.ParentID != "main" {
+			depth = 1 // at least depth 1
+			for _, t := range m.sideStatus.Threads {
+				if t.ID == msg.ParentID {
+					depth = t.Depth + 1
+					break
+				}
+			}
+		}
 		m.sideStatus.Threads = append(m.sideStatus.Threads, sideThread{
-			ID: msg.ID, Rate: "reactive", Iter: 0,
+			ID: msg.ID, ParentID: msg.ParentID, Depth: depth, Rate: "reactive", Iter: 0,
 		})
 		return m, nil
 
@@ -1550,7 +1789,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.Width = m.chatWidth() - 6
+		m.input.Width = m.chatWidth() - 8 // panel padding (4) + prompt (2) + margin (2)
 	}
 
 	var inputCmd tea.Cmd
@@ -1575,11 +1814,12 @@ func (m *tuiModel) handleInput() (tuiModel, tea.Cmd) {
 	}
 	m.input.SetValue("")
 
-	// If answering a cli_ask question
-	if m.asking {
+	// If answering a cli_ask question — send reply to server
+	if m.asking && m.askPending {
 		m.asking = false
+		m.askPending = false
 		m.addLine("> "+text, "input")
-		m.cliAskReply <- text
+		go m.client.submitCLIReply(text)
 		return *m, nil
 	}
 
@@ -1756,11 +1996,6 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 		}
 		switch rest {
 		case "telegram":
-			if m.telegramGW != nil {
-				m.openModal("CONNECT", []string{"", "  Telegram already connected.", "", "  Press Esc to close."})
-				return *m, nil
-			}
-			reg := m.registry
 			cli := m.client
 			m.openInputModal(
 				"CONNECT TELEGRAM",
@@ -1773,12 +2008,11 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 				"Bot token",
 				func(token string) tea.Cmd {
 					return func() tea.Msg {
-						gw := NewTelegramGateway(token, reg, cli)
-						botName, err := gw.Start()
+						botName, err := cli.connectTelegram(token)
 						if err != nil {
 							return connectResultMsg{gateway: "telegram", err: err}
 						}
-						return connectResultMsg{gateway: "telegram", botName: botName, gw: gw}
+						return connectResultMsg{gateway: "telegram", botName: botName}
 					}
 				},
 			)
@@ -1794,28 +2028,40 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 		}
 		switch rest {
 		case "telegram":
-			if m.telegramGW == nil {
-				m.addLine("Telegram not connected.", "warn")
-			} else {
-				m.telegramGW.Stop()
-				m.telegramGW = nil
-				m.addLine("Telegram disconnected.", "output")
-				m.client.sendEvent("[telegram] gateway disconnected", "main")
-			}
+			m.addLine("Disconnecting telegram...", "dim")
+			// TODO: add server endpoint to disconnect telegram
+			m.client.sendEvent("[telegram] gateway disconnected", "main")
+			m.addLine("Telegram disconnected.", "output")
 		default:
 			m.addLine(fmt.Sprintf("Unknown gateway: %s", rest), "warn")
 		}
 
 	case "/channels":
-		channels := m.registry.List()
-		m.modal = true
-		m.modalTitle = fmt.Sprintf("CHANNELS (%d)", len(channels))
-		m.modalLines = []string{""}
-		for _, ch := range channels {
-			m.modalLines = append(m.modalLines, fmt.Sprintf("  %-20s  connected", ch.ID()))
+		cli := m.client
+		return *m, func() tea.Msg {
+			data, err := cli.serverGet(fmt.Sprintf("/instances/%d/channels", m.aptevaCfg.InstanceID))
+			if err != nil {
+				return modalMsg{title: "CHANNELS", text: "  ERROR: " + err.Error()}
+			}
+			var channels []struct {
+				ID      string `json:"id"`
+				Status  string `json:"status"`
+				BotName string `json:"bot_name"`
+			}
+			json.Unmarshal(data, &channels)
+			var lines []string
+			lines = append(lines, fmt.Sprintf("  %d connected", len(channels)))
+			lines = append(lines, "")
+			for _, ch := range channels {
+				label := fmt.Sprintf("  %-15s %s", ch.ID, ch.Status)
+				if ch.BotName != "" {
+					label += "  @" + ch.BotName
+				}
+				lines = append(lines, label)
+			}
+			lines = append(lines, "", "  /connect telegram — add Telegram bot")
+			return modalMsg{title: "CHANNELS", text: strings.Join(lines, "\n")}
 		}
-		m.modalLines = append(m.modalLines, "", "  Press Esc to close.")
-		m.modalScroll = 0
 
 	case "/mode":
 		rest := strings.TrimSpace(strings.TrimPrefix(text, "/mode"))
@@ -1885,50 +2131,80 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 				return modalMsg{title: "COMPUTER", text: "  Computer disconnected."}
 			}
 		case "browserbase":
-			m.openInputModal(
-				"BROWSERBASE",
-				[]string{
-					"",
-					"  Enter your Browserbase API key.",
-					"",
-				},
-				"API key",
-				func(apiKey string) tea.Cmd {
-					return func() tea.Msg {
-						// Return a special msg to chain to project ID input
-						return browserbaseKeyMsg(apiKey)
-					}
-				},
-			)
-		case "":
-			// Interactive select
-			cfg, err := m.client.getConfig()
-			current := "off"
-			if err == nil {
-				if comp, ok := cfg["computer"].(map[string]any); ok && comp != nil {
-					if t, ok := comp["type"].(string); ok && t != "" {
-						current = t
+			cli := m.client
+			// Check if browserbase provider already exists
+			return *m, func() tea.Msg {
+				data, err := cli.serverGet("/providers")
+				if err != nil {
+					return browserbaseKeyMsg("") // fall through to prompt
+				}
+				var provs []struct {
+					ID   int64  `json:"id"`
+					Type string `json:"type"`
+				}
+				json.Unmarshal(data, &provs)
+				for _, p := range provs {
+					if p.Type == "browserbase" || p.Type == "browser" {
+						// Provider exists — get credentials and connect
+						detail, err := cli.serverGet(fmt.Sprintf("/providers/%d", p.ID))
+						if err != nil {
+							continue
+						}
+						var pd struct {
+							Data map[string]string `json:"data"`
+						}
+						json.Unmarshal(detail, &pd)
+						apiKey := pd.Data["BROWSERBASE_API_KEY"]
+						projectID := pd.Data["BROWSERBASE_PROJECT_ID"]
+						if apiKey != "" {
+							err := cli.setComputer(map[string]any{
+								"type": "browserbase", "api_key": apiKey,
+								"project_id": projectID, "width": 1280, "height": 800,
+							})
+							if err != nil {
+								return modalMsg{title: "BROWSERBASE", text: fmt.Sprintf("  ERROR: %v", err)}
+							}
+							return modalMsg{title: "BROWSERBASE", text: "  Browserbase connected (saved credentials)."}
+						}
 					}
 				}
+				// No provider — prompt for credentials
+				return browserbaseKeyMsg("")
 			}
-			m.openSelectModal(
-				"COMPUTER",
-				[]string{
-					"",
-					"  local        — launch local Chrome via CDP",
-					"  browserbase  — cloud browser (needs API key)",
-					"  off          — disconnect",
-					"",
-				},
-				[]string{"local", "browserbase", "off"},
-				current,
-				func(value string) tea.Cmd {
-					return func() tea.Msg {
-						// Re-trigger the command with the selected value
-						return computerSelectMsg(value)
+		case "":
+			// Interactive select — check current status + saved provider
+			cli := m.client
+			return *m, func() tea.Msg {
+				cfg, _ := cli.getConfig()
+				current := "off"
+				if cfg != nil {
+					if comp, ok := cfg["computer"].(map[string]any); ok && comp != nil {
+						if t, ok := comp["type"].(string); ok && t != "" {
+							current = t
+						}
 					}
-				},
-			)
+				}
+				// Check for saved browserbase provider
+				var bbProviderID int64
+				provData, _ := cli.serverGet("/providers")
+				if provData != nil {
+					var provs []struct {
+						ID   int64  `json:"id"`
+						Type string `json:"type"`
+					}
+					json.Unmarshal(provData, &provs)
+					for _, p := range provs {
+						if p.Type == "browserbase" || p.Type == "browser" {
+							bbProviderID = p.ID
+						}
+					}
+				}
+				bbLabel := "browserbase  — cloud browser (needs API key)"
+				if bbProviderID > 0 {
+					bbLabel = "browserbase  — cloud browser (credentials saved ✓)"
+				}
+				return computerMenuMsg{current: current, bbLabel: bbLabel, hasBBProvider: bbProviderID > 0, bbProviderID: bbProviderID}
+			}
 		default:
 			m.openModal("COMPUTER", []string{"", fmt.Sprintf("  Unknown type: %s", rest), "", "  Available: local, browserbase, off"})
 		}
@@ -1957,8 +2233,22 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 				"google":    {"code_execution"},
 			}
 
+			// Get actual default from core's config
+			defaultProvider := ""
+			if coreCfg, err := cli.getConfig(); err == nil {
+				if provs, ok := coreCfg["providers"].([]any); ok {
+					for _, raw := range provs {
+						if pm, ok := raw.(map[string]any); ok {
+							if def, _ := pm["default"].(bool); def {
+								defaultProvider, _ = pm["name"].(string)
+							}
+						}
+					}
+				}
+			}
+
 			var details []providerDetail
-			for i, p := range providers {
+			for _, p := range providers {
 				// Only include LLM providers
 				switch strings.ToLower(p.Type) {
 				case "fireworks", "openai", "anthropic", "google", "ollama":
@@ -1970,7 +2260,7 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 					id:        p.ID,
 					ptype:     p.Type,
 					name:      p.Name,
-					isDefault: i == 0, // first LLM provider = default
+					isDefault: strings.EqualFold(p.Type, defaultProvider),
 				}
 
 				// Get model list
@@ -2190,7 +2480,6 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 		}
 		rest := strings.TrimSpace(strings.TrimPrefix(text, "/projects"))
 		cli := m.client
-		mcpURL := m.mcp.url()
 		if rest != "" {
 			// /projects create <name>
 			if strings.HasPrefix(rest, "create ") {
@@ -2215,7 +2504,7 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 					var inst struct{ ID int64 `json:"id"` }
 					json.Unmarshal(instData, &inst)
 					// Switch to it
-					cli.switchInstance(inst.ID, mcpName, mcpURL)
+					cli.switchInstance(inst.ID)
 					return projectCreatedMsg{projectID: proj.ID, projectName: name, instanceID: inst.ID}
 				}
 			}
@@ -2296,6 +2585,158 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 
 	case "/setup":
 		m.addLine("Re-run full setup: ./apteva --setup", "dim")
+
+	case "/stats":
+		cli := m.client
+		instID := m.aptevaCfg.InstanceID
+		return *m, func() tea.Msg {
+			data, err := cli.serverGet(fmt.Sprintf("/telemetry/stats?instance_id=%d&period=24h", instID))
+			if err != nil {
+				return modalMsg{title: "STATS", text: "  ERROR: " + err.Error()}
+			}
+			var stats struct {
+				TotalEvents  int     `json:"total_events"`
+				LLMCalls     int     `json:"llm_calls"`
+				TokensIn     int     `json:"total_tokens_in"`
+				TokensOut    int     `json:"total_tokens_out"`
+				TotalCost    float64 `json:"total_cost"`
+				AvgDuration  float64 `json:"avg_duration_ms"`
+				ThreadsSpawn int     `json:"threads_spawned"`
+				ThreadsDone  int     `json:"threads_done"`
+				ToolCalls    int     `json:"tool_calls"`
+				Errors       int     `json:"errors"`
+			}
+			json.Unmarshal(data, &stats)
+			lines := fmt.Sprintf(
+				"  USAGE (last 24h)\n"+
+					"  ─────────────────────────────\n"+
+					"  LLM Calls:      %d\n"+
+					"  Tokens In:      %d\n"+
+					"  Tokens Out:     %d\n"+
+					"  Total Cost:     $%.4f\n"+
+					"  Avg Duration:   %.0fms\n"+
+					"  ─────────────────────────────\n"+
+					"  Tool Calls:     %d\n"+
+					"  Threads:        %d spawned / %d done\n"+
+					"  Errors:         %d\n"+
+					"  Total Events:   %d",
+				stats.LLMCalls, stats.TokensIn, stats.TokensOut,
+				stats.TotalCost, stats.AvgDuration,
+				stats.ToolCalls, stats.ThreadsSpawn, stats.ThreadsDone,
+				stats.Errors, stats.TotalEvents,
+			)
+			return modalMsg{title: "STATS", text: lines}
+		}
+
+	case "/history":
+		rest := strings.TrimSpace(strings.TrimPrefix(text, "/history"))
+		cli := m.client
+		instID := m.aptevaCfg.InstanceID
+		// /history         — show recent activity (thoughts + tool calls)
+		// /history tools   — show recent tool calls
+		// /history errors  — show recent errors
+		// /history threads — show thread spawn/done history
+		eventType := ""
+		title := "RECENT ACTIVITY"
+		limit := 20
+		switch rest {
+		case "tools":
+			eventType = "tool.call"
+			title = "TOOL CALLS"
+		case "errors":
+			eventType = "llm.error"
+			title = "ERRORS"
+		case "threads":
+			eventType = "thread.spawn"
+			title = "THREAD HISTORY"
+			limit = 30
+		}
+		return *m, func() tea.Msg {
+			params := fmt.Sprintf("/telemetry?instance_id=%d&limit=%d", instID, limit)
+			if eventType != "" {
+				params += "&type=" + eventType
+			}
+			data, err := cli.serverGet(params)
+			if err != nil {
+				return modalMsg{title: title, text: "  ERROR: " + err.Error()}
+			}
+			var events []struct {
+				ThreadID string         `json:"thread_id"`
+				Type     string         `json:"type"`
+				Time     string         `json:"time"`
+				Data     map[string]any `json:"data"`
+			}
+			json.Unmarshal(data, &events)
+			if len(events) == 0 {
+				return modalMsg{title: title, text: "  No events found."}
+			}
+			var lines []string
+			for _, ev := range events {
+				ts := ev.Time
+				if len(ts) > 19 {
+					ts = ts[11:19] // HH:MM:SS
+				}
+				switch ev.Type {
+				case "llm.done":
+					msg, _ := ev.Data["message"].(string)
+					if len(msg) > 80 {
+						msg = msg[:80] + "..."
+					}
+					tokIn, _ := ev.Data["tokens_in"].(float64)
+					tokOut, _ := ev.Data["tokens_out"].(float64)
+					cost, _ := ev.Data["cost_usd"].(float64)
+					lines = append(lines, fmt.Sprintf("  %s [%s] %d→%d tok $%.4f", ts, ev.ThreadID, int(tokIn), int(tokOut), cost))
+					if msg != "" {
+						lines = append(lines, fmt.Sprintf("         %s", msg))
+					}
+				case "tool.call":
+					name, _ := ev.Data["name"].(string)
+					reason, _ := ev.Data["reason"].(string)
+					line := fmt.Sprintf("  %s [%s] ⚡ %s", ts, ev.ThreadID, name)
+					if reason != "" {
+						if len(reason) > 50 {
+							reason = reason[:50] + "..."
+						}
+						line += " — " + reason
+					}
+					lines = append(lines, line)
+				case "tool.result":
+					name, _ := ev.Data["name"].(string)
+					durMs, _ := ev.Data["duration_ms"].(float64)
+					success, _ := ev.Data["success"].(bool)
+					icon := "✓"
+					if !success {
+						icon = "✗"
+					}
+					lines = append(lines, fmt.Sprintf("  %s [%s] %s %s (%dms)", ts, ev.ThreadID, icon, name, int(durMs)))
+				case "thread.spawn":
+					dir, _ := ev.Data["directive"].(string)
+					if len(dir) > 60 {
+						dir = dir[:60] + "..."
+					}
+					lines = append(lines, fmt.Sprintf("  %s ⚙ %s spawned", ts, ev.ThreadID))
+					if dir != "" {
+						lines = append(lines, fmt.Sprintf("         %s", dir))
+					}
+				case "thread.done":
+					lines = append(lines, fmt.Sprintf("  %s ✓ %s done", ts, ev.ThreadID))
+				case "llm.error":
+					errMsg, _ := ev.Data["error"].(string)
+					if len(errMsg) > 70 {
+						errMsg = errMsg[:70] + "..."
+					}
+					lines = append(lines, fmt.Sprintf("  %s [%s] ✗ %s", ts, ev.ThreadID, errMsg))
+				default:
+					lines = append(lines, fmt.Sprintf("  %s [%s] %s", ts, ev.ThreadID, ev.Type))
+				}
+			}
+			return modalMsg{title: title, text: strings.Join(lines, "\n")}
+		}
+
+	case "/dashboard":
+		url := fmt.Sprintf("http://localhost:%d/app/", m.aptevaCfg.ServerPort)
+		m.addLine("Opening dashboard: "+url, "dim")
+		go exec.Command("xdg-open", url).Run()
 
 	case "/help":
 		m.modal = true
@@ -2442,17 +2883,11 @@ func (m *tuiModel) openInputModal(title string, lines []string, prompt string, o
 func (m *tuiModel) connectGateway(target, token string) (tuiModel, tea.Cmd) {
 	switch target {
 	case "telegram":
-		if m.telegramGW != nil {
-			m.addLine("Telegram already connected.", "warn")
-			return *m, nil
-		}
-		gw := NewTelegramGateway(token, m.registry, m.client)
-		m.telegramGW = gw
+		cli := m.client
 		m.addLine("Connecting to Telegram...", "dim")
 		return *m, func() tea.Msg {
-			botName, err := gw.Start()
+			botName, err := cli.connectTelegram(token)
 			if err != nil {
-				m.telegramGW = nil
 				return connectResultMsg{gateway: "telegram", err: err}
 			}
 			return connectResultMsg{gateway: "telegram", botName: botName}
@@ -2684,9 +3119,10 @@ func (m tuiModel) View() string {
 		statusStyled = dim.Render(statusText)
 	}
 
-	// Input line
+	// Input line — truncate to panel width so long text scrolls instead of overflowing
 	prompt := primary.Bold(true).Render("> ")
-	inputLine := prompt + m.input.View()
+	inputView := m.input.View()
+	inputLine := prompt + inputView
 
 	// Build chat column
 	chatLines = append(chatLines, dim.Render(strings.Repeat("─", innerChat)))
@@ -2930,23 +3366,51 @@ func (m tuiModel) renderSidePanel(w, h int, dim, primary, accent, warn lipgloss.
 		}
 		lines = append(lines, "")
 
-		// Directive (truncated)
+		// Directive (truncated to 3 lines max)
 		lines = append(lines, dim.Render(strings.Repeat("─", w)))
 		lines = append(lines, accent.Bold(true).Render("DIRECTIVE"))
 		lines = append(lines, "")
 		directive := sd.Directive
-		// Wrap directive to panel width
-		for _, dl := range wrapText(directive, w) {
+		wrapped := wrapText(directive, w)
+		maxLines := 3
+		for i, dl := range wrapped {
+			if i >= maxLines {
+				lines = append(lines, dim.Render("…"))
+				break
+			}
 			lines = append(lines, dim.Render(dl))
 		}
 		lines = append(lines, "")
 
-		// Threads + latest thoughts
+		// Threads + latest thoughts — rendered as tree
 		lines = append(lines, dim.Render(strings.Repeat("─", w)))
 		lines = append(lines, accent.Bold(true).Render(fmt.Sprintf("THREADS (%d)", len(sd.Threads))))
 		lines = append(lines, "")
-		for _, t := range sd.Threads {
-			label := primary.Render(fmt.Sprintf("%-10s", t.ID))
+
+		// Sort threads: group children under parents using depth-first ordering
+		orderedThreads := orderThreadTree(sd.Threads)
+
+		for _, t := range orderedThreads {
+			// Build tree prefix based on depth
+			indent := ""
+			for i := 0; i < t.Depth; i++ {
+				indent += "  "
+			}
+			if t.Depth > 0 {
+				indent += "├ "
+			}
+
+			// Thread name — truncate to fit
+			name := t.ID
+			maxName := w - len(indent) - 10
+			if maxName < 6 {
+				maxName = 6
+			}
+			if len(name) > maxName {
+				name = name[:maxName-1] + "…"
+			}
+
+			label := dim.Render(indent) + primary.Render(name) + " "
 			// Show active tool or rate
 			if toolLabel, ok := m.threadTools[t.ID]; ok {
 				phase := m.spinnerTick % 8
@@ -2968,9 +3432,16 @@ func (m tuiModel) renderSidePanel(w, h int, dim, primary, accent, warn lipgloss.
 					// Clean up: single line, truncate
 					text = strings.ReplaceAll(text, "\n", " ")
 					text = strings.Join(strings.Fields(text), " ")
-					maxLen := w - 2
+					thoughtIndent := indent
+					if t.Depth > 0 {
+						thoughtIndent += "  "
+					}
+					maxLen := w - len(thoughtIndent) - 2
 					if maxLen > 80 {
 						maxLen = 80
+					}
+					if maxLen < 10 {
+						maxLen = 10
 					}
 					if len(text) > maxLen {
 						text = text[:maxLen-1] + "…"
@@ -2984,7 +3455,7 @@ func (m tuiModel) renderSidePanel(w, h int, dim, primary, accent, warn lipgloss.
 					} else {
 						thoughtStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("237")).Italic(true)
 					}
-					lines = append(lines, thoughtStyle.Render("  "+text))
+					lines = append(lines, thoughtStyle.Render(thoughtIndent+"  "+text))
 				}
 			}
 
@@ -3068,6 +3539,50 @@ func renderMarkdown(text string, base, accent lipgloss.Style) string {
 	}
 
 	return base.Render(result.String())
+}
+
+// orderThreadTree sorts threads into depth-first tree order.
+// Children appear directly after their parent, grouped by parent.
+func orderThreadTree(threads []sideThread) []sideThread {
+	if len(threads) == 0 {
+		return threads
+	}
+
+	// Build children map
+	children := map[string][]sideThread{} // parentID → children
+	for _, t := range threads {
+		pid := t.ParentID
+		if pid == "" {
+			pid = "main"
+		}
+		children[pid] = append(children[pid], t)
+	}
+
+	// DFS from main's children
+	var result []sideThread
+	var walk func(parentID string)
+	walk = func(parentID string) {
+		for _, child := range children[parentID] {
+			result = append(result, child)
+			walk(child.ID)
+		}
+	}
+	walk("main")
+
+	// If any threads weren't reached (orphans), append them at the end
+	if len(result) < len(threads) {
+		seen := map[string]bool{}
+		for _, t := range result {
+			seen[t.ID] = true
+		}
+		for _, t := range threads {
+			if !seen[t.ID] {
+				result = append(result, t)
+			}
+		}
+	}
+
+	return result
 }
 
 func formatDuration(d time.Duration) string {
