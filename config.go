@@ -8,14 +8,16 @@ import (
 
 // AptevaConfig holds the CLI/launcher config at ~/.apteva/apteva.json.
 type AptevaConfig struct {
-	Capabilities Capabilities `json:"capabilities"`
-	Remote       bool         `json:"remote,omitempty"`
-	ServerURL    string       `json:"server_url,omitempty"`  // remote server URL (e.g. "https://agents.example.com")
-	ServerPort   int          `json:"server_port,omitempty"` // local server port
-	APIKey       string       `json:"api_key,omitempty"`
-	InstanceID   int64        `json:"instance_id,omitempty"`
-	ProjectID    string       `json:"project_id,omitempty"`
-	UserID       int64        `json:"user_id,omitempty"`
+	Capabilities    Capabilities `json:"capabilities"`
+	Remote          bool         `json:"remote,omitempty"`
+	ServerURL       string       `json:"server_url,omitempty"`  // remote server URL (e.g. "https://agents.example.com")
+	ServerPort      int          `json:"server_port,omitempty"` // local server port
+	APIKey          string       `json:"api_key,omitempty"`
+	InstanceID      int64        `json:"instance_id,omitempty"`
+	ProjectID       string       `json:"project_id,omitempty"`
+	UserID          int64        `json:"user_id,omitempty"`
+	AccountEmail    string       `json:"account_email,omitempty"`    // dashboard login email
+	AccountPassword string       `json:"account_password,omitempty"` // dashboard login password
 }
 
 type Capabilities struct {

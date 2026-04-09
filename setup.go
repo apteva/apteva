@@ -21,11 +21,16 @@ type setupConfig struct {
 	RemoteAPIKey string
 	Provider     string
 	APIKey       string
+	AccountEmail    string
+	AccountPassword string
 	ModelLarge   string
 	ModelMedium  string
 	ModelSmall   string
-	Computer     bool
-	Integrations bool
+	Computer       bool
+	ComputerType   string // "local" or "browserbase"
+	BrowserbaseKey string
+	BrowserbasePID string
+	Integrations   bool
 	Telegram     bool
 	Projects     bool
 	Directive    string
@@ -41,8 +46,8 @@ type providerOption struct {
 }
 
 var providers = []providerOption{
-	{Name: "fireworks", Label: "Fireworks (Kimi K2.5)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/models/kimi-k2p5", Medium: "accounts/fireworks/models/kimi-k2p5", Small: "accounts/fireworks/routers/kimi-k2p5-turbo"},
-	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-opus-4-6", Medium: "claude-sonnet-4-20250514", Small: "claude-haiku-4-5-20251001"},
+	{Name: "fireworks", Label: "Fireworks (Kimi K2.5)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/routers/kimi-k2p5-turbo", Medium: "accounts/fireworks/routers/kimi-k2p5-turbo", Small: "accounts/fireworks/routers/kimi-k2p5-turbo"},
+	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-opus-4-6", Medium: "claude-sonnet-4-6", Small: "claude-haiku-4-5-20251001"},
 	{Name: "openai", Label: "OpenAI (GPT-4)", EnvVar: "OPENAI_API_KEY", Large: "gpt-4.1", Medium: "gpt-4.1-mini", Small: "gpt-4.1-nano"},
 	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-2.5-pro-preview-05-06", Medium: "gemini-2.5-flash-preview-04-17", Small: "gemini-2.5-flash-preview-04-17"},
 }
@@ -60,6 +65,8 @@ const (
 	stepProvider              // local: LLM provider
 	stepAPIKey                // local: API key
 	stepCapabilities          // local: features
+	stepAccountEmail          // local: dashboard email
+	stepAccountPassword       // local: dashboard password
 	stepDirective             // local: directive
 	stepDone
 )
@@ -104,7 +111,7 @@ func newSetupModel(client *coreClient, aptevaCfg *AptevaConfig) setupModel {
 		aptevaCfg: aptevaCfg,
 		caps: []capOption{
 			{label: "System tools (exec, web)", key: "tools", enabled: true},
-			{label: "Browser (local Chrome)", key: "browser", enabled: false},
+			{label: "Browser (computer use)", key: "browser", enabled: false},
 			{label: "Integrations (GitHub, Stripe, 263+ apps)", key: "integrations", enabled: false},
 			{label: "Telegram gateway", key: "telegram", enabled: false},
 		{label: "Projects (multi-project)", key: "projects", enabled: false},
@@ -262,6 +269,9 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					switch c.key {
 					case "browser":
 						m.config.Computer = c.enabled
+						if c.enabled {
+							m.config.ComputerType = "local" // default, can change later via /computer
+						}
 					case "integrations":
 						m.config.Integrations = c.enabled
 					case "telegram":
@@ -270,6 +280,26 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.config.Projects = c.enabled
 					}
 				}
+				m.input.SetValue("")
+				m.step = stepAccountEmail
+				return m, nil
+
+			case stepAccountEmail:
+				email := strings.TrimSpace(m.input.Value())
+				if email == "" {
+					email = "admin@local"
+				}
+				m.config.AccountEmail = email
+				m.input.SetValue("")
+				m.step = stepAccountPassword
+				return m, nil
+
+			case stepAccountPassword:
+				pass := strings.TrimSpace(m.input.Value())
+				if pass == "" {
+					pass = "admin"
+				}
+				m.config.AccountPassword = pass
 				m.input.SetValue("")
 				m.step = stepDirective
 				return m, nil
@@ -287,7 +317,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.step == stepAPIKey || m.step == stepDirective || m.step == stepRemoteURL || m.step == stepRemoteLogin || m.step == stepRemotePassword || m.step == stepRemoteKey {
+	if m.step == stepAPIKey || m.step == stepDirective || m.step == stepRemoteURL || m.step == stepRemoteLogin || m.step == stepRemotePassword || m.step == stepRemoteKey || m.step == stepAccountEmail || m.step == stepAccountPassword {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -298,7 +328,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // applyConfig calls the server API to create provider + instance.
 func (m *setupModel) applyConfig() {
 	cliLog("SETUP", fmt.Sprintf("applying config: provider=%s directive=%q", m.config.Provider, m.config.Directive))
-	// Save capabilities locally
+	// Save capabilities + account locally
 	m.aptevaCfg.Capabilities = Capabilities{
 		Tools:        true,
 		Browser:      m.config.Computer,
@@ -306,6 +336,8 @@ func (m *setupModel) applyConfig() {
 		Telegram:     m.config.Telegram,
 		Projects:     m.config.Projects,
 	}
+	m.aptevaCfg.AccountEmail = m.config.AccountEmail
+	m.aptevaCfg.AccountPassword = m.config.AccountPassword
 
 	// Download integration catalog if enabled
 	if m.config.Integrations {
@@ -485,6 +517,27 @@ func (m setupModel) View() string {
 		}
 		lines = append(lines, "")
 		lines = append(lines, dim.Render("  ↑↓ move · space toggle · enter to confirm"))
+
+	case stepAccountEmail:
+		title = "DASHBOARD ACCOUNT"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Create a login for the web dashboard."))
+		lines = append(lines, dim.Render("  Dashboard: http://localhost:5280"))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("Email: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  (default: admin@local)"))
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
+
+	case stepAccountPassword:
+		title = "DASHBOARD PASSWORD"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Choose a password for "+m.config.AccountEmail))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("Password: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  (default: admin)"))
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
 
 	case stepDirective:
 		title = "DIRECTIVE"

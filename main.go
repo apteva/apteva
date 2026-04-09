@@ -18,7 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const mcpName = "channels"
+// mcpName was "channels" — channels MCP now runs in server
 const defaultServerPort = 5280
 
 func main() {
@@ -84,6 +84,13 @@ func main() {
 	// ── Phase 1: Ensure server is running ──
 	cliLog("MAIN", fmt.Sprintf("checking server at %s", srvAddr))
 	var serverProc *exec.Cmd
+
+	// Kill any stale server from a previous session on our port
+	// so we always start with the current binary
+	if !aptevaCfg.Remote && !*noSpawn {
+		killProcessOnPort(aptevaCfg.ServerPort)
+	}
+
 	if err := client.health(); err != nil {
 		cliLog("MAIN", fmt.Sprintf("server not reachable: %v", err))
 		if aptevaCfg.Remote || *noSpawn {
@@ -130,6 +137,9 @@ func main() {
 		}
 	}
 
+	// Copy dashboard dist to data dir (so server can serve it at /app/)
+	copyDashboard()
+
 	// ── Phase 2: Auto-bootstrap auth (invisible to user) ──
 	cliLog("MAIN", "phase 2: auth bootstrap")
 	needsAuth := aptevaCfg.APIKey == ""
@@ -167,7 +177,7 @@ func main() {
 			client.apiKey = aptevaCfg.APIKey
 		} else {
 			cliLog("MAIN", "bootstrapping local auth")
-			apiKey, userID, err := bootstrapLocalAuth(client)
+			apiKey, userID, err := bootstrapLocalAuth(client, aptevaCfg)
 			if err != nil {
 				cliLog("MAIN", fmt.Sprintf("auth bootstrap failed: %v", err))
 				fmt.Fprintf(os.Stderr, "auth setup failed: %v\n", err)
@@ -210,29 +220,9 @@ func main() {
 	cliLog("MAIN", "instance healthy")
 
 	// ── Phase 5: Start CLI ──
-	registry := NewChannelRegistry()
-	cliRespond := make(chan string, 64)
-	cliAskCh := make(chan string, 1)
-	cliAskReply := make(chan string, 1)
-	cliStatusCh := make(chan statusUpdate, 16)
-	registry.Register(NewCLIChannel(cliRespond, cliAskCh, cliAskReply, cliStatusCh))
-
-	mcp, err := newMCPServer(registry)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mcp server: %v\n", err)
-		os.Exit(1)
-	}
-	go mcp.serve()
-	cliLog("MAIN", fmt.Sprintf("phase 5: MCP server on %s", mcp.url()))
-
-	cliLog("MAIN", "registering MCP with core via server proxy")
-	if err := client.connectMCP(mcpName, mcp.url()); err != nil {
-		cliLog("MAIN", fmt.Sprintf("MCP registration failed: %v", err))
-		fmt.Fprintf(os.Stderr, "register mcp: %v\n", err)
-		mcp.close()
-		os.Exit(1)
-	}
-	cliLog("MAIN", "MCP registered, starting TUI")
+	// Channels MCP now runs in the server — CLI is a thin client.
+	// The server auto-registers "cli" channel and "apteva-channels" MCP with core on instance start.
+	cliLog("MAIN", "phase 5: starting TUI (channels managed by server)")
 
 	sseDone := make(chan struct{})
 
@@ -253,8 +243,6 @@ func main() {
 			req.Header.Set("Authorization", "Bearer "+client.apiKey)
 		}
 		fastClient.Do(req)
-
-		mcp.close()
 
 		if serverProc != nil {
 			cliLog("MAIN", "cleanup: killing server process group")
@@ -277,11 +265,7 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; cleanup(); os.Exit(0) }()
 
-	m := newTUI(th, mcp, client, registry)
-	m.cliRespond = cliRespond
-	m.cliAskCh = cliAskCh
-	m.cliAskReply = cliAskReply
-	m.cliStatusCh = cliStatusCh
+	m := newTUI(th, client)
 	m.aptevaCfg = aptevaCfg
 	m.serverURL = "http://" + srvAddr
 	m.sseDone = sseDone
@@ -299,13 +283,18 @@ func main() {
 	cleanup()
 }
 
-// bootstrapLocalAuth silently registers a local user and creates an API key.
-func bootstrapLocalAuth(client *coreClient) (apiKey string, userID int64, err error) {
+// bootstrapLocalAuth registers the local user and creates an API key.
+// Uses stored email/password from setup, or defaults.
+func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, userID int64, err error) {
 	cliLog("AUTH", "bootstrapping local auth")
-	// Generate random credentials — user never sees these
-	localID := randomHex(8)
-	email := "local-" + localID + "@apteva.local"
-	password := randomHex(16)
+	email := cfg.AccountEmail
+	password := cfg.AccountPassword
+	if email == "" {
+		email = "admin@local"
+	}
+	if password == "" {
+		password = "admin"
+	}
 
 	// Register (may fail if already exists — that's fine)
 	cliLog("AUTH", fmt.Sprintf("registering: %s", email))
@@ -488,4 +477,52 @@ func waitForHealth(client *coreClient, timeout time.Duration) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return fmt.Errorf("timeout")
+}
+
+// killProcessOnPort kills any process listening on the given TCP port.
+func killProcessOnPort(port int) {
+	cmd := exec.Command("fuser", "-k", fmt.Sprintf("%d/tcp", port))
+	cmd.Run()
+	time.Sleep(200 * time.Millisecond)
+}
+
+// copyDashboard copies the dashboard dist/ to ~/.apteva/dashboard/ if available.
+func copyDashboard() {
+	// Look for dashboard dist relative to the CLI binary or server binary
+	exe, _ := os.Executable()
+	dir := filepath.Dir(exe)
+	candidates := []string{
+		filepath.Join(dir, "..", "dashboard", "dist"),
+		filepath.Join(dir, "dashboard", "dist"),
+	}
+	var srcDir string
+	for _, c := range candidates {
+		if _, err := os.Stat(filepath.Join(c, "index.html")); err == nil {
+			srcDir = c
+			break
+		}
+	}
+	if srcDir == "" {
+		return
+	}
+
+	dstDir := filepath.Join(aptevaDir(), "dashboard")
+	os.MkdirAll(dstDir, 0755)
+
+	// Copy all files from dist/ to dashboard/
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(srcDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		os.WriteFile(filepath.Join(dstDir, e.Name()), data, 0644)
+	}
+	cliLog("MAIN", fmt.Sprintf("dashboard copied to %s (%d files)", dstDir, len(entries)))
 }
