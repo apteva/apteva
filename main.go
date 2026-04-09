@@ -23,6 +23,7 @@ const defaultServerPort = 5280
 
 func main() {
 	themeName := flag.String("theme", "orange", "color theme: orange, amber, white")
+	headless := flag.Bool("headless", false, "run server + core without TUI (dashboard only)")
 	noSpawn := flag.Bool("no-spawn", false, "don't auto-start server, connect to existing")
 	serverAddr := flag.String("server", "", "server address (e.g. localhost:5280)")
 	serverBin := flag.String("server-bin", "", "path to apteva-server binary")
@@ -219,12 +220,8 @@ func main() {
 	}
 	cliLog("MAIN", "instance healthy")
 
-	// ── Phase 5: Start CLI ──
-	// Channels MCP now runs in the server — CLI is a thin client.
-	// The server auto-registers "cli" channel and "apteva-channels" MCP with core on instance start.
-	cliLog("MAIN", "phase 5: starting TUI (channels managed by server)")
-
-	sseDone := make(chan struct{})
+	// ── Phase 5: Start CLI or headless ──
+	cliLog("MAIN", fmt.Sprintf("phase 5: headless=%v", *headless))
 
 	cleanupDone := false
 	cleanup := func() {
@@ -233,20 +230,9 @@ func main() {
 		}
 		cleanupDone = true
 		cliLog("MAIN", "cleanup: shutting down")
-		close(sseDone)
-
-		// Notify core before killing anything (synchronous, short timeout)
-		fastClient := &http.Client{Timeout: 2 * time.Second}
-		req, _ := http.NewRequest("POST", client.coreURL("/event"), bytes.NewReader([]byte(`{"message":"[cli] root user disconnected from terminal","thread_id":"main"}`)))
-		req.Header.Set("Content-Type", "application/json")
-		if client.apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+client.apiKey)
-		}
-		fastClient.Do(req)
 
 		if serverProc != nil {
 			cliLog("MAIN", "cleanup: killing server process group")
-			// Kill the entire process group (server + core + mcp-gateway)
 			pgid := serverProc.Process.Pid
 			syscall.Kill(-pgid, syscall.SIGTERM)
 			done := make(chan error, 1)
@@ -265,6 +251,33 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; cleanup(); os.Exit(0) }()
 
+	if *headless {
+		// Headless mode — just print status and block
+		fmt.Fprintf(os.Stderr, "apteva running (headless)\n")
+		fmt.Fprintf(os.Stderr, "  Dashboard: http://%s\n", srvAddr)
+		fmt.Fprintf(os.Stderr, "  Instance:  %d (running)\n", aptevaCfg.InstanceID)
+		fmt.Fprintf(os.Stderr, "  API key:   %s...\n", aptevaCfg.APIKey[:min(16, len(aptevaCfg.APIKey))])
+		fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n")
+
+		// Block until signal
+		select {}
+	}
+
+	// TUI mode
+	sseDone := make(chan struct{})
+	cleanupTUI := func() {
+		close(sseDone)
+		// Notify core
+		fastClient := &http.Client{Timeout: 2 * time.Second}
+		req, _ := http.NewRequest("POST", client.coreURL("/event"), bytes.NewReader([]byte(`{"message":"[cli] root user disconnected from terminal","thread_id":"main"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		if client.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+client.apiKey)
+		}
+		fastClient.Do(req)
+		cleanup()
+	}
+
 	m := newTUI(th, client)
 	m.aptevaCfg = aptevaCfg
 	m.serverURL = "http://" + srvAddr
@@ -276,11 +289,11 @@ func main() {
 	go func() { p.Send(connectedMsg{}) }()
 
 	if _, err := p.Run(); err != nil {
-		cleanup()
+		cleanupTUI()
 		fmt.Fprintf(os.Stderr, "tui: %v\n", err)
 		os.Exit(1)
 	}
-	cleanup()
+	cleanupTUI()
 }
 
 // bootstrapLocalAuth registers the local user and creates an API key.
