@@ -455,9 +455,6 @@ func pollSideData(client *coreClient) tea.Cmd {
 				iter, _ := t["iteration"].(float64)
 				parentID, _ := t["parent_id"].(string)
 				depth, _ := t["depth"].(float64)
-				if id == "main" {
-					continue // main is shown separately
-				}
 				sd.Threads = append(sd.Threads, sideThread{ID: id, ParentID: parentID, Depth: int(depth), Rate: rate, Iter: int(iter)})
 			}
 		}
@@ -3548,26 +3545,38 @@ func orderThreadTree(threads []sideThread) []sideThread {
 		return threads
 	}
 
-	// Build children map
+	// Separate root (main) from children
+	var roots []sideThread
 	children := map[string][]sideThread{} // parentID → children
 	for _, t := range threads {
-		pid := t.ParentID
-		if pid == "" {
-			pid = "main"
+		if t.ID == "main" || (t.ParentID == "" && t.Depth == 0 && t.ID != "main") {
+			// Root-level: main itself, or depth-0 threads with no parent (legacy)
+			if t.ID == "main" {
+				roots = append([]sideThread{t}, roots...) // main always first
+			} else {
+				roots = append(roots, t)
+			}
+		} else {
+			pid := t.ParentID
+			if pid == "" {
+				pid = "main"
+			}
+			children[pid] = append(children[pid], t)
 		}
-		children[pid] = append(children[pid], t)
 	}
 
-	// DFS from main's children
+	// DFS: roots first, then their children
 	var result []sideThread
-	var walk func(parentID string)
-	walk = func(parentID string) {
-		for _, child := range children[parentID] {
-			result = append(result, child)
-			walk(child.ID)
+	var walk func(node sideThread)
+	walk = func(node sideThread) {
+		result = append(result, node)
+		for _, child := range children[node.ID] {
+			walk(child)
 		}
 	}
-	walk("main")
+	for _, root := range roots {
+		walk(root)
+	}
 
 	// If any threads weren't reached (orphans), append them at the end
 	if len(result) < len(threads) {
