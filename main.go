@@ -240,6 +240,24 @@ func main() {
 		cleanupDone = true
 		cliLog("MAIN", "cleanup: shutting down")
 
+		// Gracefully stop all instances (saves config to DB) before killing the server
+		if client.apiKey != "" {
+			cliLog("MAIN", "cleanup: stopping instances gracefully")
+			fastClient := &http.Client{Timeout: 3 * time.Second}
+			// List all instances and stop each one
+			if data, err := client.serverGet("/instances"); err == nil {
+				var insts []struct{ ID int64 `json:"id"` }
+				json.Unmarshal(data, &insts)
+				for _, inst := range insts {
+					stopURL := fmt.Sprintf("http://%s/instances/%d/stop", srvAddr, inst.ID)
+					req, _ := http.NewRequest("POST", stopURL, nil)
+					req.Header.Set("Authorization", "Bearer "+client.apiKey)
+					fastClient.Do(req)
+					cliLog("MAIN", fmt.Sprintf("cleanup: stopped instance %d", inst.ID))
+				}
+			}
+		}
+
 		if serverProc != nil {
 			cliLog("MAIN", "cleanup: killing server process group")
 			pgid := serverProc.Process.Pid
