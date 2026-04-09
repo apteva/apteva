@@ -3088,6 +3088,10 @@ func (m tuiModel) View() string {
 	if m.waitingConnect && len(chatLines) < chatContentH {
 		chatLines = append(chatLines, "")
 		chatLines = append(chatLines, dim.Render("  Press Enter to connect."))
+		if m.serverURL != "" {
+			chatLines = append(chatLines, "")
+			chatLines = append(chatLines, dim.Render("  Dashboard: "+m.serverURL+"/app/"))
+		}
 	}
 
 	// Spinner while waiting
