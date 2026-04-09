@@ -371,12 +371,39 @@ func (m *setupModel) applyConfig() {
 	json.Unmarshal(providerData, &providerResult)
 	cliLog("SETUP", fmt.Sprintf("provider created: id=%d", providerResult.ID))
 
-	// Create instance on server
+	// Ensure a default project exists (dashboard requires project_id on instances)
+	projectID := ""
+	if projData, err := m.client.serverGet("/projects"); err == nil {
+		var projects []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		json.Unmarshal(projData, &projects)
+		if len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+	if projectID == "" {
+		// Create a default project
+		projBody, _ := json.Marshal(map[string]string{"name": "Default"})
+		if projData, err := m.client.serverPost("/projects", projBody); err == nil {
+			var proj struct {
+				ID string `json:"id"`
+			}
+			json.Unmarshal(projData, &proj)
+			projectID = proj.ID
+		}
+	}
+	cliLog("SETUP", fmt.Sprintf("using project: %s", projectID))
+	m.aptevaCfg.ProjectID = projectID
+
+	// Create instance on server (always with project_id)
 	instanceBody, _ := json.Marshal(map[string]any{
 		"name":        "default",
 		"directive":   m.config.Directive,
 		"mode":        "autonomous",
 		"provider_id": providerResult.ID,
+		"project_id":  projectID,
 	})
 	instanceData, err2 := m.client.serverPost("/instances", instanceBody)
 	cliLog("SETUP", fmt.Sprintf("POST /instances response: %s err=%v", string(instanceData), err2))
@@ -385,7 +412,7 @@ func (m *setupModel) applyConfig() {
 	}
 	json.Unmarshal(instanceData, &instanceResult)
 	m.aptevaCfg.InstanceID = instanceResult.ID
-	cliLog("SETUP", fmt.Sprintf("instance created: id=%d", instanceResult.ID))
+	cliLog("SETUP", fmt.Sprintf("instance created: id=%d (project=%s)", instanceResult.ID, projectID))
 }
 
 func (m setupModel) View() string {
