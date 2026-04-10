@@ -285,9 +285,14 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 
 			case stepAccountEmail:
-				email := strings.TrimSpace(m.input.Value())
-				if email == "" {
-					email = "admin@local"
+				username := strings.TrimSpace(m.input.Value())
+				if username == "" {
+					username = "admin"
+				}
+				// Server expects email format — append @local for local usernames
+				email := username
+				if !strings.Contains(email, "@") {
+					email = username + "@local"
 				}
 				m.config.AccountEmail = email
 				m.input.SetValue("")
@@ -567,15 +572,16 @@ func (m setupModel) View() string {
 		lines = append(lines, dim.Render("  Create a login for the web dashboard."))
 		lines = append(lines, dim.Render("  Dashboard: http://localhost:5280"))
 		lines = append(lines, "")
-		lines = append(lines, "  "+accent.Render("Email: ")+m.input.View())
+		lines = append(lines, "  "+accent.Render("Username: ")+m.input.View())
 		lines = append(lines, "")
-		lines = append(lines, dim.Render("  (default: admin@local)"))
+		lines = append(lines, dim.Render("  (default: admin)"))
 		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
 
 	case stepAccountPassword:
 		title = "DASHBOARD PASSWORD"
 		lines = append(lines, "")
-		lines = append(lines, dim.Render("  Choose a password for "+m.config.AccountEmail))
+		username := strings.TrimSuffix(m.config.AccountEmail, "@local")
+		lines = append(lines, dim.Render("  Choose a password for "+username))
 		lines = append(lines, "")
 		lines = append(lines, "  "+accent.Render("Password: ")+m.input.View())
 		lines = append(lines, "")

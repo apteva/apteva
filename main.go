@@ -353,7 +353,7 @@ func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, us
 		email = "admin@local"
 	}
 	if password == "" {
-		password = "admin1234"
+		password = "admin1234" // must be 8+ chars
 	}
 
 	// Register (may fail if already exists — that's fine)
