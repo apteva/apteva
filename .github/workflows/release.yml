@@ -25,12 +25,8 @@ jobs:
           - goos: darwin
             goarch: arm64
             runner: macos-latest
-          - goos: windows
-            goarch: amd64
-            runner: windows-latest
-          - goos: windows
-            goarch: arm64
-            runner: windows-latest
+          # Windows excluded: CLI uses Unix syscalls (Setpgid, Kill)
+          # TODO: add build tags for Windows support
 
     runs-on: ${{ matrix.runner }}
     steps:
