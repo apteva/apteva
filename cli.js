@@ -14,8 +14,15 @@ const serverBin = path.join(DIR, `apteva-server${ext}`);
 const coreBin = path.join(DIR, `apteva-core${ext}`);
 
 if (!fs.existsSync(aptevaBin)) {
-  console.error("apteva: binary not found. Try reinstalling: npm install -g apteva");
+  console.error(`apteva: binary not found at ${aptevaBin}`);
+  console.error("Try: npm install -g apteva");
   process.exit(1);
+}
+if (!fs.existsSync(serverBin)) {
+  console.error(`apteva: warning - server binary not found at ${serverBin}`);
+}
+if (!fs.existsSync(coreBin)) {
+  console.error(`apteva: warning - core binary not found at ${coreBin}`);
 }
 
 const result = spawnSync(aptevaBin, process.argv.slice(2), {
