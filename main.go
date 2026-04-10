@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
+	"strings"
 	"os/signal"
 	"path/filepath"
 
@@ -32,9 +34,25 @@ func main() {
 	remoteURL := flag.String("remote-url", "", "remote server URL")
 	remoteKey := flag.String("key", "", "API key for remote server")
 	setup := flag.Bool("setup", false, "run setup wizard")
+	reset := flag.Bool("reset", false, "wipe all data and start fresh")
 	flag.Parse()
 
 	initCLILog()
+
+	if *reset {
+		dir := aptevaDir()
+		fmt.Fprintf(os.Stderr, "This will delete all data at %s\n", dir)
+		fmt.Fprintf(os.Stderr, "Type 'yes' to confirm: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if confirm != "yes" {
+			fmt.Fprintf(os.Stderr, "Cancelled.\n")
+			os.Exit(0)
+		}
+		os.RemoveAll(dir)
+		fmt.Fprintf(os.Stderr, "Data wiped. Starting fresh.\n")
+	}
+
 	cliLog("MAIN", "starting apteva")
 
 	// Load or init config
@@ -563,9 +581,23 @@ func waitForHealth(client *coreClient, timeout time.Duration) error {
 
 // killProcessOnPort kills any process listening on the given TCP port.
 func killProcessOnPort(port int) {
-	cmd := exec.Command("fuser", "-k", fmt.Sprintf("%d/tcp", port))
-	cmd.Run()
-	time.Sleep(200 * time.Millisecond)
+	portStr := fmt.Sprintf("%d", port)
+	switch runtime.GOOS {
+	case "darwin":
+		// macOS: use lsof to find PIDs on the port, then kill them
+		out, err := exec.Command("lsof", "-ti", "tcp:"+portStr).Output()
+		if err == nil {
+			for _, pidStr := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if pidStr != "" {
+					exec.Command("kill", "-9", pidStr).Run()
+				}
+			}
+		}
+	default:
+		// Linux: fuser
+		exec.Command("fuser", "-k", portStr+"/tcp").Run()
+	}
+	time.Sleep(300 * time.Millisecond)
 }
 
 // copyDashboard copies the dashboard dist/ to ~/.apteva/dashboard/ if available.
