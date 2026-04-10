@@ -213,13 +213,16 @@ func main() {
 	}
 
 	// ── Phase 4: Ensure instance is running ──
-	cliLog("MAIN", fmt.Sprintf("phase 4: ensuring instance %d is running", aptevaCfg.InstanceID))
+	cliLog("MAIN", fmt.Sprintf("phase 4: ensuring instance %d is running (headless=%v)", aptevaCfg.InstanceID, *headless))
 
-	// Always try to start the instance (server will skip if already running)
-	cliLog("MAIN", "starting instance")
-	if err := startInstance(client, aptevaCfg.InstanceID); err != nil {
-		cliLog("MAIN", fmt.Sprintf("start instance: %v", err))
+	if !*headless {
+		// TUI mode: auto-start the CLI's instance (user expects to chat immediately)
+		cliLog("MAIN", "starting instance")
+		if err := startInstance(client, aptevaCfg.InstanceID); err != nil {
+			cliLog("MAIN", fmt.Sprintf("start instance: %v", err))
+		}
 	}
+	// Headless mode: don't auto-start — user manages instances via API/dashboard
 
 	client.instancePrefix = fmt.Sprintf("/instances/%d", aptevaCfg.InstanceID)
 	if err := waitForHealth(client, 15*time.Second); err != nil {
