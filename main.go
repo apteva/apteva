@@ -12,7 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"syscall"
+
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -107,7 +107,7 @@ func main() {
 
 		serverProc = exec.Command(bin)
 		serverProc.Dir = filepath.Dir(bin)
-		serverProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // process group leader
+		setProcGroup(serverProc)
 		serverEnv := []string{
 			"PORT=" + fmt.Sprintf("%d", aptevaCfg.ServerPort),
 			"DB_PATH=" + filepath.Join(aptevaDir(), "apteva.db"),
@@ -267,14 +267,13 @@ func main() {
 
 		if serverProc != nil {
 			cliLog("MAIN", "cleanup: killing server process group")
-			pgid := serverProc.Process.Pid
-			syscall.Kill(-pgid, syscall.SIGTERM)
+			killProcGroup(serverProc, false)
 			done := make(chan error, 1)
 			go func() { done <- serverProc.Wait() }()
 			select {
 			case <-done:
 			case <-time.After(2 * time.Second):
-				syscall.Kill(-pgid, syscall.SIGKILL)
+				killProcGroup(serverProc, true)
 				serverProc.Wait()
 			}
 			cliLog("MAIN", "cleanup: done")
@@ -282,7 +281,7 @@ func main() {
 	}
 
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, shutdownSignals()...)
 	go func() { <-sig; cleanup(); os.Exit(0) }()
 
 	if *headless {
