@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -361,20 +362,30 @@ func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, us
 	}
 	defer resp.Body.Close()
 
+	// Read body for debugging
+	respBody, _ := io.ReadAll(resp.Body)
+	cliLog("AUTH", fmt.Sprintf("login response: status=%d body=%s", resp.StatusCode, string(respBody)))
+
+	if resp.StatusCode != 200 {
+		return "", 0, fmt.Errorf("login failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
 	var loginResult struct {
 		UserID int64 `json:"user_id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&loginResult)
+	json.Unmarshal(respBody, &loginResult)
 
 	// Get session cookie
 	var sessionCookie string
 	for _, c := range resp.Cookies() {
+		cliLog("AUTH", fmt.Sprintf("cookie: %s=%s", c.Name, c.Value[:min(10, len(c.Value))]))
 		if c.Name == "session" {
 			sessionCookie = c.Value
 		}
 	}
 	if sessionCookie == "" {
-		return "", 0, fmt.Errorf("no session cookie")
+		cliLog("AUTH", fmt.Sprintf("no session cookie in response, headers: %v", resp.Header))
+		return "", 0, fmt.Errorf("no session cookie (login status=%d, user=%d)", resp.StatusCode, loginResult.UserID)
 	}
 
 	// Create API key
