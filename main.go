@@ -225,12 +225,16 @@ func main() {
 	// Headless mode: don't auto-start — user manages instances via API/dashboard
 
 	client.instancePrefix = fmt.Sprintf("/instances/%d", aptevaCfg.InstanceID)
-	if err := waitForHealth(client, 15*time.Second); err != nil {
-		cliLog("MAIN", fmt.Sprintf("instance not healthy after start: %v", err))
-		fmt.Fprintf(os.Stderr, "core instance not ready\n")
-		os.Exit(1)
+	if !*headless {
+		// TUI mode: wait for instance to be healthy before showing chat
+		if err := waitForHealth(client, 15*time.Second); err != nil {
+			cliLog("MAIN", fmt.Sprintf("instance not healthy after start: %v", err))
+			fmt.Fprintf(os.Stderr, "core instance not ready\n")
+			os.Exit(1)
+		}
+		cliLog("MAIN", "instance healthy")
 	}
-	cliLog("MAIN", "instance healthy")
+	// Headless mode: skip health check — instances managed via API/dashboard
 
 	// ── Phase 5: Start CLI or headless ──
 	cliLog("MAIN", fmt.Sprintf("phase 5: headless=%v", *headless))
