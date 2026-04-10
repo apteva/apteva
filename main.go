@@ -243,7 +243,7 @@ func main() {
 		cleanupDone = true
 		cliLog("MAIN", "cleanup: shutting down")
 
-		// Gracefully stop all instances (saves config to DB) before killing the server
+		// Gracefully stop all instances (core writes final state to disk) before killing the server
 		if client.apiKey != "" {
 			cliLog("MAIN", "cleanup: stopping instances gracefully")
 			fastClient := &http.Client{Timeout: 3 * time.Second}
