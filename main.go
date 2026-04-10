@@ -431,6 +431,12 @@ func findCoreBinary(explicit string) string {
 			return explicit
 		}
 	}
+	// Check env var from npx wrapper
+	if p := os.Getenv("APTEVA_CORE_BIN"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
 	self, _ := os.Executable()
 	if self != "" {
 		dir := filepath.Dir(self)
@@ -461,6 +467,12 @@ func findServerBinary(explicit string) string {
 	if explicit != "" {
 		if _, err := os.Stat(explicit); err == nil {
 			return explicit
+		}
+	}
+	// Check env var from npx wrapper
+	if p := os.Getenv("APTEVA_SERVER_BIN"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
 		}
 	}
 	self, _ := os.Executable()

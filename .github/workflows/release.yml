@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+          - goos: darwin
+            goarch: amd64
+            runner: macos-latest
+          - goos: darwin
+            goarch: arm64
+            runner: macos-latest
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+          - goos: windows
+            goarch: arm64
+            runner: windows-latest
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # Checkout all repos side by side
+      - name: Checkout apteva (CLI)
+        uses: actions/checkout@v4
+        with:
+          path: apteva
+
+      - name: Checkout core
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/core
+          path: core
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout server
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/server
+          path: server
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout computer
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/computer
+          path: computer
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout dashboard
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/dashboard
+          path: dashboard
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build dashboard
+        shell: bash
+        run: |
+          cd dashboard
+          npm ci
+          npm run build
+          cp -r dist/* ../server/dashboard/
+
+      - name: Build binaries
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          EXT=""
+          if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+
+          mkdir -p dist
+
+          echo "Building core..."
+          cd core
+          go build -ldflags="$LDFLAGS" -o "../dist/apteva-core${EXT}" .
+          cd ..
+
+          echo "Building server..."
+          cd server
+          go build -ldflags="$LDFLAGS" -o "../dist/apteva-server${EXT}" .
+          cd ..
+
+          echo "Building cli..."
+          cd apteva
+          go build -ldflags="$LDFLAGS" -o "../dist/apteva${EXT}" .
+          cd ..
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARNAME="apteva-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          cd dist
+          tar -czf "../${TARNAME}" .
+          cd ..
+          ls -lh "${TARNAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apteva-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: apteva-*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.tar.gz
+          generate_release_notes: true
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Update package version
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '${{ steps.version.outputs.version }}';
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

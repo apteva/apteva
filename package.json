@@ -1,9 +1,24 @@
 {
   "name": "apteva",
-  "version": "0.5.0",
-  "description": "An AI that never stops thinking.",
+  "version": "0.7.0",
+  "description": "AI agent platform with multi-thread orchestration, MCP integrations, and dashboard",
   "bin": {
     "apteva": "./cli.js"
   },
-  "license": "MIT"
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "keywords": ["ai", "agent", "mcp", "orchestration", "llm"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apteva/apteva"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "cli.js",
+    "install.js"
+  ]
 }

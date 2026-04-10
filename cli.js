@@ -1,36 +1,35 @@
 #!/usr/bin/env node
+"use strict";
 
-const { execSync, spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+const os = require("os");
+const path = require("path");
+const fs = require("fs");
+const { spawnSync } = require("child_process");
 
-const BINARY_NAME = os.platform() === 'win32' ? 'apteva.exe' : 'apteva';
-const BINARY_PATH = path.join(__dirname, BINARY_NAME);
+const ext = os.platform() === "win32" ? ".exe" : "";
+const DIR = __dirname;
 
-// Check if Go binary exists
-if (!fs.existsSync(BINARY_PATH)) {
-  console.log('Building apteva...');
-  try {
-    execSync('go build -o ' + BINARY_NAME + ' .', {
-      cwd: __dirname,
-      stdio: 'inherit',
-    });
-  } catch (err) {
-    console.error('Failed to build apteva. Make sure Go is installed.');
-    console.error('Install Go: https://go.dev/dl/');
-    process.exit(1);
-  }
+const aptevaBin = path.join(DIR, `apteva${ext}`);
+const serverBin = path.join(DIR, `apteva-server${ext}`);
+const coreBin = path.join(DIR, `apteva-core${ext}`);
+
+if (!fs.existsSync(aptevaBin)) {
+  console.error("apteva: binary not found. Try reinstalling: npm install -g apteva");
+  process.exit(1);
 }
 
-// Run the binary, passing through all args and stdio
-const child = spawn(BINARY_PATH, process.argv.slice(2), {
-  stdio: 'inherit',
-  cwd: process.cwd(),
+const result = spawnSync(aptevaBin, process.argv.slice(2), {
+  stdio: "inherit",
+  env: {
+    ...process.env,
+    APTEVA_SERVER_BIN: serverBin,
+    APTEVA_CORE_BIN: coreBin,
+  },
 });
 
-child.on('exit', (code) => process.exit(code || 0));
-child.on('error', (err) => {
-  console.error('Failed to start apteva:', err.message);
+if (result.error) {
+  console.error(`apteva: ${result.error.message}`);
   process.exit(1);
-});
+}
+
+process.exit(result.status || 0);
