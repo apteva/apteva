@@ -297,7 +297,11 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case stepAccountPassword:
 				pass := strings.TrimSpace(m.input.Value())
 				if pass == "" {
-					pass = "admin"
+					pass = "admin1234"
+				}
+				if len(pass) < 8 {
+					// Don't advance — password too short
+					return m, nil
 				}
 				m.config.AccountPassword = pass
 				m.input.SetValue("")
@@ -338,6 +342,18 @@ func (m *setupModel) applyConfig() {
 	}
 	m.aptevaCfg.AccountEmail = m.config.AccountEmail
 	m.aptevaCfg.AccountPassword = m.config.AccountPassword
+
+	// Bootstrap auth with the credentials from setup
+	cliLog("SETUP", fmt.Sprintf("bootstrapping auth with %s", m.config.AccountEmail))
+	apiKey, userID, err := bootstrapLocalAuth(m.client, *m.aptevaCfg)
+	if err != nil {
+		cliLog("SETUP", fmt.Sprintf("auth bootstrap failed: %v", err))
+	} else {
+		m.aptevaCfg.APIKey = apiKey
+		m.aptevaCfg.UserID = userID
+		m.client.apiKey = apiKey
+		cliLog("SETUP", fmt.Sprintf("auth OK: userID=%d", userID))
+	}
 
 	// Download integration catalog if enabled
 	if m.config.Integrations {
@@ -563,7 +579,7 @@ func (m setupModel) View() string {
 		lines = append(lines, "")
 		lines = append(lines, "  "+accent.Render("Password: ")+m.input.View())
 		lines = append(lines, "")
-		lines = append(lines, dim.Render("  (default: admin)"))
+		lines = append(lines, dim.Render("  (default: admin1234 · min 8 chars)"))
 		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
 
 	case stepDirective:

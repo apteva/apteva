@@ -151,8 +151,10 @@ func main() {
 	// Copy dashboard dist to data dir (so server can serve it at /app/)
 	copyDashboard()
 
-	// ── Phase 2: Auto-bootstrap auth (invisible to user) ──
-	cliLog("MAIN", "phase 2: auth bootstrap")
+	// ── Phase 2: First-run setup + auth ──
+	// On first run (no API key, no instance), run setup wizard FIRST so we have
+	// the user's chosen email/password before trying to bootstrap auth.
+	firstRun := aptevaCfg.APIKey == "" && aptevaCfg.InstanceID == 0
 	needsAuth := aptevaCfg.APIKey == ""
 
 	// Verify existing API key still works
@@ -171,14 +173,25 @@ func main() {
 			cliLog("MAIN", "existing API key invalid, re-bootstrapping")
 			needsAuth = true
 			aptevaCfg.APIKey = ""
-			aptevaCfg.InstanceID = 0 // instance may also be gone
+			aptevaCfg.InstanceID = 0
 			client.apiKey = ""
+			firstRun = true
 		}
+	}
+
+	if firstRun && !aptevaCfg.Remote {
+		// First run: setup wizard collects email, password, provider, directive
+		cliLog("MAIN", "first run: launching setup wizard")
+		if err := runSetup(client, &aptevaCfg); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(0)
+		}
+		saveAptevaConfig(aptevaCfg)
+		needsAuth = aptevaCfg.APIKey == "" // setup may have created auth already
 	}
 
 	if needsAuth {
 		if aptevaCfg.Remote {
-			// Remote mode — need setup to get credentials
 			cliLog("MAIN", "remote mode needs auth, running setup")
 			if err := runSetup(client, &aptevaCfg); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -202,9 +215,9 @@ func main() {
 	}
 	client.apiKey = aptevaCfg.APIKey
 
-	// ── Phase 3: Setup wizard (first run or --setup) ──
+	// ── Phase 3: Setup wizard (re-run if --setup or missing instance) ──
 	cliLog("MAIN", fmt.Sprintf("phase 3: setup check (instanceID=%d, forceSetup=%v)", aptevaCfg.InstanceID, *setup))
-	if *setup || aptevaCfg.InstanceID == 0 {
+	if *setup || (!firstRun && aptevaCfg.InstanceID == 0) {
 		cliLog("MAIN", "running setup wizard")
 		if err := runSetup(client, &aptevaCfg); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -340,7 +353,7 @@ func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, us
 		email = "admin@local"
 	}
 	if password == "" {
-		password = "admin"
+		password = "admin1234"
 	}
 
 	// Register (may fail if already exists — that's fine)
