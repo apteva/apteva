@@ -47,10 +47,29 @@ async function main() {
     process.exit(1);
   }
 
+  // Cache binaries in ~/.apteva/bin/<version>/ so repeated npx runs are instant
+  const cacheDir = path.join(os.homedir(), ".apteva", "bin", VERSION);
+  const ext = platform === "windows" ? ".exe" : "";
+  const cachedBin = path.join(cacheDir, `apteva${ext}`);
+
+  if (fs.existsSync(cachedBin)) {
+    // Copy from cache to install dir
+    for (const name of ["apteva", "apteva-server", "apteva-core"]) {
+      const src = path.join(cacheDir, `${name}${ext}`);
+      const dst = path.join(DIR, `${name}${ext}`);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, dst);
+        if (platform !== "windows") fs.chmodSync(dst, 0o755);
+      }
+    }
+    console.log(`apteva: v${VERSION} loaded from cache.`);
+    return;
+  }
+
   const tarName = `apteva-${VERSION}-${platform}-${arch}.tar.gz`;
   const url = `https://github.com/${REPO}/releases/download/v${VERSION}/${tarName}`;
 
-  console.log(`apteva: downloading ${platform}-${arch} binaries...`);
+  console.log(`apteva: downloading v${VERSION} for ${platform}-${arch}...`);
 
   try {
     const buffer = await download(url);
@@ -67,6 +86,14 @@ async function main() {
         const bin = path.join(DIR, name);
         if (fs.existsSync(bin)) fs.chmodSync(bin, 0o755);
       }
+    }
+
+    // Save to cache for next run
+    fs.mkdirSync(cacheDir, { recursive: true });
+    for (const name of ["apteva", "apteva-server", "apteva-core"]) {
+      const src = path.join(DIR, `${name}${ext}`);
+      const dst = path.join(cacheDir, `${name}${ext}`);
+      if (fs.existsSync(src)) fs.copyFileSync(src, dst);
     }
 
     console.log("apteva: installed successfully.");
