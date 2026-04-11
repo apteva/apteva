@@ -756,8 +756,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolStartMsg:
 		isChannel := strings.HasPrefix(msg.Name, "channels_")
-		// Channel tools: update side panel only, don't add chat line
-		if isChannel {
+		// Hide noisy internal tools (same as dashboard)
+		isHidden := isChannel
+		switch msg.Name {
+		case "send", "pace", "done", "evolve", "remember":
+			isHidden = true
+		}
+		if isHidden {
 			m.threadTools[msg.ThreadID] = "⟳ " + msg.Name
 			if m.sideStatus != nil && msg.ThreadID != "main" {
 				found := false
@@ -777,7 +782,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if callID == "" {
 			callID = msg.Name + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
 		}
-		// Add a "running" line to chat
+		// Add a blank line before tool call (skip if previous line is already blank)
+		if len(m.lines) > 0 && m.lines[len(m.lines)-1].text != "" {
+			m.addLine("", "")
+		}
 		label := "  ⟳ " + msg.Name
 		if msg.Reason != "" {
 			label += " — " + msg.Reason
@@ -811,7 +819,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolDoneMsg:
-		if strings.HasPrefix(msg.Name, "channels_") {
+		isHidden := strings.HasPrefix(msg.Name, "channels_")
+		switch msg.Name {
+		case "send", "pace", "done", "evolve", "remember":
+			isHidden = true
+		}
+		if isHidden {
 			// Clear thread tool in side panel
 			hasActive := false
 			for _, t := range m.activeTools {
@@ -833,7 +846,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.DurationMs >= 1000 {
 				dur = fmt.Sprintf("%.1fs", float64(msg.DurationMs)/1000)
 			}
-			doneText := "  ✓ " + msg.Name + " (" + dur + ")"
+			doneText := "  ✓ " + msg.Name
+			if at.reason != "" {
+				doneText += " — " + at.reason
+			}
+			doneText += " (" + dur + ")"
 			if at.lineIdx >= 0 && at.lineIdx < len(m.lines) {
 				m.lines[at.lineIdx].text = doneText
 				m.lines[at.lineIdx].style = "tool-done"
@@ -1849,6 +1866,12 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 	case "/clear":
 		m.lines = nil
 		m.scrollOff = 0
+		// Also wipe server-side session history
+		cli := m.client
+		go func() {
+			body, _ := json.Marshal(map[string]any{"reset": map[string]bool{"history": true}})
+			cli.do(cli.putRequest("/config", body))
+		}()
 
 	case "/status":
 		return *m, func() tea.Msg {
@@ -2113,11 +2136,12 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 		switch rest {
 		case "local":
 			return *m, func() tea.Msg {
-				err := cli.setComputer(map[string]any{"type": "local", "width": 1280, "height": 800})
+				w, h := 1024, 768
+				err := cli.setComputer(map[string]any{"type": "local", "width": w, "height": h})
 				if err != nil {
 					return modalMsg{title: "COMPUTER", text: fmt.Sprintf("  ERROR: %v", err)}
 				}
-				return modalMsg{title: "COMPUTER", text: "  Local Chrome launched (1280x800)."}
+				return modalMsg{title: "COMPUTER", text: fmt.Sprintf("  Local Chrome launched (%dx%d).", w, h)}
 			}
 		case "off":
 			return *m, func() tea.Msg {
@@ -3468,7 +3492,7 @@ func (m tuiModel) renderSidePanel(w, h int, dim, primary, accent, warn lipgloss.
 					text = strings.ReplaceAll(text, "\n", " ")
 					text = strings.Join(strings.Fields(text), " ")
 					maxLen := w - 4
-					if len(text) > maxLen {
+					if maxLen > 1 && len(text) > maxLen {
 						text = text[:maxLen-1] + "…"
 					}
 					icon := "▶"

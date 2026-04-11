@@ -47,9 +47,9 @@ type providerOption struct {
 
 var providers = []providerOption{
 	{Name: "fireworks", Label: "Fireworks (Kimi K2.5)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/routers/kimi-k2p5-turbo", Medium: "accounts/fireworks/routers/kimi-k2p5-turbo", Small: "accounts/fireworks/routers/kimi-k2p5-turbo"},
-	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-opus-4-6", Medium: "claude-sonnet-4-6", Small: "claude-haiku-4-5-20251001"},
+	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-sonnet-4-6", Medium: "claude-haiku-4-5-20251001", Small: "claude-haiku-4-5-20251001"},
 	{Name: "openai", Label: "OpenAI (GPT-4)", EnvVar: "OPENAI_API_KEY", Large: "gpt-4.1", Medium: "gpt-4.1-mini", Small: "gpt-4.1-nano"},
-	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-2.5-pro-preview-05-06", Medium: "gemini-2.5-flash-preview-04-17", Small: "gemini-2.5-flash-preview-04-17"},
+	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-3.1-pro-preview", Medium: "gemini-3-flash-preview", Small: "gemini-3-flash-preview"},
 }
 
 type setupStep int
@@ -65,6 +65,9 @@ const (
 	stepProvider              // local: LLM provider
 	stepAPIKey                // local: API key
 	stepCapabilities          // local: features
+	stepBrowserType           // local: browser type (only if browser enabled)
+	stepBrowserbaseKey        // local: browserbase API key
+	stepBrowserbasePID        // local: browserbase project ID
 	stepAccountEmail          // local: dashboard email
 	stepAccountPassword       // local: dashboard password
 	stepDirective             // local: directive
@@ -141,7 +144,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "up", "k":
-			if m.step == stepMode || m.step == stepRemoteAuth || m.step == stepProvider || m.step == stepCapabilities {
+			if m.step == stepMode || m.step == stepRemoteAuth || m.step == stepProvider || m.step == stepCapabilities || m.step == stepBrowserType {
 				if m.cursor > 0 {
 					m.cursor--
 				}
@@ -151,6 +154,9 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 			if m.step == stepRemoteAuth && m.cursor < 1 {
+				m.cursor++
+			}
+			if m.step == stepBrowserType && m.cursor < 1 {
 				m.cursor++
 			}
 			if m.step == stepProvider && m.cursor < len(providers)-1 {
@@ -269,9 +275,6 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					switch c.key {
 					case "browser":
 						m.config.Computer = c.enabled
-						if c.enabled {
-							m.config.ComputerType = "local" // default, can change later via /computer
-						}
 					case "integrations":
 						m.config.Integrations = c.enabled
 					case "telegram":
@@ -281,7 +284,41 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.input.SetValue("")
-				m.step = stepAccountEmail
+				if m.config.Computer {
+					m.step = stepBrowserType
+					m.cursor = 0
+				} else {
+					m.step = stepAccountEmail
+				}
+				return m, nil
+
+			case stepBrowserType:
+				if m.cursor == 0 {
+					m.config.ComputerType = "local"
+					m.step = stepAccountEmail
+				} else {
+					m.config.ComputerType = "browserbase"
+					m.input.SetValue("")
+					m.step = stepBrowserbaseKey
+				}
+				return m, nil
+
+			case stepBrowserbaseKey:
+				key := strings.TrimSpace(m.input.Value())
+				if key != "" {
+					m.config.BrowserbaseKey = key
+					m.input.SetValue("")
+					m.step = stepBrowserbasePID
+				}
+				return m, nil
+
+			case stepBrowserbasePID:
+				pid := strings.TrimSpace(m.input.Value())
+				if pid != "" {
+					m.config.BrowserbasePID = pid
+					m.input.SetValue("")
+					m.step = stepAccountEmail
+				}
 				return m, nil
 
 			case stepAccountEmail:
@@ -326,7 +363,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.step == stepAPIKey || m.step == stepDirective || m.step == stepRemoteURL || m.step == stepRemoteLogin || m.step == stepRemotePassword || m.step == stepRemoteKey || m.step == stepAccountEmail || m.step == stepAccountPassword {
+	if m.step == stepAPIKey || m.step == stepDirective || m.step == stepRemoteURL || m.step == stepRemoteLogin || m.step == stepRemotePassword || m.step == stepRemoteKey || m.step == stepAccountEmail || m.step == stepAccountPassword || m.step == stepBrowserbaseKey || m.step == stepBrowserbasePID {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -417,6 +454,32 @@ func (m *setupModel) applyConfig() {
 	}
 	cliLog("SETUP", fmt.Sprintf("using project: %s", projectID))
 	m.aptevaCfg.ProjectID = projectID
+
+	// Set up browser/computer if enabled — create as a provider BEFORE instance
+	if m.config.Computer {
+		if m.config.ComputerType == "browserbase" && m.config.BrowserbaseKey != "" {
+			bbBody, _ := json.Marshal(map[string]any{
+				"type": "browserbase",
+				"name": "browserbase",
+				"data": map[string]string{
+					"BROWSERBASE_API_KEY":    m.config.BrowserbaseKey,
+					"BROWSERBASE_PROJECT_ID": m.config.BrowserbasePID,
+				},
+			})
+			m.client.serverPost("/providers", bbBody)
+			cliLog("SETUP", "browserbase provider created")
+		} else {
+			browserBody, _ := json.Marshal(map[string]any{
+				"type": "browser",
+				"name": "Local Chrome",
+				"data": map[string]string{
+					"_enabled": "true",
+				},
+			})
+			m.client.serverPost("/providers", browserBody)
+			cliLog("SETUP", "local browser provider created")
+		}
+	}
 
 	// Create instance on server (always with project_id)
 	instanceBody, _ := json.Marshal(map[string]any{
@@ -565,6 +628,41 @@ func (m setupModel) View() string {
 		}
 		lines = append(lines, "")
 		lines = append(lines, dim.Render("  ↑↓ move · space toggle · enter to confirm"))
+
+	case stepBrowserType:
+		title = "BROWSER TYPE"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  How should the agent control a browser?"))
+		lines = append(lines, "")
+		browserOptions := []string{"Local Chrome (uses your installed browser)", "Browserbase (cloud browser, needs API key)"}
+		for i, opt := range browserOptions {
+			if i == m.cursor {
+				lines = append(lines, selected.Render("  > "+opt))
+			} else {
+				lines = append(lines, primary.Render("    "+opt))
+			}
+		}
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  ↑↓ to select · enter to confirm · esc to go back"))
+
+	case stepBrowserbaseKey:
+		title = "BROWSERBASE API KEY"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Paste your Browserbase API key:"))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("API key: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  From browserbase.com/settings"))
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
+
+	case stepBrowserbasePID:
+		title = "BROWSERBASE PROJECT"
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  Paste your Browserbase project ID:"))
+		lines = append(lines, "")
+		lines = append(lines, "  "+accent.Render("Project ID: ")+m.input.View())
+		lines = append(lines, "")
+		lines = append(lines, dim.Render("  enter to confirm · esc to go back"))
 
 	case stepAccountEmail:
 		title = "DASHBOARD ACCOUNT"
