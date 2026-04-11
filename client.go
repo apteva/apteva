@@ -541,13 +541,21 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 					model, _ := data["model"].(string)
 					memCount, _ := data["memory_count"].(float64)
 					threadCount, _ := data["thread_count"].(float64)
+					tokensIn, _ := data["tokens_in"].(float64)
+					tokensCached, _ := data["tokens_cached"].(float64)
+					tokensOut, _ := data["tokens_out"].(float64)
+					costUSD, _ := data["cost_usd"].(float64)
 					p.Send(sideSSEUpdate{
-						ThreadID:    threadID,
-						Iteration:   int(iter),
-						Rate:        rate,
-						Model:       model,
-						MemoryCount: int(memCount),
-						ThreadCount: int(threadCount),
+						ThreadID:     threadID,
+						Iteration:    int(iter),
+						Rate:         rate,
+						Model:        model,
+						MemoryCount:  int(memCount),
+						ThreadCount:  int(threadCount),
+						TokensIn:     int(tokensIn),
+						TokensCached: int(tokensCached),
+						TokensOut:    int(tokensOut),
+						CostUSD:      costUSD,
 					})
 				}
 			case "thread.spawn":

@@ -139,12 +139,16 @@ type threadSpawnMsg struct {           // thread spawned via SSE
 	Directive string
 }
 type sideSSEUpdate struct {            // side panel update from llm.done
-	ThreadID    string
-	Iteration   int
-	Rate        string
-	Model       string
-	MemoryCount int
-	ThreadCount int
+	ThreadID     string
+	Iteration    int
+	Rate         string
+	Model        string
+	MemoryCount  int
+	ThreadCount  int
+	TokensIn     int
+	TokensCached int
+	TokensOut    int
+	CostUSD      float64
 }
 type integrateListMsg struct {       // catalog fetched for searchable list
 	apps []struct {
@@ -308,16 +312,20 @@ type modalSearchItem struct {
 
 // sideData holds live data for the side panel.
 type sideData struct {
-	Status    string
-	Uptime    string
-	Iteration int
-	Rate      string
-	Model     string
-	Mode      string
-	Threads   []sideThread
-	Memories  int
-	Directive string
-	Computer  string // "local", "browserbase", or "" (off)
+	Status         string
+	Uptime         string
+	Iteration      int
+	Rate           string
+	Model          string
+	Mode           string
+	Threads        []sideThread
+	Memories       int
+	Directive      string
+	Computer       string // "local", "browserbase", or "" (off)
+	TotalTokensIn     int
+	TotalTokensCached int
+	TotalTokensOut    int
+	TotalCost         float64
 }
 
 type sideThread struct {
@@ -1707,6 +1715,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sideStatus.Status = "RUNNING"
 		m.sideStatus.Uptime = formatDuration(time.Since(m.startTime))
 		m.sideStatus.Memories = msg.MemoryCount
+		// Accumulate tokens and cost
+		m.sideStatus.TotalTokensIn += msg.TokensIn
+		m.sideStatus.TotalTokensCached += msg.TokensCached
+		m.sideStatus.TotalTokensOut += msg.TokensOut
+		m.sideStatus.TotalCost += msg.CostUSD
 		// Only update global status from main thread
 		if msg.ThreadID == "main" || msg.ThreadID == "" {
 			m.sideStatus.Iteration = msg.Iteration
@@ -3389,6 +3402,20 @@ func (m tuiModel) renderSidePanel(w, h int, dim, primary, accent, warn lipgloss.
 		} else {
 			lines = append(lines, dim.Render("BROWSER ")+dim.Render("off"))
 		}
+		// Token/cost tracker
+		if sd.TotalTokensIn > 0 || sd.TotalTokensOut > 0 || sd.TotalTokensCached > 0 {
+			lines = append(lines, "")
+			tokIn := formatTokenCount(sd.TotalTokensIn)
+			tokOut := formatTokenCount(sd.TotalTokensOut)
+			tokenLine := tokIn + " in / " + tokOut + " out"
+			if sd.TotalTokensCached > 0 {
+				tokenLine += " / " + formatTokenCount(sd.TotalTokensCached) + " cached"
+			}
+			lines = append(lines, dim.Render("TOKENS  ")+primary.Render(tokenLine))
+			if sd.TotalCost > 0 {
+				lines = append(lines, dim.Render("COST    ")+accent.Render(fmt.Sprintf("$%.4f", sd.TotalCost)))
+			}
+		}
 		lines = append(lines, "")
 
 		// Directive (truncated to 3 lines max)
@@ -3620,6 +3647,16 @@ func orderThreadTree(threads []sideThread) []sideThread {
 	}
 
 	return result
+}
+
+func formatTokenCount(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func formatDuration(d time.Duration) string {
