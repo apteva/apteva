@@ -48,8 +48,8 @@ type providerOption struct {
 var providers = []providerOption{
 	{Name: "fireworks", Label: "Fireworks (Kimi K2.5)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/routers/kimi-k2p5-turbo", Medium: "accounts/fireworks/routers/kimi-k2p5-turbo", Small: "accounts/fireworks/routers/kimi-k2p5-turbo"},
 	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-sonnet-4-6", Medium: "claude-haiku-4-5-20251001", Small: "claude-haiku-4-5-20251001"},
-	{Name: "openai", Label: "OpenAI (GPT-4)", EnvVar: "OPENAI_API_KEY", Large: "gpt-4.1", Medium: "gpt-4.1-mini", Small: "gpt-4.1-nano"},
-	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-3.1-pro-preview", Medium: "gemini-3-flash-preview", Small: "gemini-3-flash-preview"},
+	{Name: "openai", Label: "OpenAI (GPT-5.4)", EnvVar: "OPENAI_API_KEY", Large: "gpt-5.4-mini", Medium: "gpt-5.4-mini", Small: "gpt-5.4-mini"},
+	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-3.1-pro-preview", Medium: "gemini-3.1-pro-preview", Small: "gemini-3.1-pro-preview"},
 }
 
 type setupStep int
@@ -753,7 +753,7 @@ func (m *setupModel) applyRemoteAuth() {
 		"email":    m.config.RemoteEmail,
 		"password": m.config.RemotePass,
 	})
-	resp, err := m.client.client.Post(m.client.base+"/auth/login", "application/json", bytes.NewReader(loginBody))
+	resp, err := m.client.client.Post(m.client.apiBase()+"/auth/login", "application/json", bytes.NewReader(loginBody))
 	if err != nil {
 		cliLog("SETUP", fmt.Sprintf("login failed: %v", err))
 		return
@@ -775,7 +775,7 @@ func (m *setupModel) applyRemoteAuth() {
 
 	// Create API key
 	keyBody, _ := json.Marshal(map[string]string{"name": "cli-remote"})
-	keyReq, _ := http.NewRequest("POST", m.client.base+"/auth/keys", bytes.NewReader(keyBody))
+	keyReq, _ := http.NewRequest("POST", m.client.apiBase()+"/auth/keys", bytes.NewReader(keyBody))
 	keyReq.Header.Set("Content-Type", "application/json")
 	if sessionCookie != "" {
 		keyReq.AddCookie(&http.Cookie{Name: "session", Value: sessionCookie})

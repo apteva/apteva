@@ -179,7 +179,7 @@ func main() {
 	if !needsAuth {
 		client.apiKey = aptevaCfg.APIKey
 		if _, err := client.serverGet("/providers"); err != nil || func() bool {
-			req, _ := http.NewRequest("GET", client.base+"/providers", nil)
+			req, _ := http.NewRequest("GET", client.apiBase()+"/providers", nil)
 			req.Header.Set("Authorization", "Bearer "+aptevaCfg.APIKey)
 			resp, err := client.client.Do(req)
 			if err != nil {
@@ -370,7 +370,7 @@ func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, us
 	// Register (may fail if already exists — that's fine)
 	cliLog("AUTH", fmt.Sprintf("registering: %s", email))
 	regBody, _ := json.Marshal(map[string]string{"email": email, "password": password})
-	regResp, regErr := client.client.Post(client.base+"/auth/register", "application/json", bytes.NewReader(regBody))
+	regResp, regErr := client.client.Post(client.apiBase()+"/auth/register", "application/json", bytes.NewReader(regBody))
 	if regErr != nil {
 		cliLog("AUTH", fmt.Sprintf("register error: %v", regErr))
 	} else {
@@ -380,7 +380,7 @@ func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, us
 
 	// Login
 	cliLog("AUTH", "logging in")
-	resp, err := client.client.Post(client.base+"/auth/login", "application/json", bytes.NewReader(regBody))
+	resp, err := client.client.Post(client.apiBase()+"/auth/login", "application/json", bytes.NewReader(regBody))
 	if err != nil {
 		return "", 0, fmt.Errorf("login: %w", err)
 	}
@@ -414,7 +414,7 @@ func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, us
 
 	// Create API key
 	keyBody, _ := json.Marshal(map[string]string{"name": "cli"})
-	keyReq, _ := http.NewRequest("POST", client.base+"/auth/keys", bytes.NewReader(keyBody))
+	keyReq, _ := http.NewRequest("POST", client.apiBase()+"/auth/keys", bytes.NewReader(keyBody))
 	keyReq.Header.Set("Content-Type", "application/json")
 	keyReq.AddCookie(&http.Cookie{Name: "session", Value: sessionCookie})
 	keyResp, err := client.client.Do(keyReq)

@@ -81,7 +81,7 @@ func TestStartupFlow(t *testing.T) {
 	// Test 1: Register
 	t.Log("registering...")
 	regBody := `{"email":"test@local","password":"test1234"}`
-	resp, err := client.Post(base+"/auth/register", "application/json", strings.NewReader(regBody))
+	resp, err := client.Post(base+"/api/auth/register", "application/json", strings.NewReader(regBody))
 	if err != nil {
 		t.Fatalf("register failed: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestStartupFlow(t *testing.T) {
 
 	// Test 2: Login + session cookie
 	t.Log("logging in...")
-	resp, err = client.Post(base+"/auth/login", "application/json", strings.NewReader(regBody))
+	resp, err = client.Post(base+"/api/auth/login", "application/json", strings.NewReader(regBody))
 	if err != nil {
 		t.Fatalf("login failed: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestStartupFlow(t *testing.T) {
 
 	// Test 3: Create API key
 	t.Log("creating API key...")
-	keyReq, _ := http.NewRequest("POST", base+"/auth/keys", strings.NewReader(`{"name":"test"}`))
+	keyReq, _ := http.NewRequest("POST", base+"/api/auth/keys", strings.NewReader(`{"name":"test"}`))
 	keyReq.Header.Set("Content-Type", "application/json")
 	keyReq.AddCookie(&http.Cookie{Name: "session", Value: sessionCookie})
 	resp, err = client.Do(keyReq)
@@ -139,9 +139,9 @@ func TestStartupFlow(t *testing.T) {
 	apiKey := keyResult.Key
 	t.Logf("API key: %s...", apiKey[:10])
 
-	// Helper for authed requests
+	// Helper for authed requests — all API routes now live under /api
 	doGet := func(path string) (int, []byte) {
-		req, _ := http.NewRequest("GET", base+path, nil)
+		req, _ := http.NewRequest("GET", base+"/api"+path, nil)
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		resp, err := client.Do(req)
 		if err != nil {
@@ -152,7 +152,7 @@ func TestStartupFlow(t *testing.T) {
 		return resp.StatusCode, b
 	}
 	doPost := func(path string, payload string) (int, []byte) {
-		req, _ := http.NewRequest("POST", base+path, strings.NewReader(payload))
+		req, _ := http.NewRequest("POST", base+"/api"+path, strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		resp, err := client.Do(req)

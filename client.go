@@ -35,12 +35,22 @@ func (c *coreClient) do(req *http.Request) (*http.Response, error) {
 	return c.client.Do(req)
 }
 
+// apiBase returns the server's /api prefix. All REST/JSON endpoints live
+// under /api/ to avoid colliding with the SPA's client-side routes. Only
+// external endpoints (/webhooks, /oauth, /mcp) and the public /health
+// liveness check stay at root on the server.
+func (c *coreClient) apiBase() string {
+	return c.base + "/api"
+}
+
 // coreURL builds a URL for a core API path, with instance prefix if set.
+// Everything gets routed under /api — the server proxies per-instance paths
+// like /api/instances/:id/status through to the actual core process.
 func (c *coreClient) coreURL(path string) string {
 	if c.instancePrefix != "" {
-		return c.base + c.instancePrefix + path
+		return c.apiBase() + c.instancePrefix + path
 	}
-	return c.base + path
+	return c.apiBase() + path
 }
 
 // health checks if server/core is reachable.
@@ -84,7 +94,7 @@ func (c *coreClient) switchInstance(instanceID int64) error {
 
 // startInstance starts a stopped instance via server API.
 func startInstance(client *coreClient, instanceID int64) error {
-	req, _ := http.NewRequest("POST", client.base+fmt.Sprintf("/instances/%d/start", instanceID), nil)
+	req, _ := http.NewRequest("POST", client.apiBase()+fmt.Sprintf("/instances/%d/start", instanceID), nil)
 	resp, err := client.do(req)
 	if err != nil {
 		return err
@@ -731,9 +741,9 @@ func (e *textExtractor) feed(chunk string) string {
 	return result.String()
 }
 
-// serverGet does an authenticated GET to the server.
+// serverGet does an authenticated GET to the server API (/api/<path>).
 func (c *coreClient) serverGet(path string) ([]byte, error) {
-	req, _ := http.NewRequest("GET", c.base+path, nil)
+	req, _ := http.NewRequest("GET", c.apiBase()+path, nil)
 	resp, err := c.do(req)
 	if err != nil {
 		return nil, err
@@ -742,9 +752,9 @@ func (c *coreClient) serverGet(path string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// serverPost does an authenticated POST to the server.
+// serverPost does an authenticated POST to the server API (/api/<path>).
 func (c *coreClient) serverPost(path string, body []byte) ([]byte, error) {
-	req, _ := http.NewRequest("POST", c.base+path, bytes.NewReader(body))
+	req, _ := http.NewRequest("POST", c.apiBase()+path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.do(req)
 	if err != nil {
@@ -754,9 +764,9 @@ func (c *coreClient) serverPost(path string, body []byte) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// serverDelete does an authenticated DELETE to the server.
+// serverDelete does an authenticated DELETE to the server API (/api/<path>).
 func (c *coreClient) serverDelete(path string) error {
-	req, _ := http.NewRequest("DELETE", c.base+path, nil)
+	req, _ := http.NewRequest("DELETE", c.apiBase()+path, nil)
 	resp, err := c.do(req)
 	if err != nil {
 		return err

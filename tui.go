@@ -1358,7 +1358,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					pd.Data[k] = v
 				}
 				putBody, _ := json.Marshal(pd)
-				req, _ := http.NewRequest("PUT", cli.base+fmt.Sprintf("/providers/%d", pid), bytes.NewReader(putBody))
+				req, _ := http.NewRequest("PUT", cli.apiBase()+fmt.Sprintf("/providers/%d", pid), bytes.NewReader(putBody))
 				req.Header.Set("Content-Type", "application/json")
 				if cli.apiKey != "" {
 					req.Header.Set("Authorization", "Bearer "+cli.apiKey)
@@ -1492,7 +1492,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					pd.Data["model_"+tier] = modelID
 					body, _ := json.Marshal(pd)
-					req, _ := http.NewRequest("PUT", cli.base+fmt.Sprintf("/providers/%d", providerID), bytes.NewReader(body))
+					req, _ := http.NewRequest("PUT", cli.apiBase()+fmt.Sprintf("/providers/%d", providerID), bytes.NewReader(body))
 					req.Header.Set("Content-Type", "application/json")
 					if cli.apiKey != "" {
 						req.Header.Set("Authorization", "Bearer "+cli.apiKey)
@@ -1545,7 +1545,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				pd.Data["builtin_tools"] = string(btJSON)
 				body, _ := json.Marshal(pd)
-				req, _ := http.NewRequest("PUT", cli.base+fmt.Sprintf("/providers/%d", providerID), bytes.NewReader(body))
+				req, _ := http.NewRequest("PUT", cli.apiBase()+fmt.Sprintf("/providers/%d", providerID), bytes.NewReader(body))
 				req.Header.Set("Content-Type", "application/json")
 				if cli.apiKey != "" {
 					req.Header.Set("Authorization", "Bearer "+cli.apiKey)
