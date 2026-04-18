@@ -144,8 +144,23 @@ func main() {
 			serverProc.Stdout = os.Stdout
 			serverProc.Stderr = os.Stderr
 		} else {
-			serverProc.Stdout = nil
-			serverProc.Stderr = nil
+			// TUI mode: we can't write to stderr (it'd corrupt the
+			// alternate screen). But discarding server output makes
+			// hangs / panics invisible and the user sees a stuck
+			// terminal with no way to debug. Route to a rolling log
+			// file that lives next to cli.log — same location the
+			// user already knows to check.
+			srvLog, err := os.OpenFile(
+				filepath.Join(aptevaDir(), "server.log"),
+				os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644,
+			)
+			if err == nil {
+				serverProc.Stdout = srvLog
+				serverProc.Stderr = srvLog
+			} else {
+				serverProc.Stdout = nil
+				serverProc.Stderr = nil
+			}
 		}
 
 		cliLog("MAIN", fmt.Sprintf("spawning server: %s", bin))
@@ -244,14 +259,49 @@ func main() {
 		saveAptevaConfig(aptevaCfg)
 	}
 
-	// ── Phase 4: Ensure instance is running ──
-	cliLog("MAIN", fmt.Sprintf("phase 4: ensuring instance %d is running (headless=%v)", aptevaCfg.InstanceID, *headless))
+	// ── Phase 4: Pick + start the instance ──
+	cliLog("MAIN", fmt.Sprintf("phase 4: instance selection (saved=%d, headless=%v)", aptevaCfg.InstanceID, *headless))
 
 	if !*headless {
-		// TUI mode: auto-start the CLI's instance (user expects to chat immediately)
-		cliLog("MAIN", "starting instance")
+		// TUI mode: always show the instance picker first. This
+		// replaces the old "auto-start whatever instanceID the
+		// config says" path, which silently failed (stale ids → 404,
+		// deleted instances, orphan rows) and left the user staring
+		// at a blank terminal while waitForHealth timed out. The
+		// picker reads the live /api/instances list so what the user
+		// sees is always what exists right now.
+		sel, newInst, cancel, err := runInstancePicker(th, client, &aptevaCfg)
+		if err != nil {
+			cliLog("MAIN", fmt.Sprintf("picker error: %v", err))
+			fmt.Fprintf(os.Stderr, "could not load instances: %v\n", err)
+			os.Exit(1)
+		}
+		if cancel {
+			cliLog("MAIN", "picker: user cancelled")
+			os.Exit(0)
+		}
+		if newInst {
+			// Run the setup wizard to create a new instance.
+			cliLog("MAIN", "picker: user chose to create new instance")
+			if err := runSetup(client, &aptevaCfg); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			saveAptevaConfig(aptevaCfg)
+		} else if sel != nil {
+			cliLog("MAIN", fmt.Sprintf("picker: selected instance %d (%q)", sel.id, sel.name))
+			persistInstanceID(&aptevaCfg, sel.id)
+		}
+
+		// Ensure the chosen instance is running. startInstance now
+		// surfaces HTTP errors (404 / 5xx / etc.) instead of silently
+		// folding them into success, so waitForHealth never burns a
+		// full 15s on a non-existent instance.
+		cliLog("MAIN", fmt.Sprintf("starting instance %d", aptevaCfg.InstanceID))
 		if err := startInstance(client, aptevaCfg.InstanceID); err != nil {
 			cliLog("MAIN", fmt.Sprintf("start instance: %v", err))
+			fmt.Fprintf(os.Stderr, "could not start instance: %v\n", err)
+			os.Exit(1)
 		}
 	}
 	// Headless mode: don't auto-start — user manages instances via API/dashboard
@@ -616,20 +666,41 @@ func copyDashboard() {
 	dstDir := filepath.Join(aptevaDir(), "dashboard")
 	os.MkdirAll(dstDir, 0755)
 
-	// Copy all files from dist/ to dashboard/
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(srcDir, e.Name()))
+	// Recursively copy dist/ to dashboard/. Vite builds produce a
+	// subtree (dist/index.html + dist/assets/*.js|*.css); skipping
+	// directories meant only index.html was copied, so the dashboard
+	// loaded as a black page because every script tag 404'd.
+	fileCount, dirCount := 0, 0
+	walkErr := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return err
 		}
-		os.WriteFile(filepath.Join(dstDir, e.Name()), data, 0644)
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		dst := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			dirCount++
+			return os.MkdirAll(dst, 0755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			cliLog("MAIN", fmt.Sprintf("dashboard copy read failed: %s: %v", path, err))
+			return nil
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			cliLog("MAIN", fmt.Sprintf("dashboard copy write failed: %s: %v", dst, err))
+			return nil
+		}
+		fileCount++
+		return nil
+	})
+	if walkErr != nil {
+		cliLog("MAIN", fmt.Sprintf("dashboard copy walk error: %v", walkErr))
 	}
-	cliLog("MAIN", fmt.Sprintf("dashboard copied to %s (%d files)", dstDir, len(entries)))
+	cliLog("MAIN", fmt.Sprintf("dashboard copied from %s to %s (%d files, %d dirs)", srcDir, dstDir, fileCount, dirCount))
 }

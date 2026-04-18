@@ -96,13 +96,30 @@ func (c *coreClient) switchInstance(instanceID int64) error {
 }
 
 // startInstance starts a stopped instance via server API.
+// Checks the HTTP status so failures (already-running, server error,
+// proxy unreachable) surface as errors instead of silently letting the
+// caller continue to waitForHealth and wait for a timeout.
 func startInstance(client *coreClient, instanceID int64) error {
 	req, _ := http.NewRequest("POST", client.apiBase()+fmt.Sprintf("/instances/%d/start", instanceID), nil)
 	resp, err := client.do(req)
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 200 {
+			msg = msg[:200] + "…"
+		}
+		// 409 "instance already running" is fine — the agent is
+		// already up and waitForHealth will confirm it. Fold it
+		// into success so we don't bail a legitimate reconnect.
+		if resp.StatusCode == 409 {
+			return nil
+		}
+		return fmt.Errorf("start HTTP %d: %s", resp.StatusCode, msg)
+	}
 	return nil
 }
 
@@ -352,8 +369,16 @@ func (c *coreClient) chatClear(chatID string) error {
 // streamChatMessages opens the chat SSE stream and pushes each new
 // message onto ch. Reconnect with since=<last_id> fills any gap — the
 // caller tracks the highest id it has seen and bumps on each delivery.
-// Closes when done is closed.
-func (c *coreClient) streamChatMessages(chatID string, since int64, ch chan<- chatMessage, done <-chan struct{}) {
+// Returns when done is closed or the stream ends (EOF / HTTP error).
+//
+// Always closes ch on return so the consumer in startChatStream can
+// detect the drop and fire chatStreamFailedMsg for reconnect. onOpen
+// fires once after the HTTP response is received with status 200 — the
+// CLI uses this to emit the "[chat] user connected to chat" signal on
+// the same schedule as the dashboard's onopen handler.
+func (c *coreClient) streamChatMessages(chatID string, since int64, ch chan<- chatMessage, done <-chan struct{}, onOpen func()) {
+	defer close(ch)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-done; cancel() }()
 
@@ -366,9 +391,17 @@ func (c *coreClient) streamChatMessages(chatID string, since int64, ch chan<- ch
 	sseClient := &http.Client{Timeout: 0}
 	resp, err := sseClient.Do(req)
 	if err != nil {
+		cliLog("CHAT", fmt.Sprintf("stream dial failed: %v", err))
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		cliLog("CHAT", fmt.Sprintf("stream got HTTP %d", resp.StatusCode))
+		return
+	}
+	if onOpen != nil {
+		onOpen()
+	}
 
 	buf := make([]byte, 4096)
 	var line []byte
@@ -388,9 +421,16 @@ func (c *coreClient) streamChatMessages(chatID string, since int64, ch chan<- ch
 				}
 				raw := bytes.TrimSpace(line[:idx])
 				line = line[idx+1:]
-				if bytes.HasPrefix(raw, []byte("data: ")) {
+				// Accept "data:" with or without a trailing space — SSE
+				// allows either, and defensive prefix-stripping is
+				// cheaper than debugging an invisible off-by-one later.
+				if bytes.HasPrefix(raw, []byte("data:")) {
+					payload := bytes.TrimSpace(raw[5:])
+					if len(payload) == 0 {
+						continue
+					}
 					var m chatMessage
-					if json.Unmarshal(raw[6:], &m) == nil {
+					if json.Unmarshal(payload, &m) == nil {
 						select {
 						case ch <- m:
 						case <-done:
