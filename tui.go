@@ -475,7 +475,7 @@ func startChatStream(client *coreClient, p *tea.Program, chatID string, since in
 	}
 	go func() {
 		ch := make(chan chatMessage, 64)
-		go client.streamChatMessages(chatID, since, ch, done)
+		go client.streamChatMessages(chatID, since, ch, done, nil)
 		for {
 			select {
 			case <-done:
