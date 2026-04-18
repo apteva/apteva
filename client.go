@@ -87,8 +87,11 @@ func (c *coreClient) switchInstance(instanceID int64) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// Channels MCP is server-managed — just send the connect event
-	c.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Greet them now.", "main")
+	// No RULES bootstrap on switch — chat goes through the
+	// channel-chat app, which the agent already knows how to reply
+	// on via channels_respond(channel="chat", ...). The previous
+	// bootstrap was a workaround for the telemetry-stitched chat
+	// path that's been retired.
 	return nil
 }
 
@@ -214,6 +217,10 @@ func (c *coreClient) threads() ([]map[string]any, error) {
 }
 
 // sendEvent posts a message to the core event bus.
+// Raw path — bypasses the channel-chat app and lands the text in the
+// thinker's inbox with no prefix. Used by the CLI's inject slash
+// commands (/inject, /inject-mode) and by platform bookkeeping events
+// like the disconnect signal on instance switch.
 func (c *coreClient) sendEvent(message, threadID string) error {
 	body, _ := json.Marshal(map[string]string{
 		"message":   message,
@@ -227,6 +234,199 @@ func (c *coreClient) sendEvent(message, threadID string) error {
 	}
 	resp.Body.Close()
 	return nil
+}
+
+// --- channel-chat app client ------------------------------------------
+//
+// Mirrors the dashboard's chat.* client. The CLI targets the same
+// endpoints so both consumers of the same instance see exactly the
+// same chat rows (DB-backed, monotonic id, no ordering / dedup bugs).
+
+type chatRow struct {
+	ID         string `json:"id"`
+	InstanceID int64  `json:"instance_id"`
+	Title      string `json:"title"`
+}
+
+type chatMessage struct {
+	ID        int64  `json:"id"`
+	ChatID    string `json:"chat_id"`
+	Role      string `json:"role"` // user | agent | system
+	Content   string `json:"content"`
+	ThreadID  string `json:"thread_id,omitempty"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+// chatDefaultID returns the default chat id for an instance — creates
+// one if it doesn't exist yet. Idempotent on the server (insert-or-
+// ignore), so safe to call on every TUI startup.
+func (c *coreClient) chatDefaultID(instanceID int64) (string, error) {
+	u := c.apiBase() + "/apps/channel-chat/chats?instance_id=" + itoaInt64(instanceID)
+	req, _ := http.NewRequest("GET", u, nil)
+	resp, err := c.do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("list chats: HTTP %d", resp.StatusCode)
+	}
+	var chats []chatRow
+	if err := json.NewDecoder(resp.Body).Decode(&chats); err != nil {
+		return "", err
+	}
+	if len(chats) == 0 {
+		// POST to create the default chat.
+		body, _ := json.Marshal(map[string]any{"instance_id": instanceID})
+		req, _ := http.NewRequest("POST", c.apiBase()+"/apps/channel-chat/chats", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := c.do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		var created chatRow
+		if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+			return "", err
+		}
+		return created.ID, nil
+	}
+	return chats[0].ID, nil
+}
+
+// chatMessages fetches history since a cursor. since=0 loads everything.
+func (c *coreClient) chatMessages(chatID string, since int64) ([]chatMessage, error) {
+	u := fmt.Sprintf("%s/apps/channel-chat/messages?chat_id=%s&since=%d",
+		c.apiBase(), urlEncode(chatID), since)
+	req, _ := http.NewRequest("GET", u, nil)
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("messages: HTTP %d", resp.StatusCode)
+	}
+	var msgs []chatMessage
+	if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// chatPost writes a user message to the chat. Server echoes it back
+// on the SSE stream, so the caller must NOT also optimistic-insert
+// — the stream handler in the TUI is the single point of truth.
+func (c *coreClient) chatPost(chatID, content string) error {
+	body, _ := json.Marshal(map[string]string{"content": content})
+	u := fmt.Sprintf("%s/apps/channel-chat/messages?chat_id=%s",
+		c.apiBase(), urlEncode(chatID))
+	req, _ := http.NewRequest("POST", u, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("chat post: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// chatClear wipes every message in the chat. The chat row itself and
+// the agent's LLM memory are untouched — separate concerns.
+func (c *coreClient) chatClear(chatID string) error {
+	u := fmt.Sprintf("%s/apps/channel-chat/messages?chat_id=%s",
+		c.apiBase(), urlEncode(chatID))
+	req, _ := http.NewRequest("DELETE", u, nil)
+	resp, err := c.do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// streamChatMessages opens the chat SSE stream and pushes each new
+// message onto ch. Reconnect with since=<last_id> fills any gap — the
+// caller tracks the highest id it has seen and bumps on each delivery.
+// Closes when done is closed.
+func (c *coreClient) streamChatMessages(chatID string, since int64, ch chan<- chatMessage, done <-chan struct{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-done; cancel() }()
+
+	u := fmt.Sprintf("%s/apps/channel-chat/stream?chat_id=%s&since=%d",
+		c.apiBase(), urlEncode(chatID), since)
+	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	sseClient := &http.Client{Timeout: 0}
+	resp, err := sseClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 4096)
+	var line []byte
+	for {
+		select {
+		case <-done:
+			return
+		default:
+		}
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			line = append(line, buf[:n]...)
+			for {
+				idx := bytes.IndexByte(line, '\n')
+				if idx < 0 {
+					break
+				}
+				raw := bytes.TrimSpace(line[:idx])
+				line = line[idx+1:]
+				if bytes.HasPrefix(raw, []byte("data: ")) {
+					var m chatMessage
+					if json.Unmarshal(raw[6:], &m) == nil {
+						select {
+						case ch <- m:
+						case <-done:
+							return
+						}
+					}
+				}
+			}
+		}
+		if err == io.EOF || err != nil {
+			return
+		}
+	}
+}
+
+// itoaInt64 / urlEncode are local helpers kept in client.go so we
+// don't pull in strconv / net/url for two tiny call sites.
+func itoaInt64(n int64) string { return fmt.Sprintf("%d", n) }
+
+func urlEncode(s string) string {
+	// Chat ids are safe kebab/alpha-numeric; percent-encode
+	// defensively for the few characters that could leak if someone
+	// ever renames the id scheme.
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~' {
+			out = append(out, c)
+		} else {
+			out = append(out, '%',
+				"0123456789ABCDEF"[c>>4],
+				"0123456789ABCDEF"[c&0x0F])
+		}
+	}
+	return string(out)
 }
 
 // pause toggles pause.
@@ -441,14 +641,15 @@ func (c *coreClient) streamEvents(ch chan<- map[string]any, done <-chan struct{}
 	}
 }
 
-// streamToolChunks listens to SSE events and extracts streaming text from
-// cli_respond tool argument chunks, sending them to the TUI as streamChunkMsg.
+// streamToolChunks listens to SSE events and forwards structured
+// messages to the TUI. This used to stitch chat text from
+// channels_respond tool args — that responsibility has moved to the
+// channel-chat app's dedicated stream (see streamChatMessages). What
+// remains here is tool-activity + thinking + status telemetry that
+// drives the status line and the side panel, not the chat itself.
 func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) {
 	evCh := make(chan map[string]any, 256)
 	go client.streamEvents(evCh, done)
-
-	ext := &textExtractor{}
-	respondingToCLI := true // default true — only set false when we see non-cli channel
 
 	for {
 		select {
@@ -479,19 +680,7 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 							CallID:   callID,
 						})
 					}
-					// Track if channels_respond targets cli (for streaming filter)
-					// Note: tool.call arrives AFTER llm.tool_chunk, so we only use it
-					// to turn OFF streaming for non-cli channels
-					if name == "channels_respond" {
-						args, _ := data["args"].(map[string]any)
-						if args != nil {
-							ch, _ := args["channel"].(string)
-							if ch != "" && ch != "cli" {
-								respondingToCLI = false
-							}
-						}
-					}
-					// Channel tools: signal CLI for status
+					// Channel tools: signal CLI for status-line updates.
 					if name == "channels_status" {
 						args, _ := data["args"].(map[string]any)
 						if args != nil {
@@ -522,14 +711,6 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 							DurationMs: int64(durMs),
 							Success:    success,
 						})
-					}
-					// channels_respond result → finalize stream + reset extractor
-					if name == "channels_respond" {
-						ext.reset()
-						if respondingToCLI {
-							p.Send(respondMsg(""))
-						}
-						respondingToCLI = true // reset for next call
 					}
 				}
 			case "llm.done":
@@ -609,21 +790,9 @@ func streamToolChunks(client *coreClient, p *tea.Program, done <-chan struct{}) 
 						p.Send(eventReceivedMsg{ThreadID: threadID, Source: source, Message: message})
 					}
 				}
-			case "llm.tool_chunk":
-				if data == nil {
-					continue
-				}
-				tool, _ := data["tool"].(string)
-				chunk, _ := data["chunk"].(string)
-				if tool != "channels_respond" || chunk == "" || !respondingToCLI {
-					continue
-				}
-
-				// Extract new text from the incremental JSON
-				newText := ext.feed(chunk)
-				if newText != "" {
-					p.Send(streamChunkMsg(newText))
-				}
+				// llm.tool_chunk is intentionally ignored here — chat
+				// text arrives through the channel-chat SSE stream, not
+				// reconstructed from streaming tool-call JSON fragments.
 			}
 		}
 	}

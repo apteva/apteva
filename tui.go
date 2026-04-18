@@ -18,6 +18,21 @@ import (
 type respondMsg string
 type askMsg string
 
+// chatRowMsg carries one row delivered by the channel-chat app's SSE
+// stream. The TUI appends it to scrollback, keyed by monotonic DB id
+// so dedup is trivial (reject any row whose id we've already rendered).
+type chatRowMsg struct {
+	ID       int64
+	Role     string // user | agent | system
+	Content  string
+	ThreadID string
+	Status   string // streaming | final
+}
+
+// chatStreamFailedMsg signals the SSE connection ended. The TUI logs
+// it and the background reconnect loop will restart the stream.
+type chatStreamFailedMsg struct{ Err string }
+
 type statusUpdate struct {
 	Line  string
 	Level string
@@ -303,6 +318,14 @@ type tuiModel struct {
 	modalSearchFiltered []modalSearchItem          // filtered items
 	modalSearchOnSelect     func(slug string) tea.Cmd  // callback
 	modalSearchCreateOnEmpty func(name string) tea.Cmd // callback when Enter with no results (create new)
+
+	// --- Channel-chat integration (replaces old telemetry-stitched chat) ---
+	chatID       string      // default chat id for the current instance
+	chatSince    int64       // highest message id we've rendered (used for SSE reconnect)
+	chatSeen     map[int64]bool // dedup for chat SSE — id → seen
+	chatDone     chan struct{} // closes the current chat stream goroutine
+	chatTarget   string      // thread id for /inject commands (default "main")
+	injectMode   bool        // true = Enter sends raw /event instead of chat
 }
 
 type modalSearchItem struct {
@@ -389,6 +412,8 @@ func newTUI(th theme, client *coreClient) tuiModel {
 		client:      client,
 		input:       ti,
 		startTime:   time.Now(),
+		chatSeen:    make(map[int64]bool),
+		chatTarget:  "main",
 	}
 }
 
@@ -397,7 +422,102 @@ func (m tuiModel) Init() tea.Cmd {
 		textinput.Blink,
 		tickEvery(),
 		pollSideData(m.client),
+		// Kick off the channel-chat bootstrap on startup. This fetches
+		// (or creates) the default chat, loads recent history, and
+		// opens the SSE stream. Returns a message that primes the
+		// model with chatID + historical rows; subsequent live rows
+		// arrive as chatRowMsg from a background goroutine.
+		bootstrapChat(m.client, m.aptevaCfg.InstanceID),
 	)
+}
+
+// chatBootstrapMsg is the one-shot result of the initial
+// chatDefaultID + chatMessages fetch. Carries the chat id, the
+// history to pre-populate scrollback, and an error if the fetch
+// failed (in which case the TUI logs and continues — next manual
+// refresh or reconnect will retry).
+type chatBootstrapMsg struct {
+	ChatID  string
+	History []chatMessage
+	Err     error
+}
+
+// bootstrapChat runs the HTTP setup (no SSE yet) as a tea.Cmd so the
+// main goroutine can sequence it inside the bubbletea update loop.
+// Uses the CLI's configured instance id — the in-cluster CLI always
+// has one. We do NOT start the SSE here because tea.Cmd runs once;
+// streaming is driven by a long-lived goroutine, spun up by the
+// Update handler for chatBootstrapMsg.
+func bootstrapChat(client *coreClient, instanceID int64) tea.Cmd {
+	return func() tea.Msg {
+		if instanceID <= 0 {
+			return chatBootstrapMsg{Err: fmt.Errorf("no instance id configured")}
+		}
+		chatID, err := client.chatDefaultID(instanceID)
+		if err != nil {
+			return chatBootstrapMsg{Err: err}
+		}
+		history, err := client.chatMessages(chatID, 0)
+		if err != nil {
+			return chatBootstrapMsg{ChatID: chatID, Err: err}
+		}
+		return chatBootstrapMsg{ChatID: chatID, History: history}
+	}
+}
+
+// startChatStream spins up a goroutine that reads the channel-chat
+// SSE stream and forwards each row as a chatRowMsg to the bubbletea
+// program. On stream end it sends chatStreamFailedMsg; the Update
+// handler restarts the stream with the updated cursor.
+func startChatStream(client *coreClient, p *tea.Program, chatID string, since int64, done <-chan struct{}) {
+	if p == nil {
+		return
+	}
+	go func() {
+		ch := make(chan chatMessage, 64)
+		go client.streamChatMessages(chatID, since, ch, done)
+		for {
+			select {
+			case <-done:
+				return
+			case m, ok := <-ch:
+				if !ok {
+					p.Send(chatStreamFailedMsg{Err: "stream ended"})
+					return
+				}
+				p.Send(chatRowMsg{
+					ID: m.ID, Role: m.Role, Content: m.Content,
+					ThreadID: m.ThreadID, Status: m.Status,
+				})
+			}
+		}
+	}()
+}
+
+// renderChatRow appends one chat message to the TUI scrollback. Uses
+// the same styling slots (input/output/dim) the old telemetry-stitched
+// path did so the visual output is unchanged — only the data source
+// moved.
+func (m *tuiModel) renderChatRow(row chatMessage) {
+	switch row.Role {
+	case "user":
+		if len(m.lines) > 0 && m.lines[len(m.lines)-1].text != "" {
+			m.addLine("", "dim")
+		}
+		m.addLine("> "+row.Content, "input")
+		m.addLine("", "dim")
+	case "agent":
+		if len(m.lines) > 0 && m.lines[len(m.lines)-1].text != "" {
+			m.addLine("", "dim")
+		}
+		// Split multi-line agent replies into multiple rendered lines
+		// so long responses don't blow past the terminal width.
+		for _, ln := range strings.Split(row.Content, "\n") {
+			m.addLine(ln, "output")
+		}
+	case "system":
+		m.addLine("ℹ "+row.Content, "dim")
+	}
 }
 
 // respondMsg, askMsg, statusMsg are now sent by the SSE handler in client.go
@@ -657,27 +777,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.waitingConnect {
-				text := strings.TrimSpace(m.input.Value())
-				if strings.HasPrefix(text, "/") {
-					// Command — run it without connecting
-					return m.handleInput()
-				}
+				// waitingConnect used to gate the RULES bootstrap send
+				// that set up the old [cli] channel. The new channel-
+				// chat path needs no bootstrap — chat history loads on
+				// startup and is always live — so first-enter is just
+				// the normal input path.
 				m.waitingConnect = false
-				if text != "" {
-					// Include the message in the connect event — single event, no race
-					m.input.SetValue("")
-					if len(m.lines) > 0 {
-						m.addLine("", "dim")
-					}
-					m.addLine("> "+text, "input")
-					m.addLine("", "dim")
-					m.waiting = true
-					m.scrollOff = 0
-					go m.client.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Their first message: "+text, "main")
-				} else {
-					go m.client.sendEvent("[cli] root user connected. RULES: 1) Reply to ALL [cli] messages using channels_respond(channel=\"cli\"). 2) When the user asks you to do something, IMMEDIATELY acknowledge what you will do BEFORE doing it, then follow up with the result. 3) Never leave a message unanswered. Greet them now.", "main")
-				}
-				return m, nil
+				return m.handleInput()
 			}
 			return m.handleInput()
 		case "pgup":
@@ -698,6 +804,72 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modalTitle = msg.title
 		m.modalLines = strings.Split(msg.text, "\n")
 		m.modalScroll = 0
+		return m, nil
+
+	case chatBootstrapMsg:
+		// Initial chat load — set chat id, pre-populate scrollback
+		// from history, kick off the SSE stream. If the initial fetch
+		// failed, keep the TUI usable and log — typing still works,
+		// we just don't have history yet and won't stream. A /chat
+		// slash command (below) offers a manual retry.
+		if msg.Err != nil {
+			cliLog("CHAT", "bootstrap error: "+msg.Err.Error())
+		}
+		if msg.ChatID == "" {
+			return m, nil
+		}
+		m.chatID = msg.ChatID
+		for _, row := range msg.History {
+			m.renderChatRow(row)
+			if row.ID > m.chatSince {
+				m.chatSince = row.ID
+			}
+			m.chatSeen[row.ID] = true
+		}
+		m.scrollOff = 0
+		// Start SSE stream from the highest id we have.
+		m.chatDone = make(chan struct{})
+		startChatStream(m.client, m.teaProgram, m.chatID, m.chatSince, m.chatDone)
+		return m, nil
+
+	case chatRowMsg:
+		// Dedup: the hub MAY deliver a row we already saw across a
+		// reconnect boundary (we bumped chatSince locally but the
+		// server echoed the row again). Cheap id-based guard.
+		if m.chatSeen[msg.ID] {
+			return m, nil
+		}
+		m.chatSeen[msg.ID] = true
+		if msg.ID > m.chatSince {
+			m.chatSince = msg.ID
+		}
+		m.renderChatRow(chatMessage{
+			ID: msg.ID, Role: msg.Role, Content: msg.Content,
+			ThreadID: msg.ThreadID, Status: msg.Status,
+		})
+		// Any agent/system message clears the "waiting" spinner —
+		// the agent did respond (just not via the streaming-text
+		// path that used to set it, which is retired).
+		if msg.Role != "user" {
+			m.waiting = false
+		}
+		m.scrollOff = 0
+		return m, nil
+
+	case chatStreamFailedMsg:
+		if msg.Err != "" {
+			cliLog("CHAT", "stream ended: "+msg.Err)
+		}
+		// Background reconnect — same cursor, bubbletea doesn't need
+		// to block. If SSE keeps failing there's a deeper problem
+		// and /chat manual-refresh will show it.
+		if m.chatID != "" {
+			if m.chatDone != nil {
+				close(m.chatDone)
+			}
+			m.chatDone = make(chan struct{})
+			startChatStream(m.client, m.teaProgram, m.chatID, m.chatSince, m.chatDone)
+		}
 		return m, nil
 
 	case streamChunkMsg:
@@ -1855,15 +2027,55 @@ func (m *tuiModel) handleInput() (tuiModel, tea.Cmd) {
 		return m.handleCommand(text)
 	}
 
-	// Send to core — add spacing around user message
-	if len(m.lines) > 0 {
-		m.addLine("", "dim")
-	}
-	m.addLine("> "+text, "input")
-	m.addLine("", "dim")
+	// Send path — either chat (default) or raw inject depending on
+	// the current mode. Inject sends the text verbatim to the core's
+	// /event endpoint with no prefix, mirroring the dashboard's
+	// Inject panel. Chat posts through the channel-chat app; server
+	// writes the row + echoes it back via SSE, so we do NOT
+	// optimistic-insert (the chat-stream handler is the single
+	// source of truth — avoids every ordering/dedup bug the old
+	// path had).
 	m.waiting = true
 	m.scrollOff = 0
-	go m.client.sendEvent("[cli] "+text, "main")
+
+	if m.injectMode {
+		// Raw inject — no [tag] prefix, no chat bookkeeping. The
+		// row shows up in scrollback immediately because nothing
+		// will echo it back. Distinct styling so it's obvious the
+		// event bypassed chat.
+		if len(m.lines) > 0 {
+			m.addLine("", "dim")
+		}
+		m.addLine("» "+text, "input") // » = inject, vs > for chat
+		m.addLine("", "dim")
+		target := m.chatTarget
+		if target == "" {
+			target = "main"
+		}
+		go m.client.sendEvent(text, target)
+		return *m, nil
+	}
+
+	if m.chatID == "" {
+		// Bootstrap hasn't resolved the chat yet (transient during
+		// startup). Fall back to the raw path so the user's first
+		// message isn't lost. Rare — bootstrap is one HTTP round-trip.
+		if len(m.lines) > 0 {
+			m.addLine("", "dim")
+		}
+		m.addLine("> "+text, "input")
+		m.addLine("", "dim")
+		go m.client.sendEvent("[chat] "+text, "main")
+		return *m, nil
+	}
+
+	// Chat path — post, wait for the SSE echo to render.
+	chatID := m.chatID
+	go func(content string) {
+		if err := m.client.chatPost(chatID, content); err != nil {
+			cliLog("CHAT", "post failed: "+err.Error())
+		}
+	}(text)
 
 	return *m, nil
 }
@@ -1879,12 +2091,84 @@ func (m *tuiModel) handleCommand(text string) (tuiModel, tea.Cmd) {
 	case "/clear":
 		m.lines = nil
 		m.scrollOff = 0
-		// Also wipe server-side session history
+		// Wipe DB-backed chat history via the channel-chat app so
+		// the dashboard and the CLI see the same state. Previously
+		// we also nuked core's LLM history via /config reset — that
+		// conflates two concerns (UI history vs agent memory). Keep
+		// /clear as UI-only; use /reset for the LLM side.
+		if m.chatID != "" {
+			cli := m.client
+			chatID := m.chatID
+			go func() {
+				if err := cli.chatClear(chatID); err != nil {
+					cliLog("CHAT", "clear failed: "+err.Error())
+				}
+			}()
+		}
+		m.chatSince = 0
+		m.chatSeen = make(map[int64]bool)
+
+	case "/reset":
+		// Reset the agent's LLM message history WITHOUT clearing
+		// the chat UI. Useful when the agent gets stuck in a
+		// tangent but you want to keep the conversation visible.
 		cli := m.client
 		go func() {
 			body, _ := json.Marshal(map[string]any{"reset": map[string]bool{"history": true}})
 			cli.do(cli.putRequest("/config", body))
 		}()
+		m.addLine("ℹ agent LLM history reset (chat UI kept)", "dim")
+
+	case "/inject":
+		// One-shot inject. Rest of the line becomes the payload,
+		// sent as-is to the core's /event endpoint with the current
+		// target thread (default "main"). Does NOT flip inject mode.
+		rest := strings.TrimSpace(strings.TrimPrefix(text, "/inject"))
+		if rest == "" {
+			m.addLine("ℹ /inject <text> — send one raw event without entering inject mode", "dim")
+			return *m, nil
+		}
+		target := m.chatTarget
+		if target == "" {
+			target = "main"
+		}
+		cli := m.client
+		go func(payload, t string) {
+			if err := cli.sendEvent(payload, t); err != nil {
+				cliLog("INJECT", "send failed: "+err.Error())
+			}
+		}(rest, target)
+		m.addLine(fmt.Sprintf("» [inject→%s] %s", target, rest), "input")
+
+	case "/inject-mode":
+		// Persistent toggle: every subsequent Enter sends raw /event
+		// instead of chat. Status line reflects the current mode.
+		m.injectMode = !m.injectMode
+		if m.injectMode {
+			m.addLine("ℹ inject mode ON — messages go raw to core /event. Use /chat to return.", "dim")
+		} else {
+			m.addLine("ℹ inject mode OFF — back to normal chat.", "dim")
+		}
+
+	case "/chat":
+		// Shortcut to leave inject mode.
+		if m.injectMode {
+			m.injectMode = false
+			m.addLine("ℹ chat mode — messages go through channel-chat.", "dim")
+		} else {
+			m.addLine("ℹ already in chat mode.", "dim")
+		}
+
+	case "/target":
+		// Set the target thread for /inject and inject-mode sends.
+		// Empty / "main" returns to the default. No validation —
+		// unknown threads just get an event they'll ignore.
+		if len(parts) < 2 {
+			m.addLine(fmt.Sprintf("ℹ /target <thread>  (current: %s)", m.chatTarget), "dim")
+			return *m, nil
+		}
+		m.chatTarget = parts[1]
+		m.addLine("ℹ inject target → "+m.chatTarget, "dim")
 
 	case "/status":
 		return *m, func() tea.Msg {
