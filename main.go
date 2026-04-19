@@ -411,7 +411,7 @@ func bootstrapLocalAuth(client *coreClient, cfg AptevaConfig) (apiKey string, us
 	email := cfg.AccountEmail
 	password := cfg.AccountPassword
 	if email == "" {
-		email = "admin@local"
+		email = "admin"
 	}
 	if password == "" {
 		password = "admin1234" // must be 8+ chars

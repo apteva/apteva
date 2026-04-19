@@ -469,13 +469,24 @@ func bootstrapChat(client *coreClient, instanceID int64) tea.Cmd {
 // SSE stream and forwards each row as a chatRowMsg to the bubbletea
 // program. On stream end it sends chatStreamFailedMsg; the Update
 // handler restarts the stream with the updated cursor.
+//
+// On each successful SSE open we fire "[chat] user connected to chat"
+// as a raw event to the core. The agent's channel-chat routing uses
+// this signal to learn that a human is present and to advertise the
+// chat channel in channels_respond — without it the agent has no way
+// to target a reply back at the CLI. The dashboard fires the same
+// signal from ChatPanel.tsx on its onopen handler. Reconnects fire
+// again so the agent re-learns presence after a stream blip.
 func startChatStream(client *coreClient, p *tea.Program, chatID string, since int64, done <-chan struct{}) {
 	if p == nil {
 		return
 	}
+	onOpen := func() {
+		go client.sendEvent("[chat] user connected to chat", "main")
+	}
 	go func() {
 		ch := make(chan chatMessage, 64)
-		go client.streamChatMessages(chatID, since, ch, done, nil)
+		go client.streamChatMessages(chatID, since, ch, done, onOpen)
 		for {
 			select {
 			case <-done:

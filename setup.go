@@ -326,12 +326,12 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if username == "" {
 					username = "admin"
 				}
-				// Server expects email format — append @local for local usernames
-				email := username
-				if !strings.Contains(email, "@") {
-					email = username + "@local"
-				}
-				m.config.AccountEmail = email
+				// Store the literal username. The server's /auth/register
+				// accepts any non-empty string — it doesn't require an @.
+				// Previously we appended "@local" which mismatched what
+				// users then typed on the dashboard login form (labeled
+				// "Username") and broke UI login for fresh installs.
+				m.config.AccountEmail = username
 				m.input.SetValue("")
 				m.step = stepAccountPassword
 				return m, nil
@@ -678,8 +678,7 @@ func (m setupModel) View() string {
 	case stepAccountPassword:
 		title = "DASHBOARD PASSWORD"
 		lines = append(lines, "")
-		username := strings.TrimSuffix(m.config.AccountEmail, "@local")
-		lines = append(lines, dim.Render("  Choose a password for "+username))
+		lines = append(lines, dim.Render("  Choose a password for "+m.config.AccountEmail))
 		lines = append(lines, "")
 		lines = append(lines, "  "+accent.Render("Password: ")+m.input.View())
 		lines = append(lines, "")
