@@ -26,14 +26,44 @@ COPY core/ core/
 COPY computer/ computer/
 COPY server/ server/
 
-# Build core
-WORKDIR /build/core
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-core .
+# package.json files drive the version stamps below. Copy them individually
+# so a version bump invalidates only the build step, not the Go deps cache.
+COPY package.json /build/versions/umbrella.json
+COPY apteva/package.json /build/versions/cli.json
+COPY dashboard/package.json /build/versions/dashboard.json
+COPY integrations/package.json /build/versions/integrations.json
 
-# Build server with embedded dashboard
+# Build core (versioned)
+WORKDIR /build/core
+RUN set -eux; \
+    V_UMBRELLA=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/umbrella.json | head -1); \
+    V_CLI=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/cli.json | head -1); \
+    BUILD=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+    CGO_ENABLED=0 go build -ldflags="-s -w \
+        -X main.Version=$V_UMBRELLA \
+        -X main.CLIVersion=$V_CLI \
+        -X main.CoreVersion=$V_UMBRELLA \
+        -X main.BuildTime=$BUILD" \
+        -o /apteva-core .
+
+# Build server with embedded dashboard (versioned)
 WORKDIR /build/server
 COPY --from=dashboard-builder /build/dashboard/dist/ ./dashboard/
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-server .
+RUN set -eux; \
+    V_UMBRELLA=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/umbrella.json | head -1); \
+    V_CLI=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/cli.json | head -1); \
+    V_DASH=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/dashboard.json | head -1); \
+    V_INT=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/integrations.json | head -1); \
+    BUILD=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+    echo "versions: umbrella=$V_UMBRELLA cli=$V_CLI dashboard=$V_DASH integrations=$V_INT build=$BUILD"; \
+    CGO_ENABLED=0 go build -ldflags="-s -w \
+        -X main.Version=$V_UMBRELLA \
+        -X main.CLIVersion=$V_CLI \
+        -X main.DashboardVersion=$V_DASH \
+        -X main.IntegrationsVersion=$V_INT \
+        -X main.CoreVersion=$V_UMBRELLA \
+        -X main.BuildTime=$BUILD" \
+        -o /apteva-server .
 
 # ─── Runtime ───
 FROM alpine:3.21
