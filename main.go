@@ -618,30 +618,22 @@ func findAppsDir() string {
 	return ""
 }
 
-// findBuiltinAppsDir locates the directory holding sibling Apteva
-// app repos that ship as built-ins (apteva.yaml at depth 1). On the
-// monorepo developer layout the apteva CLI binary lives at
-// `<repo>/apteva/apteva` and the sibling apps live at `<repo>/simple`,
-// `<repo>/app-tasks`, etc., so the dir we want is the parent of the
-// CLI binary's containing folder. apteva-server scans this dir at
-// boot and registers every subfolder containing an apteva.yaml.
+// findBuiltinAppsDir returns "" by default in dev mode.
 //
-// Returns "" when no plausible parent can be located, which makes
-// apteva-server fall back to its own default (`/opt/apteva/apps` —
-// the docker layout). That keeps prod behaviour unchanged.
+// "Built-in" means "shipped baked into the apteva-server image" —
+// apps the operator gets for free without an explicit install action.
+// In prod that's `/opt/apteva/apps` (set by the Dockerfile) and only
+// contains the apps we deliberately bake in.
+//
+// In dev there's no equivalent — the monorepo root contains every
+// sibling app repo (app-tasks, app-status, simple, …), and walking
+// it would auto-register all of them as if they were pre-installed
+// platform features. Wrong: those are user-installable apps that
+// belong in the marketplace install flow. So we leave dev with no
+// built-ins by default. To opt in for a specific test, the operator
+// can set BUILTIN_APPS_DIR explicitly to a directory that contains
+// only the truly-built-in apps they want.
 func findBuiltinAppsDir() string {
-	self, _ := os.Executable()
-	if self == "" {
-		return ""
-	}
-	dir := filepath.Dir(self) // …/apteva
-	parent := filepath.Dir(dir) // …/<monorepo root>
-	// Cheap sanity check: a built-in app like `simple` should sit
-	// alongside, with an apteva.yaml inside.
-	if _, err := os.Stat(filepath.Join(parent, "simple", "apteva.yaml")); err == nil {
-		abs, _ := filepath.Abs(parent)
-		return abs
-	}
 	return ""
 }
 
