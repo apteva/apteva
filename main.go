@@ -135,6 +135,13 @@ func main() {
 			"APPS_DIR=" + findAppsDir(),
 			"APTEVA_REGISTRATION=open", // local mode — same machine, safe to auto-register
 		}
+		// Built-in apps (kind=static UI bundles like `simple`) live at
+		// monorepo-root/<app>/apteva.yaml on a developer machine. Tell
+		// apteva-server where to scan; in the docker image the env var
+		// is preset to /opt/apteva/apps so this branch is a no-op.
+		if v := findBuiltinAppsDir(); v != "" {
+			serverEnv = append(serverEnv, "BUILTIN_APPS_DIR="+v)
+		}
 		if !*headless {
 			serverEnv = append(serverEnv, "QUIET=1")
 		}
@@ -607,6 +614,33 @@ func findAppsDir() string {
 			abs, _ := filepath.Abs(c)
 			return abs
 		}
+	}
+	return ""
+}
+
+// findBuiltinAppsDir locates the directory holding sibling Apteva
+// app repos that ship as built-ins (apteva.yaml at depth 1). On the
+// monorepo developer layout the apteva CLI binary lives at
+// `<repo>/apteva/apteva` and the sibling apps live at `<repo>/simple`,
+// `<repo>/app-tasks`, etc., so the dir we want is the parent of the
+// CLI binary's containing folder. apteva-server scans this dir at
+// boot and registers every subfolder containing an apteva.yaml.
+//
+// Returns "" when no plausible parent can be located, which makes
+// apteva-server fall back to its own default (`/opt/apteva/apps` —
+// the docker layout). That keeps prod behaviour unchanged.
+func findBuiltinAppsDir() string {
+	self, _ := os.Executable()
+	if self == "" {
+		return ""
+	}
+	dir := filepath.Dir(self) // …/apteva
+	parent := filepath.Dir(dir) // …/<monorepo root>
+	// Cheap sanity check: a built-in app like `simple` should sit
+	// alongside, with an apteva.yaml inside.
+	if _, err := os.Stat(filepath.Join(parent, "simple", "apteva.yaml")); err == nil {
+		abs, _ := filepath.Abs(parent)
+		return abs
 	}
 	return ""
 }
