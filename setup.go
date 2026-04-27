@@ -46,7 +46,7 @@ type providerOption struct {
 }
 
 var providers = []providerOption{
-	{Name: "fireworks", Label: "Fireworks (Kimi K2.5)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/models/kimi-k2p5", Medium: "accounts/fireworks/models/kimi-k2p5", Small: "accounts/fireworks/models/kimi-k2p5"},
+	{Name: "fireworks", Label: "Fireworks (Kimi K2.6)", EnvVar: "FIREWORKS_API_KEY", Large: "accounts/fireworks/models/kimi-k2p6", Medium: "accounts/fireworks/models/kimi-k2p6", Small: "accounts/fireworks/models/kimi-k2p6"},
 	{Name: "anthropic", Label: "Anthropic (Claude)", EnvVar: "ANTHROPIC_API_KEY", Large: "claude-sonnet-4-6", Medium: "claude-haiku-4-5-20251001", Small: "claude-haiku-4-5-20251001"},
 	{Name: "openai", Label: "OpenAI (GPT-5.4)", EnvVar: "OPENAI_API_KEY", Large: "gpt-5.4-mini", Medium: "gpt-5.4-mini", Small: "gpt-5.4-mini"},
 	{Name: "google", Label: "Google (Gemini)", EnvVar: "GOOGLE_API_KEY", Large: "gemini-3.1-pro-preview", Medium: "gemini-3.1-pro-preview", Small: "gemini-3.1-pro-preview"},

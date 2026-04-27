@@ -24,7 +24,7 @@ COPY server/ server/
 
 # Build core
 WORKDIR /build/core
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-core .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-core ./cmd/apteva-core
 
 # Build server
 WORKDIR /build/server
