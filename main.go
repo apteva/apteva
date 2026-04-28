@@ -39,6 +39,7 @@ func main() {
 	tui := flag.Bool("tui", false, "launch the chat TUI instead of dashboard mode")
 	headless := flag.Bool("headless", false, "deprecated alias — same as default (dashboard mode)")
 	noBrowser := flag.Bool("no-browser", false, "don't auto-open the dashboard in your browser")
+	verbose := flag.Bool("logs", false, "stream server logs to the terminal (otherwise only ~/.apteva/server.log)")
 	noSpawn := flag.Bool("no-spawn", false, "don't auto-start server, connect to existing")
 	serverAddr := flag.String("server", "", "server address (e.g. localhost:5280)")
 	serverBin := flag.String("server-bin", "", "path to apteva-server binary")
@@ -155,21 +156,31 @@ func main() {
 		if v := findBuiltinAppsDir(); v != "" {
 			serverEnv = append(serverEnv, "BUILTIN_APPS_DIR="+v)
 		}
-		serverEnv = append(serverEnv, "QUIET=1")
+		// QUIET=1 only when we're not streaming to the terminal — both
+		// dashboard-default and TUI keep the console clean. --logs in
+		// dashboard mode forwards server stdout/stderr to the user's
+		// terminal so they can watch boot + install diagnostics live.
+		if !(*verbose && !*tui) {
+			serverEnv = append(serverEnv, "QUIET=1")
+		}
 		serverProc.Env = append(os.Environ(), serverEnv...)
-		// Server output → ~/.apteva/server.log in both modes. TUI can't
-		// share stderr without corrupting the alt-screen; dashboard mode
-		// keeps the console clean for the URL banner.
-		srvLog, err := os.OpenFile(
-			filepath.Join(aptevaDir(), "server.log"),
-			os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644,
-		)
-		if err == nil {
-			serverProc.Stdout = srvLog
-			serverProc.Stderr = srvLog
+		if *verbose && !*tui {
+			serverProc.Stdout = os.Stdout
+			serverProc.Stderr = os.Stderr
 		} else {
-			serverProc.Stdout = nil
-			serverProc.Stderr = nil
+			// TUI can't share stderr without corrupting the alt-screen;
+			// dashboard mode keeps the console clean for the URL banner.
+			srvLog, err := os.OpenFile(
+				filepath.Join(aptevaDir(), "server.log"),
+				os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644,
+			)
+			if err == nil {
+				serverProc.Stdout = srvLog
+				serverProc.Stderr = srvLog
+			} else {
+				serverProc.Stdout = nil
+				serverProc.Stderr = nil
+			}
 		}
 
 		cliLog("MAIN", fmt.Sprintf("spawning server: %s", bin))
