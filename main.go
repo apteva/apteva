@@ -25,6 +25,16 @@ import (
 const defaultServerPort = 5280
 
 func main() {
+	// Subcommand dispatch — `apteva <subcommand> [args]`. Only the
+	// known subcommands are intercepted; everything else falls through
+	// to the default behaviour (run as a normal client / TUI).
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "test":
+			os.Exit(cmdTest(os.Args[2:]))
+		}
+	}
+
 	themeName := flag.String("theme", "orange", "color theme: orange, amber, white")
 	headless := flag.Bool("headless", false, "run server + core without TUI (dashboard only)")
 	noSpawn := flag.Bool("no-spawn", false, "don't auto-start server, connect to existing")
