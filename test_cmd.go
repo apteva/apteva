@@ -474,9 +474,12 @@ func registerTestUser(addr string) (string, error) {
 
 // ─── Scenario execution ────────────────────────────────────────────
 
-func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
-	res := ScenarioResult{Name: s.Name}
+func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioResult) {
+	res = ScenarioResult{Name: s.Name}
 	start := time.Now()
+	// Named return so the deferred elapsed-time write actually
+	// reaches the caller. Closures over a value-type local don't
+	// propagate to a value-type return.
 	defer func() { res.ElapsedMs = time.Since(start).Milliseconds() }()
 
 	timeout := opts.timeout
@@ -563,7 +566,11 @@ func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
 	}
-	defer tcDeleteInstance(server, inst.ID)
+	// Skip per-instance deletion when keep-data debug is on so the
+	// agent's history/main.jsonl survives for inspection.
+	if os.Getenv("APTEVA_TEST_KEEP") == "" {
+		defer tcDeleteInstance(server, inst.ID)
+	}
 
 	// Write the instance's config.json with our mcp_servers BEFORE
 	// starting the agent. instances.go's Start() reads disk first
@@ -576,26 +583,49 @@ func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
 		return res
 	}
 
-	// Subscribe to telemetry; collect events in the background.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	telemetry, errCh := streamTelemetry(ctx, server, inst.ID)
 
-	// Start the agent.
+	// Start the agent FIRST — the events endpoint refuses with
+	// "instance not running" until status flips to running, so
+	// hooking up SSE before /start gives a closed reader.
 	if err := startInstanceAPI(server, inst.ID); err != nil {
 		res.Error = fmt.Sprintf("start instance: %v", err)
 		return res
 	}
+	// Wait for status=running so SSE doesn't immediately 4xx.
+	if err := waitInstanceRunning(server, inst.ID, 5*time.Second); err != nil {
+		res.Error = fmt.Sprintf("wait running: %v", err)
+		return res
+	}
+	// Now subscribe — minor race: events emitted in the brief window
+	// between status=running and SSE-open may be missed. Acceptable
+	// because the assert poller is the authoritative correctness check;
+	// telemetry is for token/cost accounting which trends over the run.
+	telemetry, errCh, _ := streamTelemetry(ctx, server, inst.ID)
 
 	// Wait for the asserts to pass (early-stop) OR max_iterations OR
 	// timeout. We deliberately don't trust the agent's `paused` flag
 	// as a "done" signal — autonomous agents loop forever; only the
-	// asserts can tell us the task is actually complete. Polling the
-	// asserts every 2s is cheap and lets fast scenarios exit quickly.
+	// asserts can tell us the task is actually complete.
+	//
+	// Three signals drive the early-stop:
+	//   1. Background ticker every 500ms — catches outcomes in
+	//      asserts that aren't tool-driven (e.g. timeouts).
+	//   2. After every `tool.result` event — the most likely moment
+	//      the task just finished. Probes immediately, no 500ms
+	//      wait. This is the win for "agent did 3 tools and stopped"
+	//      scenarios: we exit ~0.5s after the final tool, not ~2s.
+	//   3. max_iterations hit OR timeout deadline.
 	deadline := time.Now().Add(timeout)
-	assertPoll := time.NewTicker(2 * time.Second)
+	assertPoll := time.NewTicker(500 * time.Millisecond)
 	defer assertPoll.Stop()
 	stopReason := ""
+	probeNow := func() {
+		if probeAsserts(server, installed.InstallID, s.Assert, &res) {
+			stopReason = "asserts passed"
+		}
+	}
 	for time.Now().Before(deadline) {
 		select {
 		case ev, ok := <-telemetry:
@@ -607,6 +637,17 @@ func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
 			applyTelemetry(&res, ev)
 			if opts.verbose {
 				fmt.Fprintf(os.Stderr, "  · %s\n", ev.Type)
+			} else if ev.Type == "tool.call" {
+				// Always show tool names live — gives the operator a
+				// sense of progress without -v's full event firehose.
+				if name, ok := ev.Data["name"].(string); ok {
+					fmt.Fprintf(os.Stderr, "    · %d %s\n", res.Iterations, name)
+				}
+			}
+			// On tool.result, probe immediately — the task may have
+			// just completed, no point waiting for the next tick.
+			if ev.Type == "tool.result" {
+				probeNow()
 			}
 			if res.Iterations >= maxIter {
 				stopReason = fmt.Sprintf("max_iterations (%d) reached", maxIter)
@@ -616,10 +657,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
 				fmt.Fprintf(os.Stderr, "  telemetry err: %v\n", err)
 			}
 		case <-assertPoll.C:
-			// Probe the asserts. If every one passes, we're done.
-			if probeAsserts(server, installed.InstallID, s.Assert, &res) {
-				stopReason = "asserts passed"
-			}
+			probeNow()
 		}
 		if stopReason != "" {
 			break
@@ -997,6 +1035,33 @@ func tcDeleteInstance(server *testServer, id int64) {
 	}
 }
 
+// waitInstanceRunning polls the platform's /api/instances list until
+// the instance with the given id shows status=running, or until the
+// deadline elapses. Used to gate SSE-subscribe on a bootable agent.
+func waitInstanceRunning(server *testServer, id int64, deadline time.Duration) error {
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		req, _ := http.NewRequest("GET", "http://"+server.addr+"/api/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+server.apiKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			var arr []struct {
+				ID     int64  `json:"id"`
+				Status string `json:"status"`
+			}
+			json.NewDecoder(resp.Body).Decode(&arr)
+			resp.Body.Close()
+			for _, i := range arr {
+				if i.ID == id && i.Status == "running" {
+					return nil
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("instance %d never reached status=running", id)
+}
+
 func getInstanceStatus(server *testServer, id int64) (map[string]any, error) {
 	req, _ := http.NewRequest("GET",
 		fmt.Sprintf("http://%s/api/instances/%d/status", server.addr, id), nil)
@@ -1015,14 +1080,16 @@ func getInstanceStatus(server *testServer, id int64) (map[string]any, error) {
 
 // ─── Telemetry SSE ─────────────────────────────────────────────────
 
-func streamTelemetry(ctx context.Context, server *testServer, instanceID int64) (<-chan telemetryEvent, <-chan error) {
+func streamTelemetry(ctx context.Context, server *testServer, instanceID int64) (<-chan telemetryEvent, <-chan error, <-chan struct{}) {
 	out := make(chan telemetryEvent, 256)
 	errs := make(chan error, 1)
+	connected := make(chan struct{}) // closed when the SSE response is open
 	go func() {
 		defer close(out)
 		req, err := http.NewRequestWithContext(ctx, "GET",
 			fmt.Sprintf("http://%s/api/instances/%d/events", server.addr, instanceID), nil)
 		if err != nil {
+			close(connected)
 			errs <- err
 			return
 		}
@@ -1030,34 +1097,58 @@ func streamTelemetry(ctx context.Context, server *testServer, instanceID int64) 
 		req.Header.Set("Accept", "text/event-stream")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			close(connected)
 			errs <- err
 			return
 		}
 		defer resp.Body.Close()
+		// Signal the caller — fine to start the agent now, we won't
+		// miss its early `llm.done` events.
+		close(connected)
 		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		scanner.Buffer(make([]byte, 256*1024), 4*1024*1024)
+		dbg := os.Getenv("APTEVA_TEST_DEBUG_SSE") != ""
 		var current strings.Builder
 		for scanner.Scan() {
 			line := scanner.Text()
-			if line == "" && current.Len() > 0 {
-				var ev telemetryEvent
-				raw := strings.TrimPrefix(current.String(), "data: ")
-				if err := json.Unmarshal([]byte(raw), &ev); err == nil {
-					select {
-					case out <- ev:
-					case <-ctx.Done():
-						return
+			if dbg {
+				fmt.Fprintf(os.Stderr, "[SSE raw] %q\n", line)
+			}
+			// SSE frame terminator. A frame can span multiple lines:
+			// `event:`, `data:` (one or more), `id:`, plus blank line.
+			// We only care about `data:` payloads — concatenate them
+			// into a single JSON blob (per SSE spec, separated by \n).
+			if line == "" {
+				if current.Len() > 0 {
+					raw := current.String()
+					var ev telemetryEvent
+					if err := json.Unmarshal([]byte(raw), &ev); err == nil {
+						select {
+						case out <- ev:
+						case <-ctx.Done():
+							return
+						}
+					} else if dbg {
+						fmt.Fprintf(os.Stderr, "[SSE parse err] %v body=%q\n", err, raw)
 					}
+					current.Reset()
 				}
-				current.Reset()
 				continue
 			}
-			if strings.HasPrefix(line, "data: ") {
-				current.WriteString(line)
+			if strings.HasPrefix(line, "data:") {
+				// Strip the prefix — `data: ` (space optional per spec).
+				payload := strings.TrimPrefix(line, "data:")
+				payload = strings.TrimPrefix(payload, " ")
+				if current.Len() > 0 {
+					current.WriteByte('\n')
+				}
+				current.WriteString(payload)
 			}
+			// Lines that aren't `data:` (event:, id:, retry:, comments
+			// starting with :) are intentionally ignored.
 		}
 	}()
-	return out, errs
+	return out, errs, connected
 }
 
 // ─── Local sidecar ─────────────────────────────────────────────────
