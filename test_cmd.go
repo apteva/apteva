@@ -298,8 +298,13 @@ func (s *testServer) Stop() {
 		_ = s.cmd.Process.Kill()
 		_ = s.cmd.Wait()
 	}
-	if s.dataDir != "" {
+	// Honour APTEVA_TEST_KEEP=1 to skip cleanup — useful when
+	// debugging "agent didn't iterate" mysteries; lets the user
+	// inspect the data dir + server log after the run.
+	if s.dataDir != "" && os.Getenv("APTEVA_TEST_KEEP") == "" {
 		_ = os.RemoveAll(s.dataDir)
+	} else if s.dataDir != "" {
+		fmt.Fprintf(os.Stderr, "kept data dir: %s\n", s.dataDir)
 	}
 }
 
@@ -327,7 +332,22 @@ func bootstrapServer(opts testOpts) (*testServer, error) {
 		return nil, fmt.Errorf("apteva-server binary not found in PATH or sibling dirs")
 	}
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(),
+	// Merge ~/.apteva/test.env on top of os.Environ so user-stashed
+	// provider keys (OPENCODE_GO_API_KEY, FIREWORKS_API_KEY, …) are
+	// picked up without exporting them in the shell. File format is
+	// KEY=VALUE per line, # for comments — same as a .env file.
+	baseEnv := append([]string{}, os.Environ()...)
+	for k, v := range loadTestEnvFile() {
+		if os.Getenv(k) == "" {
+			baseEnv = append(baseEnv, k+"="+v)
+		}
+	}
+	if !envHasProviderKey(baseEnv) {
+		fmt.Fprintln(os.Stderr,
+			"⚠ no LLM provider key in env or ~/.apteva/test.env — agent won't iterate.\n"+
+				"  Set one of OPENCODE_GO_API_KEY / FIREWORKS_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY.")
+	}
+	cmd.Env = append(baseEnv,
 		fmt.Sprintf("PORT=%d", port),
 		"DB_PATH="+filepath.Join(dataDir, "apteva.db"),
 		"DATA_DIR="+dataDir,
@@ -516,17 +536,45 @@ func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
 	// CRM's per-project data isolated by run, not per-scenario.
 	projectID := server.projectID
 
-	// Create + start the agent.
+	// Create + start the agent. Pass the CRM sidecar's /mcp endpoint
+	// as a system MCP server in the instance config so the agent's
+	// tool list includes the CRM's tools. We also disable the
+	// platform's default apteva-server + channels gateways for test
+	// instances — keeps the agent focused on the app under test
+	// instead of meta-tooling.
 	mode := s.Setup.Mode
 	if mode == "" {
 		mode = "autonomous"
 	}
-	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode)
+	appName := manifestNameFromYAML(manifestYAML)
+	if appName == "" {
+		appName = "app"
+	}
+	mcpServers := []map[string]any{
+		{
+			"name":        appName,
+			"transport":   "http",
+			"url":         sidecar.URL + "/mcp",
+			"main_access": true,
+		},
+	}
+	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, mcpServers)
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
 	}
 	defer tcDeleteInstance(server, inst.ID)
+
+	// Write the instance's config.json with our mcp_servers BEFORE
+	// starting the agent. instances.go's Start() reads disk first
+	// then merges system entries; the body.config field on POST
+	// /api/instances only carries server-side flags (include_apteva_
+	// server, etc.), not the agent's tool list. The on-disk
+	// config.json is the single source of truth core consumes.
+	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, mcpServers); err != nil {
+		res.Error = fmt.Sprintf("write instance config.json: %v", err)
+		return res
+	}
 
 	// Subscribe to telemetry; collect events in the background.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -539,17 +587,22 @@ func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
 		return res
 	}
 
-	// Wait for completion or timeout. "Completion" is best-effort:
-	// the agent reaches an idle state (status.paused == true and no
-	// pending pace tick) OR hits maxIter iterations OR timeout.
+	// Wait for the asserts to pass (early-stop) OR max_iterations OR
+	// timeout. We deliberately don't trust the agent's `paused` flag
+	// as a "done" signal — autonomous agents loop forever; only the
+	// asserts can tell us the task is actually complete. Polling the
+	// asserts every 2s is cheap and lets fast scenarios exit quickly.
 	deadline := time.Now().Add(timeout)
+	assertPoll := time.NewTicker(2 * time.Second)
+	defer assertPoll.Stop()
 	stopReason := ""
 	for time.Now().Before(deadline) {
 		select {
 		case ev, ok := <-telemetry:
 			if !ok {
-				stopReason = "telemetry closed"
-				break
+				// SSE closed — keep going; we still have the assert poller.
+				telemetry = nil
+				continue
 			}
 			applyTelemetry(&res, ev)
 			if opts.verbose {
@@ -559,13 +612,13 @@ func runScenario(server *testServer, s Scenario, opts testOpts) ScenarioResult {
 				stopReason = fmt.Sprintf("max_iterations (%d) reached", maxIter)
 			}
 		case err := <-errCh:
-			stopReason = "telemetry: " + err.Error()
-		case <-time.After(500 * time.Millisecond):
-			// Periodically poll the agent's status to detect "done"
-			// states that don't always emit a final event.
-			st, _ := getInstanceStatus(server, inst.ID)
-			if st["paused"] == true {
-				stopReason = "agent paused"
+			if opts.verbose {
+				fmt.Fprintf(os.Stderr, "  telemetry err: %v\n", err)
+			}
+		case <-assertPoll.C:
+			// Probe the asserts. If every one passes, we're done.
+			if probeAsserts(server, installed.InstallID, s.Assert, &res) {
+				stopReason = "asserts passed"
 			}
 		}
 		if stopReason != "" {
@@ -638,6 +691,39 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 }
 
 // ─── Asserts ───────────────────────────────────────────────────────
+
+// probeAsserts returns true when EVERY assert clause passes right
+// now — including tool_called clauses (matched against the running
+// res.ToolCalls). Used by the run loop to decide whether the task
+// is complete and the run can stop early. iteration_at_most is
+// skipped here (always trivially "not yet violated" mid-run).
+//
+// Stopping early on partial success was a bug: scenario 2 stopped
+// the moment HTTP count became 1 (Bob created), before the agent
+// could call log_activity. The asserts collectively define
+// "complete" — any one passing isn't enough.
+func probeAsserts(server *testServer, installID int64, clauses []AssertClause, res *ScenarioResult) bool {
+	if len(clauses) == 0 {
+		return false
+	}
+	for _, c := range clauses {
+		switch {
+		case c.HTTP != "":
+			if !assertHTTP(server, installID, c).OK {
+				return false
+			}
+		case c.ToolCalled != "":
+			if !assertToolCalled(c, res).OK {
+				return false
+			}
+		case c.IterationsAtMost > 0:
+			// Trivially passes during the run; only meaningful at
+			// the final pass.
+			continue
+		}
+	}
+	return true
+}
 
 func runAsserts(server *testServer, installID int64, clauses []AssertClause, res *ScenarioResult) []AssertResult {
 	out := []AssertResult{}
@@ -718,13 +804,18 @@ func assertHTTP(server *testServer, installID int64, c AssertClause) AssertResul
 	return AssertResult{Clause: c.HTTP, OK: true, Got: resp.StatusCode}
 }
 
+// assertToolCalled matches by exact name OR by suffix-after-underscore.
+// The platform prefixes MCP tool names with the server's name, so a
+// scenario that says `tool_called: contacts_create` matches
+// `crm_contacts_create`, `mybusiness-crm_contacts_create`, etc.
+// Pin the prefix explicitly when you want to disambiguate.
 func assertToolCalled(c AssertClause, res *ScenarioResult) AssertResult {
 	wants := strings.Split(c.ToolCalled, "|")
 	for _, w := range wants {
 		w = strings.TrimSpace(w)
 		for _, t := range res.ToolCalls {
-			if t.Name == w {
-				return AssertResult{Clause: "tool_called " + c.ToolCalled, OK: true, Got: w}
+			if t.Name == w || strings.HasSuffix(t.Name, "_"+w) {
+				return AssertResult{Clause: "tool_called " + c.ToolCalled, OK: true, Got: t.Name}
 			}
 		}
 	}
@@ -816,19 +907,74 @@ type instanceResp struct {
 	ID int64 `json:"id"`
 }
 
-func tcCreateInstance(server *testServer, projectID, name, directive, mode string) (*instanceResp, error) {
+func tcCreateInstance(server *testServer, projectID, name, directive, mode string, mcpServers []map[string]any) (*instanceResp, error) {
+	// config_json carries the agent's MCP servers + any other config
+	// the core needs at boot. The platform writes this to the
+	// instance dir's config.json; the core picks it up on start.
+	config := map[string]any{}
+	if len(mcpServers) > 0 {
+		config["mcp_servers"] = mcpServers
+	}
+	configJSON, _ := json.Marshal(config)
+
+	includeFalse := false
 	body := map[string]any{
-		"name":      name,
-		"directive": directive,
-		"mode":      mode,
-		"project_id": projectID,
-		"start":     false, // we start it ourselves so SSE is wired up first
+		"name":                  name,
+		"directive":             directive,
+		"mode":                  mode,
+		"project_id":            projectID,
+		"start":                 false, // we start it ourselves so SSE is wired up first
+		"config":                string(configJSON),
+		"include_apteva_server": &includeFalse, // lean instance — only the app under test
+		"include_channels":      &includeFalse,
 	}
 	out := &instanceResp{}
 	if err := postJSON("http://"+server.addr+"/api/instances", server.apiKey, body, out); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// writeInstanceDiskConfig writes <dataDir>/instance_<id>/config.json
+// with the directive, mode, and mcp_servers a fresh agent needs to
+// see the app's tools at boot. instances.go:Start reads this file
+// before merging in the system MCP entries, so anything we put here
+// flows into the agent's tool surface.
+//
+// Only effective when bootstrapServer spawned the apteva-server
+// itself (we know dataDir then). When testServer.dataDir is empty
+// (existing-server mode), we no-op — the operator owns disk state.
+func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode string, mcpServers []map[string]any) error {
+	if server.dataDir == "" {
+		return nil
+	}
+	dir := filepath.Join(server.dataDir, fmt.Sprintf("instance_%d", instanceID))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	cfg := map[string]any{
+		"directive":   directive,
+		"mode":        mode,
+		"mcp_servers": mcpServers,
+	}
+	body, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "config.json"), body, 0644)
+}
+
+// manifestNameFromYAML is a tiny YAML field grab — we already have
+// the manifest bytes from the scenario step; pulling `name:` is a
+// one-line scan rather than re-parsing through gopkg.in/yaml.v3.
+func manifestNameFromYAML(body []byte) string {
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+		}
+	}
+	return ""
 }
 
 func startInstanceAPI(server *testServer, id int64) error {
@@ -1028,6 +1174,58 @@ func waitHealthy(url string, deadline time.Duration) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("not healthy after %s", deadline)
+}
+
+// loadTestEnvFile reads ~/.apteva/test.env. Missing file returns an
+// empty map — no error, the runner just proceeds with whatever's in
+// the shell env. Lines starting with # are comments; blank lines
+// skipped; everything else is KEY=VALUE (no quoting handled — keys
+// are bytes-as-typed).
+func loadTestEnvFile() map[string]string {
+	out := map[string]string{}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return out
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".apteva", "test.env"))
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 1 {
+			continue
+		}
+		out[strings.TrimSpace(line[:eq])] = strings.TrimSpace(line[eq+1:])
+	}
+	return out
+}
+
+// envHasProviderKey reports whether at least one LLM provider key is
+// present in the env slice. Mirrors the auto-detect order in the
+// core's provider.go so the warning matches what'd actually be picked.
+func envHasProviderKey(env []string) bool {
+	keys := []string{
+		"OPENCODE_GO_API_KEY", "FIREWORKS_API_KEY", "ANTHROPIC_API_KEY",
+		"GOOGLE_API_KEY", "OPENAI_API_KEY", "NVIDIA_API_KEY", "OLLAMA_HOST",
+	}
+	have := map[string]bool{}
+	for _, kv := range env {
+		eq := strings.IndexByte(kv, '=')
+		if eq > 0 {
+			have[kv[:eq]] = true
+		}
+	}
+	for _, k := range keys {
+		if have[k] {
+			return true
+		}
+	}
+	return false
 }
 
 func pickFreePort() (int, error) {
