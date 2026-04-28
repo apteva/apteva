@@ -36,7 +36,9 @@ func main() {
 	}
 
 	themeName := flag.String("theme", "orange", "color theme: orange, amber, white")
-	headless := flag.Bool("headless", false, "run server + core without TUI (dashboard only)")
+	tui := flag.Bool("tui", false, "launch the chat TUI instead of dashboard mode")
+	headless := flag.Bool("headless", false, "deprecated alias — same as default (dashboard mode)")
+	noBrowser := flag.Bool("no-browser", false, "don't auto-open the dashboard in your browser")
 	noSpawn := flag.Bool("no-spawn", false, "don't auto-start server, connect to existing")
 	serverAddr := flag.String("server", "", "server address (e.g. localhost:5280)")
 	serverBin := flag.String("server-bin", "", "path to apteva-server binary")
@@ -46,6 +48,7 @@ func main() {
 	setup := flag.Bool("setup", false, "run setup wizard")
 	reset := flag.Bool("reset", false, "wipe all data and start fresh")
 	flag.Parse()
+	_ = headless // accepted for backward compat; default is already dashboard mode
 
 	initCLILog()
 
@@ -152,32 +155,21 @@ func main() {
 		if v := findBuiltinAppsDir(); v != "" {
 			serverEnv = append(serverEnv, "BUILTIN_APPS_DIR="+v)
 		}
-		if !*headless {
-			serverEnv = append(serverEnv, "QUIET=1")
-		}
+		serverEnv = append(serverEnv, "QUIET=1")
 		serverProc.Env = append(os.Environ(), serverEnv...)
-		if *headless {
-			// Headless: pipe server output to our stderr so telemetry logs are visible
-			serverProc.Stdout = os.Stdout
-			serverProc.Stderr = os.Stderr
+		// Server output → ~/.apteva/server.log in both modes. TUI can't
+		// share stderr without corrupting the alt-screen; dashboard mode
+		// keeps the console clean for the URL banner.
+		srvLog, err := os.OpenFile(
+			filepath.Join(aptevaDir(), "server.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644,
+		)
+		if err == nil {
+			serverProc.Stdout = srvLog
+			serverProc.Stderr = srvLog
 		} else {
-			// TUI mode: we can't write to stderr (it'd corrupt the
-			// alternate screen). But discarding server output makes
-			// hangs / panics invisible and the user sees a stuck
-			// terminal with no way to debug. Route to a rolling log
-			// file that lives next to cli.log — same location the
-			// user already knows to check.
-			srvLog, err := os.OpenFile(
-				filepath.Join(aptevaDir(), "server.log"),
-				os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644,
-			)
-			if err == nil {
-				serverProc.Stdout = srvLog
-				serverProc.Stderr = srvLog
-			} else {
-				serverProc.Stdout = nil
-				serverProc.Stderr = nil
-			}
+			serverProc.Stdout = nil
+			serverProc.Stderr = nil
 		}
 
 		cliLog("MAIN", fmt.Sprintf("spawning server: %s", bin))
@@ -229,8 +221,11 @@ func main() {
 		}
 	}
 
-	if firstRun && !aptevaCfg.Remote {
-		// First run: setup wizard collects email, password, provider, directive
+	if firstRun && !aptevaCfg.Remote && (*tui || *setup) {
+		// First run, TUI/setup path: wizard collects email, password,
+		// provider, directive. Dashboard mode skips this — bootstrap
+		// uses default credentials and the user finishes setup in the
+		// browser.
 		cliLog("MAIN", "first run: launching setup wizard")
 		if err := runSetup(client, &aptevaCfg); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -267,7 +262,9 @@ func main() {
 
 	// ── Phase 3: Setup wizard (re-run if --setup or missing instance) ──
 	cliLog("MAIN", fmt.Sprintf("phase 3: setup check (instanceID=%d, forceSetup=%v)", aptevaCfg.InstanceID, *setup))
-	if *setup || (!firstRun && aptevaCfg.InstanceID == 0) {
+	if *setup || (*tui && !firstRun && aptevaCfg.InstanceID == 0) {
+		// Wizard runs explicitly via --setup, or on TUI launch when the
+		// user has an account but no instance to chat with.
 		cliLog("MAIN", "running setup wizard")
 		if err := runSetup(client, &aptevaCfg); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -277,9 +274,9 @@ func main() {
 	}
 
 	// ── Phase 4: Pick + start the instance ──
-	cliLog("MAIN", fmt.Sprintf("phase 4: instance selection (saved=%d, headless=%v)", aptevaCfg.InstanceID, *headless))
+	cliLog("MAIN", fmt.Sprintf("phase 4: instance selection (saved=%d, tui=%v)", aptevaCfg.InstanceID, *tui))
 
-	if !*headless {
+	if *tui {
 		// TUI mode: always show the instance picker first. This
 		// replaces the old "auto-start whatever instanceID the
 		// config says" path, which silently failed (stale ids → 404,
@@ -321,10 +318,10 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	// Headless mode: don't auto-start — user manages instances via API/dashboard
+	// Dashboard mode: don't auto-start — user manages instances via the dashboard
 
 	client.instancePrefix = fmt.Sprintf("/instances/%d", aptevaCfg.InstanceID)
-	if !*headless {
+	if *tui {
 		// TUI mode: wait for instance to be healthy before showing chat
 		if err := waitForHealth(client, 15*time.Second); err != nil {
 			cliLog("MAIN", fmt.Sprintf("instance not healthy after start: %v", err))
@@ -333,10 +330,10 @@ func main() {
 		}
 		cliLog("MAIN", "instance healthy")
 	}
-	// Headless mode: skip health check — instances managed via API/dashboard
+	// Dashboard mode: skip health check — instances managed via the dashboard
 
-	// ── Phase 5: Start CLI or headless ──
-	cliLog("MAIN", fmt.Sprintf("phase 5: headless=%v", *headless))
+	// ── Phase 5: Start dashboard mode or TUI ──
+	cliLog("MAIN", fmt.Sprintf("phase 5: tui=%v", *tui))
 
 	cleanupDone := false
 	cleanup := func() {
@@ -376,13 +373,22 @@ func main() {
 	signal.Notify(sig, shutdownSignals()...)
 	go func() { <-sig; cleanup(); os.Exit(0) }()
 
-	if *headless {
-		// Headless mode — just print status and block
-		fmt.Fprintf(os.Stderr, "apteva running (headless)\n")
-		fmt.Fprintf(os.Stderr, "  Dashboard: http://%s\n", srvAddr)
-		fmt.Fprintf(os.Stderr, "  Instance:  %d (running)\n", aptevaCfg.InstanceID)
-		fmt.Fprintf(os.Stderr, "  API key:   %s...\n", aptevaCfg.APIKey[:min(16, len(aptevaCfg.APIKey))])
-		fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n")
+	if !*tui {
+		// Dashboard mode — print URL banner, open the browser, block.
+		dashURL := "http://" + srvAddr
+		fmt.Fprintf(os.Stderr, "\n  Apteva is running.\n\n")
+		fmt.Fprintf(os.Stderr, "    Dashboard:  %s\n", dashURL)
+		if aptevaCfg.APIKey != "" {
+			fmt.Fprintf(os.Stderr, "    API key:    %s\n", aptevaCfg.APIKey)
+		}
+		fmt.Fprintf(os.Stderr, "    Server log: %s\n", filepath.Join(aptevaDir(), "server.log"))
+		fmt.Fprintf(os.Stderr, "\n  Press Ctrl+C to stop. Re-run with --tui for the chat terminal.\n\n")
+
+		if !*noBrowser {
+			if err := openBrowser(dashURL); err != nil {
+				cliLog("MAIN", fmt.Sprintf("browser open failed: %v", err))
+			}
+		}
 
 		// Block until signal
 		select {}
@@ -739,4 +745,27 @@ func copyDashboard() {
 		cliLog("MAIN", fmt.Sprintf("dashboard copy walk error: %v", walkErr))
 	}
 	cliLog("MAIN", fmt.Sprintf("dashboard copied from %s to %s (%d files, %d dirs)", srcDir, dstDir, fileCount, dirCount))
+}
+
+// openBrowser launches the platform's default browser pointing at url.
+// Best-effort: if no browser is available (headless server, no DISPLAY,
+// missing xdg-open), we just return the error and the caller carries on
+// with the printed URL banner.
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		// Skip the launch entirely on a headless Linux box — xdg-open
+		// would either fail loudly or pop up a "select an application"
+		// dialog over SSH.
+		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+			return fmt.Errorf("no display")
+		}
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
 }
