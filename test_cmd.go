@@ -36,6 +36,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -73,17 +74,34 @@ type Scenario struct {
 	Directive     string         `yaml:"directive"`
 	Assert        []AssertClause `yaml:"assert"`
 	Budget        Budget         `yaml:"budget"`
+
+	// SourceDir — directory the YAML was read from. Used to resolve
+	// relative paths in setup.fixtures.file. Set by readScenario, not
+	// the YAML author.
+	SourceDir string `yaml:"-"`
 }
 
 type ScenarioSetup struct {
-	App    AppSetup          `yaml:"app"`
-	Mode   string            `yaml:"mode"` // autonomous | cautious | learn
-	Config map[string]string `yaml:"config"`
+	App      AppSetup          `yaml:"app"`
+	Mode     string            `yaml:"mode"` // autonomous | cautious | learn
+	Config   map[string]string `yaml:"config"`
+	Fixtures []FixtureSpec     `yaml:"fixtures"` // pre-uploaded files / setup data
 }
 
 type AppSetup struct {
 	Path   string            `yaml:"path"`   // local path to the app being tested
 	Config map[string]string `yaml:"config"` // install-time config
+}
+
+// FixtureSpec — pre-loaded data that has to be in place before the
+// agent runs. v0.1: upload a local file into a peer app via that
+// app's MCP `files_upload` tool (or any tool with a similar shape).
+// Path is relative to the scenario YAML file's dir.
+type FixtureSpec struct {
+	App    string            `yaml:"app"`    // app slug — must be the unit-under-test or a dep
+	Tool   string            `yaml:"tool"`   // MCP tool name — e.g. files_upload
+	File   string            `yaml:"file"`   // relative path to a binary fixture
+	Args   map[string]any    `yaml:"args"`   // extra tool args (folder, content_type, …)
 }
 
 type AssertClause struct {
@@ -241,6 +259,15 @@ func loadScenarios(target string) ([]Scenario, error) {
 		}
 		return []Scenario{s}, nil
 	}
+	// Convenience: if target is an app dir (contains apteva.yaml)
+	// and has a sibling scenarios/ folder, descend into it. That
+	// way `apteva test ./` from inside an app loads the scenarios
+	// the author actually meant.
+	if _, err := os.Stat(filepath.Join(target, "apteva.yaml")); err == nil {
+		if sc, err := os.Stat(filepath.Join(target, "scenarios")); err == nil && sc.IsDir() {
+			target = filepath.Join(target, "scenarios")
+		}
+	}
 	entries, err := os.ReadDir(target)
 	if err != nil {
 		return nil, err
@@ -249,6 +276,12 @@ func loadScenarios(target string) ([]Scenario, error) {
 	files := []string{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		// `apteva.yaml` is the manifest, never a scenario — skip it
+		// so callers can point at an app dir without us treating its
+		// manifest as a 0-assertion scenario.
+		if e.Name() == "apteva.yaml" {
 			continue
 		}
 		files = append(files, e.Name())
@@ -275,6 +308,11 @@ func readScenario(path string) (Scenario, error) {
 	}
 	if s.Name == "" {
 		s.Name = strings.TrimSuffix(filepath.Base(path), ".yaml")
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		s.SourceDir = filepath.Dir(abs)
+	} else {
+		s.SourceDir = filepath.Dir(path)
 	}
 	return s, nil
 }
@@ -505,14 +543,30 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		return res
 	}
 
-	// Install the app. The server clones from the configured source
-	// repo by default; for local-test we'd rather it bind to the app
-	// at appDir directly. Today the install handler requires either
-	// manifest_url or manifest_yaml — pass the YAML inline. The
-	// kind:source code path will still try to clone from the repo URL
-	// in the manifest. For v1 test runner that's accepted; we mark
-	// the server with a sidecar override so the spawned core can
-	// reach our local sidecar instead.
+	// Install + spawn dependent apps first. The manifest's
+	// requires.apps lists peer apps the unit under test calls
+	// over HTTP (e.g. media → storage). Resolve each by sibling-
+	// directory convention: for an app at <appDir>, look for the
+	// dep at <appDir>/../<dep_name>/. Install order matters — the
+	// dep must be 'running' before the main app's worker starts
+	// trying to talk to it.
+	deps, err := installDeps(server, appDir, manifestYAML)
+	if err != nil {
+		res.Error = fmt.Sprintf("install deps: %v", err)
+		return res
+	}
+	defer func() {
+		for i := len(deps) - 1; i >= 0; i-- {
+			deps[i].sidecar.Stop()
+			uninstallApp(server, deps[i].installID)
+		}
+	}()
+
+	// Install the app under test. The server clones from the
+	// configured source repo by default; for local-test we'd rather
+	// it bind to the app at appDir directly. The install handler
+	// accepts manifest_yaml inline; we then override the sidecar URL
+	// to the local sidecar built from appDir.
 	installed, err := installApp(server, manifestYAML, server.projectID, s.Setup.App.Config)
 	if err != nil {
 		res.Error = fmt.Sprintf("install app: %v", err)
@@ -520,10 +574,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	}
 	defer uninstallApp(server, installed.InstallID)
 
-	// Override the sidecar URL to the local sidecar built from appDir.
-	// Spawn it ourselves so the test doesn't depend on the server's
-	// cloning + go-build of the public repo.
-	sidecar, err := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config)
+	sidecar, err := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config, "http://"+server.addr)
 	if err != nil {
 		res.Error = fmt.Sprintf("spawn local sidecar: %v", err)
 		return res
@@ -531,6 +582,21 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	defer sidecar.Stop()
 	if err := setSidecarURL(server, installed.InstallID, sidecar.URL); err != nil {
 		res.Error = fmt.Sprintf("set sidecar url: %v", err)
+		return res
+	}
+
+	// Pre-upload fixtures before the agent starts. Lets a scenario
+	// say "the catalog already has this clip in it" without burning
+	// LLM iterations on the upload. Fixtures call MCP tools on the
+	// peer apps directly, with the file's bytes shipped as
+	// content_base64.
+	mainAppName := manifestNameFromYAML(manifestYAML)
+	sidecarsByApp := map[string]string{mainAppName: sidecar.URL}
+	for _, d := range deps {
+		sidecarsByApp[d.name] = d.sidecar.URL
+	}
+	if err := loadFixtures(s.Setup.Fixtures, s.SourceDir, server.projectID, sidecarsByApp); err != nil {
+		res.Error = fmt.Sprintf("load fixtures: %v", err)
 		return res
 	}
 
@@ -560,6 +626,17 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			"url":         sidecar.URL + "/mcp",
 			"main_access": true,
 		},
+	}
+	// Dependent apps' MCP endpoints — main_access:false so their
+	// tools are visible to the agent but the unit under test stays
+	// the spotlight.
+	for _, d := range deps {
+		mcpServers = append(mcpServers, map[string]any{
+			"name":        d.name,
+			"transport":   "http",
+			"url":         d.sidecar.URL + "/mcp",
+			"main_access": false,
+		})
 	}
 	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, mcpServers)
 	if err != nil {
@@ -889,6 +966,199 @@ func checkBudget(b Budget, tokens TokenSummary, cost float64) bool {
 
 // ─── HTTP helpers (server's REST surface) ──────────────────────────
 
+// depBundle bundles a running dependent app — install + sidecar — so
+// the runner can wire it into the agent's MCP list and tear it down
+// in reverse order at the end of the scenario.
+type depBundle struct {
+	name      string
+	installID int64
+	sidecar   *localSidecar
+}
+
+// installDeps walks the manifest's requires.apps and installs +
+// spawns each dep before the unit-under-test. Dep paths follow the
+// monorepo sibling convention: `<appDir>/../<dep_name>/`. Returns
+// the deps in the order they were installed; the caller cleans up
+// in reverse on scenario exit.
+func installDeps(server *testServer, appDir string, manifestYAML []byte) ([]depBundle, error) {
+	depNames := parseRequiresApps(manifestYAML)
+	if len(depNames) == 0 {
+		return nil, nil
+	}
+	parent := filepath.Dir(appDir)
+	if abs, err := filepath.Abs(appDir); err == nil {
+		parent = filepath.Dir(abs)
+	}
+	rollback := func(out []depBundle) {
+		for i := len(out) - 1; i >= 0; i-- {
+			out[i].sidecar.Stop()
+			uninstallApp(server, out[i].installID)
+		}
+	}
+	out := make([]depBundle, 0, len(depNames))
+	for _, name := range depNames {
+		depDir := filepath.Join(parent, name)
+		manifestPath := filepath.Join(depDir, "apteva.yaml")
+		depYAML, err := os.ReadFile(manifestPath)
+		if err != nil {
+			rollback(out)
+			return nil, fmt.Errorf("dep %q manifest not found at %s — sibling-dir convention expects it next to the app under test", name, manifestPath)
+		}
+		installed, err := installApp(server, depYAML, server.projectID, nil)
+		if err != nil {
+			rollback(out)
+			return nil, fmt.Errorf("install dep %q: %w", name, err)
+		}
+		sc, err := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, "http://"+server.addr)
+		if err != nil {
+			uninstallApp(server, installed.InstallID)
+			rollback(out)
+			return nil, fmt.Errorf("spawn dep %q: %w", name, err)
+		}
+		if err := setSidecarURL(server, installed.InstallID, sc.URL); err != nil {
+			sc.Stop()
+			uninstallApp(server, installed.InstallID)
+			rollback(out)
+			return nil, fmt.Errorf("set dep %q sidecar url: %w", name, err)
+		}
+		out = append(out, depBundle{name: name, installID: installed.InstallID, sidecar: sc})
+	}
+	return out, nil
+}
+
+// loadFixtures pre-uploads files declared in setup.fixtures. Each
+// entry calls one MCP tool on a peer app's sidecar, with the file
+// shipped as content_base64 alongside whatever extra args the
+// scenario author passed.
+//
+// Used to seed e2e scenarios with realistic data without burning
+// agent iterations on the upload itself — the directive can then
+// focus on what's actually being tested (search, retrieval, etc.).
+func loadFixtures(fixtures []FixtureSpec, sourceDir, projectID string, sidecars map[string]string) error {
+	for _, f := range fixtures {
+		if f.App == "" {
+			return fmt.Errorf("fixture missing 'app' field")
+		}
+		if f.Tool == "" {
+			return fmt.Errorf("fixture missing 'tool' field (target MCP tool, e.g. files_upload)")
+		}
+		if f.File == "" {
+			return fmt.Errorf("fixture missing 'file' field")
+		}
+		sidecarURL, ok := sidecars[f.App]
+		if !ok {
+			return fmt.Errorf("fixture targets app %q but it isn't installed in this scenario (must be the unit-under-test or a declared dep)", f.App)
+		}
+		// Resolve relative to the scenario YAML dir.
+		path := f.File
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(sourceDir, path)
+		}
+		bytesBody, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("fixture %s: %w", path, err)
+		}
+		args := map[string]any{}
+		for k, v := range f.Args {
+			args[k] = v
+		}
+		// Fill in the bytes + a sensible default name. The scenario
+		// can override either via Args.
+		if _, has := args["name"]; !has {
+			args["name"] = filepath.Base(f.File)
+		}
+		args["content_base64"] = base64.StdEncoding.EncodeToString(bytesBody)
+		// Project ID gets passed via the MCP `_project_id` convention
+		// every Apteva app supports; without it global-scope installs
+		// can't tell which project to write to.
+		if projectID != "" {
+			args["_project_id"] = projectID
+		}
+		if err := callPeerMCP(sidecarURL, f.Tool, args); err != nil {
+			return fmt.Errorf("fixture %s → %s.%s: %w", path, f.App, f.Tool, err)
+		}
+	}
+	return nil
+}
+
+// callPeerMCP issues a tools/call against a sidecar's /mcp endpoint
+// and returns when the call finishes. We're already authorised
+// because the sidecar is in dev-mode (APTEVA_APP_TOKEN="").
+func callPeerMCP(sidecarURL, tool string, args map[string]any) error {
+	body, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": tool, "arguments": args},
+	})
+	resp, err := http.Post(sidecarURL+"/mcp", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
+	}
+	var parsed struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&parsed)
+	if parsed.Error != nil {
+		return fmt.Errorf("mcp %d: %s", parsed.Error.Code, parsed.Error.Message)
+	}
+	return nil
+}
+
+// parseRequiresApps grabs the names listed under `requires.apps:`
+// in a manifest. Tiny line-scan rather than a full YAML parse —
+// the shape is stable and any drift will show up loudly in
+// install failures.
+func parseRequiresApps(manifestYAML []byte) []string {
+	lines := strings.Split(string(manifestYAML), "\n")
+	inRequires, inApps := false, false
+	var names []string
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, " \t")
+		trimmed := strings.TrimSpace(line)
+		if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+			inRequires = trimmed == "requires:"
+			inApps = false
+			continue
+		}
+		if !inRequires {
+			continue
+		}
+		// Two-space-indented child of requires:
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") {
+			inApps = trimmed == "apps:"
+			continue
+		}
+		if !inApps {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+		item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		if strings.HasPrefix(item, "name:") {
+			names = append(names, strings.TrimSpace(strings.TrimPrefix(item, "name:")))
+			continue
+		}
+		// Inline `{ name: foo, version: "..." }` form — pick out name.
+		if i := strings.Index(item, "name:"); i >= 0 {
+			rest := item[i+len("name:"):]
+			rest = strings.Trim(strings.TrimSpace(rest), `"',}`)
+			if comma := strings.IndexAny(rest, ",}"); comma >= 0 {
+				rest = rest[:comma]
+			}
+			names = append(names, strings.TrimSpace(rest))
+		}
+	}
+	return names
+}
+
 type installResp struct {
 	InstallID int64 `json:"install_id"`
 	AppID     int64 `json:"app_id"`
@@ -1169,7 +1439,7 @@ func (s *localSidecar) Stop() {
 	}
 }
 
-func spawnLocalSidecar(appDir string, installID int64, projectID string, config map[string]string) (*localSidecar, error) {
+func spawnLocalSidecar(appDir string, installID int64, projectID string, config map[string]string, gatewayURL string) (*localSidecar, error) {
 	abs, err := filepath.Abs(appDir)
 	if err != nil {
 		return nil, err
@@ -1188,17 +1458,26 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config 
 	dataDir, _ := os.MkdirTemp("", "apteva-scenario-*")
 	cmd := exec.Command(binPath)
 	cmd.Dir = abs
+	// Two tokens, two roles:
+	//
+	//   APTEVA_APP_TOKEN — what the sidecar's withTokenAuth checks
+	//   on inbound requests. Empty in tests because the agent calls
+	//   /mcp directly (no auth header); empty triggers the SDK's
+	//   dev-mode pass-through.
+	//
+	//   APTEVA_OUTBOUND_TOKEN — what the sidecar attaches as Bearer
+	//   on calls it makes to peers via the platform proxy. We use
+	//   the install-token format ("dev-<id>"); the platform's
+	//   authMiddleware accepts those for /api/apps/* and the proxy
+	//   then swaps to the destination install's token.
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("APTEVA_APP_PORT=%d", port),
-		// APTEVA_APP_TOKEN deliberately empty — the sidecar's
-		// withTokenAuth pass-throughs every request when no token
-		// is set (dev mode), so the platform proxy can forward the
-		// dashboard's bearer through without a token swap. The legacy
-		// mount-by-URL path doesn't mint per-install tokens.
 		"APTEVA_APP_TOKEN=",
+		"APTEVA_OUTBOUND_TOKEN="+fmt.Sprintf("dev-%d", installID),
 		"APTEVA_INSTALL_ID="+fmt.Sprintf("%d", installID),
 		"APTEVA_PROJECT_ID="+projectID,
 		"APTEVA_APP_CONFIG="+string(cfgJSON),
+		"APTEVA_GATEWAY_URL="+gatewayURL,
 		"DB_PATH="+filepath.Join(dataDir, "app.db"),
 	)
 	logFile, _ := os.Create(filepath.Join(dataDir, "sidecar.log"))
