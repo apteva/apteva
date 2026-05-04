@@ -158,7 +158,12 @@ func main() {
 			"DATA_DIR=" + aptevaDir(),
 			"CORE_CMD=" + findCoreBinary(""),
 			"APPS_DIR=" + findAppsDir(),
-			"APTEVA_REGISTRATION=open", // local mode — same machine, safe to auto-register
+			// `setup` mode: the first /auth/register call succeeds and
+			// becomes the admin user, then the server flips to locked.
+			// Lets the user create their own account on first dashboard
+			// load instead of inheriting a hardcoded admin@local. After
+			// that, only invited users can register.
+			"APTEVA_REGISTRATION=setup",
 		}
 		// Built-in apps (kind=static UI bundles like `simple`) live at
 		// monorepo-root/<app>/apteva.yaml on a developer machine. Tell
@@ -266,6 +271,14 @@ func main() {
 			}
 			saveAptevaConfig(aptevaCfg)
 			client.apiKey = aptevaCfg.APIKey
+		} else if !*tui {
+			// Dashboard mode: don't auto-create any user. The server
+			// runs with APTEVA_REGISTRATION=setup, so the first browser
+			// registration becomes the admin and locks the rest. The
+			// CLI doesn't need an API key for dashboard mode (instance
+			// management lives in the browser); leave aptevaCfg.APIKey
+			// empty and skip the rest of this block.
+			cliLog("MAIN", "dashboard mode: skipping local auth bootstrap; user registers in browser")
 		} else {
 			cliLog("MAIN", "bootstrapping local auth")
 			apiKey, userID, err := bootstrapLocalAuth(client, aptevaCfg)
@@ -400,6 +413,13 @@ func main() {
 		dashURL := "http://" + srvAddr
 		fmt.Fprintf(os.Stderr, "\n  Apteva is running.\n\n")
 		fmt.Fprintf(os.Stderr, "    Dashboard:  %s\n", dashURL)
+		if aptevaCfg.APIKey == "" {
+			// First run: no account exists yet. The server is in
+			// `setup` registration mode — the first user to register
+			// in the browser becomes admin and locks subsequent
+			// registrations. Tell the user.
+			fmt.Fprintf(os.Stderr, "    First run — open the dashboard to create your admin account.\n")
+		}
 		if aptevaCfg.APIKey != "" {
 			fmt.Fprintf(os.Stderr, "    API key:    %s\n", aptevaCfg.APIKey)
 		}
