@@ -68,6 +68,36 @@ jobs:
           path: dashboard
           token: ${{ secrets.REPO_TOKEN }}
 
+      # ui-kit is consumed by dashboard/build.ts (panel importmap).
+      # Without it the dashboard build fails:
+      #   "Module not found .../ui-kit/scripts/build.ts".
+      - name: Checkout ui-kit
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/ui-kit
+          path: ui-kit
+          token: ${{ secrets.REPO_TOKEN }}
+
+      # app-sdk is consumed by server/go.mod via `replace ../app-sdk`.
+      # Without it `go build` in server/ fails immediately.
+      - name: Checkout app-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/app-sdk
+          path: app-sdk
+          token: ${{ secrets.REPO_TOKEN }}
+
+      # integrations produces the per-app UI panels that server/ embeds
+      # via //go:embed integrations-ui. Without this step the embed is
+      # empty (still compiles — the embed root has a .gitkeep — but
+      # every integration UI route 404s).
+      - name: Checkout integrations
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/integrations
+          path: integrations
+          token: ${{ secrets.REPO_TOKEN }}
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -89,6 +119,20 @@ jobs:
           mkdir -p ../server/dashboard
           cp -r dist/* ../server/dashboard/
 
+      - name: Build integration UI bundles
+        shell: bash
+        run: |
+          cd integrations
+          bun install --frozen-lockfile
+          bun run scripts/build-ui.ts
+          mkdir -p ../server/integrations-ui
+          # Per-slug bundles land under dist/ui; copy each into the
+          # server's embed tree. Empty result is fine — the embed root
+          # has a .gitkeep so the directive succeeds either way.
+          if [ -d dist/ui ]; then
+            cp -r dist/ui/* ../server/integrations-ui/ 2>/dev/null || true
+          fi
+
       - name: Build binaries
         shell: bash
         env:
@@ -97,7 +141,20 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          # Mirror scripts/release.sh: set every -X target the server
+          # main package exposes. Cli + core ignore the unknown ones
+          # silently. Drives /health output and the dashboard's
+          # platform-update pill — without these, components show as
+          # "dev" and update detection skips them.
+          DASH_VER=$(jq -r .version dashboard/package.json)
+          INT_VER=$(jq -r .version integrations/package.json)
+          LDFLAGS="-s -w \
+            -X main.Version=${VERSION} \
+            -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -X main.CLIVersion=${VERSION} \
+            -X main.DashboardVersion=${DASH_VER} \
+            -X main.IntegrationsVersion=${INT_VER} \
+            -X main.CoreVersion=${VERSION}"
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
 
@@ -105,7 +162,10 @@ jobs:
 
           echo "Building core..."
           cd core
-          go build -ldflags="$LDFLAGS" -o "../dist/apteva-core${EXT}" .
+          # core's main package is under ./cmd/apteva-core (matches
+          # scripts/build-local.sh). Building `.` here would compile
+          # the package's library code, not produce the binary.
+          go build -ldflags="$LDFLAGS" -o "../dist/apteva-core${EXT}" ./cmd/apteva-core
           cd ..
 
           echo "Building server..."
