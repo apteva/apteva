@@ -5,7 +5,7 @@
   "release_notes_url": "https://github.com/apteva/apteva/releases/tag/v0.10.0",
   "components": {
     "apteva":              "0.10.0",
-    "apteva-server":       "0.9.5",
+    "apteva-server":       "0.10.0",
     "apteva-core":         "0.10.0",
     "apteva-dashboard":    "0.9.0",
     "apteva-integrations": "0.7.0"
