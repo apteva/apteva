@@ -28,8 +28,36 @@ type Capabilities struct {
 	Projects     bool `json:"projects"`
 }
 
-// aptevaDir returns ~/.apteva/, creating it if needed.
+// expandHome turns "~" or "~/foo" into an absolute path under the
+// user's home dir. Bare $HOME / non-tilde paths pass through.
+// Used by --data-dir so users can write `apteva --data-dir ~/.apteva-prod`
+// without the shell needing to expand the tilde first.
+func expandHome(p string) string {
+	if p == "~" || (len(p) > 1 && p[:2] == "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			if p == "~" {
+				return home
+			}
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
+// aptevaDir returns the active data directory, creating it if needed.
+//
+// Resolution order:
+//   1. $APTEVA_HOME — explicit override; lets you run a "prod" install
+//      alongside a "dev" one with `apteva --data-dir ~/.apteva-prod`
+//      (the flag exports this env before any code calls aptevaDir).
+//   2. ~/.apteva — the default, matching every release before the
+//      flag was introduced.
 func aptevaDir() string {
+	if h := os.Getenv("APTEVA_HOME"); h != "" {
+		os.MkdirAll(h, 0700)
+		return h
+	}
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".apteva")
 	os.MkdirAll(dir, 0700)

@@ -59,8 +59,23 @@ func main() {
 	remoteKey := flag.String("key", "", "API key for remote server")
 	setup := flag.Bool("setup", false, "run setup wizard")
 	reset := flag.Bool("reset", false, "wipe all data and start fresh")
+	dataDir := flag.String("data-dir", "", "data directory (default: ~/.apteva). Lets a second instance run alongside the default one with its own DB, config, and instance dirs. Also honored via APTEVA_HOME env.")
+	port := flag.Int("port", 0, "server port (overrides ServerPort from apteva.json; default 5280)")
 	flag.Parse()
 	_ = headless // accepted for backward compat; default is already dashboard mode
+
+	// --data-dir wins over $APTEVA_HOME for this run, then propagates as
+	// APTEVA_HOME so every aptevaDir() call (config load, log init,
+	// instance dirs, copyDashboard, …) lands in the same place. Must
+	// run BEFORE the first aptevaDir() call below.
+	if *dataDir != "" {
+		abs, err := filepath.Abs(expandHome(*dataDir))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --data-dir %q: %v\n", *dataDir, err)
+			os.Exit(1)
+		}
+		os.Setenv("APTEVA_HOME", abs)
+	}
 
 	initCLILog()
 
@@ -85,6 +100,12 @@ func main() {
 	cliLog("MAIN", fmt.Sprintf("config loaded: instanceID=%d apiKey=%v port=%d remote=%v", aptevaCfg.InstanceID, aptevaCfg.APIKey != "", aptevaCfg.ServerPort, aptevaCfg.Remote))
 	if aptevaCfg.ServerPort == 0 {
 		aptevaCfg.ServerPort = defaultServerPort
+	}
+	// --port wins over the saved config for this run. Don't persist —
+	// keep the saved config as the user's preferred default and treat
+	// the flag as a one-shot override (matches how --data-dir behaves).
+	if *port != 0 {
+		aptevaCfg.ServerPort = *port
 	}
 
 	// Handle --remote flag
