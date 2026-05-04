@@ -127,6 +127,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set when we spawn a server ourselves (vs connecting to an existing
+	// one). Surfaced in the dashboard banner if the server is in setup
+	// mode so the user can paste it into the dashboard's registration
+	// form.
+	var spawnSetupToken string
+
 	// Determine server address
 	var srvAddr string
 	if aptevaCfg.Remote && aptevaCfg.ServerURL != "" {
@@ -173,18 +179,24 @@ func main() {
 		serverProc = exec.Command(bin)
 		serverProc.Dir = filepath.Dir(bin)
 		setProcGroup(serverProc)
+		// Mint a setup token before spawning the server. The server
+		// auto-derives regMode from the DB (empty → setup, populated
+		// → locked); in setup mode it needs a matching X-Setup-Token
+		// header on /auth/register. We pre-mint here so we can both:
+		//   1. Pass it down via env so the server uses our token instead
+		//      of generating + logging its own (which would land in the
+		//      captured server.log, invisible to the user).
+		//   2. Print it in our own banner below — but only when the
+		//      server reports needs_setup=true (no-op on a populated DB).
+		spawnSetupToken = "apt_" + randomHex(16)
+
 		serverEnv := []string{
 			"PORT=" + fmt.Sprintf("%d", aptevaCfg.ServerPort),
 			"DB_PATH=" + filepath.Join(aptevaDir(), "apteva.db"),
 			"DATA_DIR=" + aptevaDir(),
 			"CORE_CMD=" + findCoreBinary(""),
 			"APPS_DIR=" + findAppsDir(),
-			// `setup` mode: the first /auth/register call succeeds and
-			// becomes the admin user, then the server flips to locked.
-			// Lets the user create their own account on first dashboard
-			// load instead of inheriting a hardcoded admin@local. After
-			// that, only invited users can register.
-			"APTEVA_REGISTRATION=setup",
+			"APTEVA_SETUP_TOKEN=" + spawnSetupToken,
 		}
 		// Built-in apps (kind=static UI bundles like `simple`) live at
 		// monorepo-root/<app>/apteva.yaml on a developer machine. Tell
@@ -434,12 +446,36 @@ func main() {
 		dashURL := "http://" + srvAddr
 		fmt.Fprintf(os.Stderr, "\n  Apteva is running.\n\n")
 		fmt.Fprintf(os.Stderr, "    Dashboard:  %s\n", dashURL)
-		if aptevaCfg.APIKey == "" {
-			// First run: no account exists yet. The server is in
-			// `setup` registration mode — the first user to register
-			// in the browser becomes admin and locks subsequent
-			// registrations. Tell the user.
-			fmt.Fprintf(os.Stderr, "    First run — open the dashboard to create your admin account.\n")
+
+		// Ask the server whether it needs a setup token (empty DB → yes).
+		// The /auth/status endpoint is auth-free, so a vanilla http.Get
+		// is enough. Best-effort: if the call fails, skip the hint.
+		needsSetup := false
+		if resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(client.apiBase() + "/auth/status"); err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			var s struct {
+				NeedsSetup bool `json:"needs_setup"`
+			}
+			if json.Unmarshal(body, &s) == nil {
+				needsSetup = s.NeedsSetup
+			}
+		}
+		switch {
+		case needsSetup && spawnSetupToken != "":
+			// We spawned this server and the DB is empty — surface the
+			// pre-minted token so the dashboard's register form can use
+			// it. Token is one-shot; consumed on first /auth/register.
+			fmt.Fprintf(os.Stderr, "    First run — open the dashboard and use this setup token to create your admin account:\n")
+			fmt.Fprintf(os.Stderr, "        %s\n", spawnSetupToken)
+		case needsSetup:
+			// Server exists but we didn't spawn it (--no-spawn / remote);
+			// the operator has the token, not us.
+			fmt.Fprintf(os.Stderr, "    First run — registration is in setup mode; ask the server operator for the setup token.\n")
+		case aptevaCfg.APIKey == "":
+			// Locked-mode server, no saved API key — the user signs in
+			// with an existing account.
+			fmt.Fprintf(os.Stderr, "    Open the dashboard and sign in with your account.\n")
 		}
 		if aptevaCfg.APIKey != "" {
 			fmt.Fprintf(os.Stderr, "    API key:    %s\n", aptevaCfg.APIKey)
