@@ -1,0 +1,31 @@
+{
+  "schema": "apteva-platform/v1",
+  "version": "0.10.0",
+  "released_at": "2026-05-04T00:00:00Z",
+  "release_notes_url": "https://github.com/apteva/apteva/releases/tag/v0.10.0",
+  "components": {
+    "apteva":              "0.10.0",
+    "apteva-server":       "0.9.5",
+    "apteva-core":         "0.10.0",
+    "apteva-dashboard":    "0.9.0",
+    "apteva-integrations": "0.7.0"
+  },
+  "artifacts": {
+    "darwin-arm64": {
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.10.0/apteva-0.10.0-darwin-arm64.tar.gz",
+      "sha256": ""
+    },
+    "darwin-amd64": {
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.10.0/apteva-0.10.0-darwin-amd64.tar.gz",
+      "sha256": ""
+    },
+    "linux-arm64": {
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.10.0/apteva-0.10.0-linux-arm64.tar.gz",
+      "sha256": ""
+    },
+    "linux-amd64": {
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.10.0/apteva-0.10.0-linux-amd64.tar.gz",
+      "sha256": ""
+    }
+  }
+}

@@ -24,6 +24,12 @@ import (
 // mcpName was "channels" — channels MCP now runs in server
 const defaultServerPort = 5280
 
+// Version is the CLI/release version, injected at build time via
+// `-ldflags "-X main.Version=..."` (see scripts/release.sh). Stays
+// "dev" for build-local.sh and source builds, where `apteva update`
+// is a no-op anyway (those should `git pull` + rebuild).
+var Version = "dev"
+
 func main() {
 	// Subcommand dispatch — `apteva <subcommand> [args]`. Only the
 	// known subcommands are intercepted; everything else falls through
@@ -32,6 +38,11 @@ func main() {
 		switch os.Args[1] {
 		case "test":
 			os.Exit(cmdTest(os.Args[2:]))
+		case "update":
+			os.Exit(cmdUpdate(os.Args[2:]))
+		case "version", "--version", "-v":
+			fmt.Printf("apteva %s\n", Version)
+			os.Exit(0)
 		}
 	}
 
