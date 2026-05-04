@@ -11,6 +11,14 @@ permissions:
 jobs:
   build:
     strategy:
+      # Match scripts/release.sh: linux + darwin × amd64/arm64. Windows
+      # was previously in the matrix but Apteva relies on unix-y paths
+      # (sockets, /tmp, exec semantics) and Bun-on-Windows path quirks
+      # break the dashboard build (`Module not found "/D:/a/.../ui-kit/
+      # scripts/build.ts"`). install.js maps win32→windows in
+      # PLATFORM_MAP so npm fetch would still try to download a Windows
+      # tarball — but since we don't ship one, that path is dead too.
+      # Re-add when there's real demand and the path issues are sorted.
       matrix:
         include:
           - goos: linux
@@ -25,12 +33,6 @@ jobs:
           - goos: darwin
             goarch: arm64
             runner: macos-latest
-          - goos: windows
-            goarch: amd64
-            runner: windows-latest
-          - goos: windows
-            goarch: arm64
-            runner: windows-latest
 
     runs-on: ${{ matrix.runner }}
     steps:
