@@ -294,7 +294,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add version.json
           git commit -m "v${VERSION}: bump version.json (auto)"
-          git push origin HEAD:main
+          # Race with the human pushing v${VERSION} to main: their
+          # commit can land between our checkout and our push, so
+          # rebase before pushing. Retry on rebase conflicts (which
+          # would only happen if a human edited version.json in
+          # parallel — unlikely but worth handling).
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then break; fi
+            git fetch origin main
+            git rebase origin/main || git rebase --abort
+          done
 
   publish-npm:
     needs: release
