@@ -224,6 +224,78 @@ jobs:
           files: artifacts/*.tar.gz
           generate_release_notes: true
 
+      # Bump version.json on main so the dashboard's update-available
+      # pill stops claiming an update is needed when users are
+      # already on the version we just shipped. This used to be a
+      # manual step that got forgotten — every release where
+      # someone forgot left every existing install showing
+      # "update available" against a version that no longer exists.
+      # We compute sha256 from the tarballs we just downloaded as
+      # release artifacts, write a new version.json, and push it
+      # back to main with the GITHUB_TOKEN. dashboard/integrations
+      # versions come from the repos themselves at tag time.
+      - name: Update version.json on main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          # Pull the dashboard / integrations versions out of their
+          # repos at tag time. REPO_TOKEN is the same cross-repo
+          # token the build job uses for sibling checkouts.
+          DASH_VER=$(curl -fsSL \
+            -H "Authorization: token ${REPO_TOKEN}" \
+            "https://raw.githubusercontent.com/apteva/dashboard/main/package.json" \
+            | jq -r .version)
+          INT_VER=$(curl -fsSL \
+            -H "Authorization: token ${REPO_TOKEN}" \
+            "https://raw.githubusercontent.com/apteva/integrations/main/package.json" \
+            | jq -r .version)
+          DARWIN_ARM64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-arm64.tar.gz" | awk '{print $1}')
+          DARWIN_AMD64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-amd64.tar.gz" | awk '{print $1}')
+          LINUX_ARM64=$(sha256sum "artifacts/apteva-${VERSION}-linux-arm64.tar.gz" | awk '{print $1}')
+          LINUX_AMD64=$(sha256sum "artifacts/apteva-${VERSION}-linux-amd64.tar.gz" | awk '{print $1}')
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          cat > version.json <<EOF
+          {
+            "schema": "apteva-platform/v1",
+            "version": "${VERSION}",
+            "released_at": "${NOW}",
+            "release_notes_url": "https://github.com/apteva/apteva/releases/tag/v${VERSION}",
+            "components": {
+              "apteva":              "${VERSION}",
+              "apteva-server":       "${VERSION}",
+              "apteva-core":         "${VERSION}",
+              "apteva-dashboard":    "${DASH_VER}",
+              "apteva-integrations": "${INT_VER}"
+            },
+            "artifacts": {
+              "darwin-arm64": {
+                "url":    "https://github.com/apteva/apteva/releases/download/v${VERSION}/apteva-${VERSION}-darwin-arm64.tar.gz",
+                "sha256": "${DARWIN_ARM64}"
+              },
+              "darwin-amd64": {
+                "url":    "https://github.com/apteva/apteva/releases/download/v${VERSION}/apteva-${VERSION}-darwin-amd64.tar.gz",
+                "sha256": "${DARWIN_AMD64}"
+              },
+              "linux-arm64": {
+                "url":    "https://github.com/apteva/apteva/releases/download/v${VERSION}/apteva-${VERSION}-linux-arm64.tar.gz",
+                "sha256": "${LINUX_ARM64}"
+              },
+              "linux-amd64": {
+                "url":    "https://github.com/apteva/apteva/releases/download/v${VERSION}/apteva-${VERSION}-linux-amd64.tar.gz",
+                "sha256": "${LINUX_AMD64}"
+              }
+            }
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "v${VERSION}: bump version.json (auto)"
+          git push origin HEAD:main
+
   publish-npm:
     needs: release
     runs-on: ubuntu-latest
