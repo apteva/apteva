@@ -31,6 +31,13 @@ const defaultServerPort = 5280
 var Version = "dev"
 
 func main() {
+	// Run the v0.11.x → v0.12+ layout migration once per invocation
+	// before anything reads aptevaDir(). Idempotent + cheap; the
+	// only path that does real work is the first invocation after
+	// upgrading from a pre-v0.12 release. See layout.go for the
+	// shape of the move.
+	_ = migrateLegacyLayout()
+
 	// Subcommand dispatch — `apteva <subcommand> [args]`. Only the
 	// known subcommands are intercepted; everything else falls through
 	// to the default behaviour (run as a normal client / TUI).
@@ -40,6 +47,12 @@ func main() {
 			os.Exit(cmdTest(os.Args[2:]))
 		case "update":
 			os.Exit(cmdUpdate(os.Args[2:]))
+		case "service":
+			os.Exit(cmdService(os.Args[2:]))
+		case "versions":
+			os.Exit(cmdVersions(os.Args[2:]))
+		case "rollback":
+			os.Exit(cmdRollback(os.Args[2:]))
 		case "version", "--version", "-v":
 			fmt.Printf("apteva %s\n", Version)
 			os.Exit(0)
@@ -168,6 +181,19 @@ func main() {
 		if aptevaCfg.Remote || *noSpawn {
 			fmt.Fprintf(os.Stderr, "cannot reach server at %s\n", srvAddr)
 			os.Exit(1)
+		}
+
+		// Auto-rollback: if the active version has crashed on each
+		// of the last 3 boots without writing last-good-version,
+		// flip bin/current back to the prior known-good. Returns a
+		// human note when a flip happens; logged so the operator
+		// can see why their "v0.13.0" install is suddenly serving
+		// v0.12.0. No-op when nothing's wrong. See layout.go for
+		// the contract; the server-side promotion that resets
+		// boot-attempts lives in server/boot_status.go.
+		if _, note := rollbackIfFailed(); note != "" {
+			fmt.Fprintln(os.Stderr, note)
+			cliLog("MAIN", note)
 		}
 
 		bin := findServerBinary(*serverBin)

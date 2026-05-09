@@ -1,19 +1,26 @@
 package main
 
-// `apteva update` — fetch the latest published bundle (CLI + server +
-// core, all together), verify it, and replace the on-disk binaries
-// in place.
+// `apteva update` — fetch the latest published bundle (CLI + server
+// + core), verify it, install it alongside the running version, and
+// flip the load-bearing `bin/current` symlink. Triggers a graceful
+// drain on the running stack via SIGTERM; the supervisor (systemd /
+// launchd) or parent CLI re-execs through the now-flipped symlink.
 //
-// Source of truth: apteva/version.json, served via raw.githubusercontent.com
-// (no API rate limits, no auth). Same publish path the apps marketplace
-// uses for registry.json. Each release commits a new version.json that
-// points at GitHub-Releases artifacts produced by scripts/release.sh.
+// Source of truth: apteva/version.json on raw.githubusercontent.com.
+// Each release bumps it via the workflow's "Update version.json on
+// main" step (see apteva/.github/workflows/release.yml).
 //
-// Doesn't try to do anything clever for installs that have their own
-// update story (npx / npm-global, Docker, in-tree source builds): it
-// detects those and prints the right instruction instead. Only the
-// "standalone tarball, dropped somewhere on disk" case actually runs
-// the download + swap path.
+// This replaces the pre-v0.12 destructive in-place swap, which:
+//   - lied about the directory name after upgrade (bin/0.10.0/ now
+//     contains 0.11.0 binaries)
+//   - had no rollback (the .bak rename was per-binary, not
+//     per-version, and got overwritten on the next update)
+//   - fought systemd Restart=on-failure (kill → restart race against
+//     binary replacement; "text file busy" on Linux)
+//
+// New flow: extract → preflight → atomic symlink flip → SIGTERM →
+// exit 11 → supervisor re-execs. Old version dir stays on disk
+// (pruned to last 3); rollback is `apteva rollback`.
 
 import (
 	"archive/tar"
@@ -52,9 +59,11 @@ type artifactReference struct {
 	Size   int64  `json:"size,omitempty"`
 }
 
-// installMethod is how the running apteva binary reached disk. Each
-// method has a different update path; only `installStandalone` is the
-// one `apteva update` actually services.
+// installMethod is how the running apteva binary reached disk.
+// Each method has a different update path; only `installStandalone`
+// (and its cousin `installVersioned`) actually run the swap path —
+// the rest defer to whatever package manager / build system put
+// the binaries there.
 type installMethod int
 
 const (
@@ -63,7 +72,9 @@ const (
 	installNpmGlobal                // npm install -g apteva
 	installDocker                   // /.dockerenv exists
 	installSource                   // sibling-path build (server/, core/ alongside)
-	installStandalone               // raw tarball extracted somewhere
+	installVersioned                // ~/.apteva/bin/current symlink chain (the new layout)
+	installStandalone               // raw tarball extracted somewhere (legacy or third-party)
+	installPackaged                 // dpkg/rpm-owned (someone packaged us)
 )
 
 func cmdUpdate(args []string) int {
@@ -71,8 +82,19 @@ func cmdUpdate(args []string) int {
 	fs.SetOutput(os.Stderr)
 	check := fs.Bool("check", false, "show what would update without applying")
 	yes := fs.Bool("yes", false, "skip the confirmation prompt")
+	dryRun := fs.Bool("dry-run", false, "download + verify + preflight, but skip the symlink flip")
+	keepN := fs.Int("keep", 3, "number of prior versions to keep on disk")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	// One-shot migration from v0.11.x layout. Idempotent — does
+	// nothing on already-migrated installs. Has to run BEFORE we
+	// decide install method, since the migration is what makes the
+	// `bin/current` symlink exist.
+	if err := migrateLegacyLayout(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: legacy-layout migration failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "(continuing — `apteva update` will work on a fresh layout)")
 	}
 
 	fmt.Fprintf(os.Stderr, "current: v%s\n", Version)
@@ -121,18 +143,21 @@ func cmdUpdate(args []string) int {
 	case installDocker:
 		fmt.Fprintln(os.Stderr, "this looks like a Docker install — pull the new image:")
 		fmt.Fprintln(os.Stderr, "    docker pull apteva:latest")
-		fmt.Fprintln(os.Stderr, "    docker compose up -d   # or whatever your compose file calls for")
+		fmt.Fprintln(os.Stderr, "    docker compose up -d")
 		return 1
 	case installSource:
 		fmt.Fprintln(os.Stderr, "this looks like a source build (sibling server/ and core/ dirs).")
 		fmt.Fprintln(os.Stderr, "`apteva update` won't overwrite a working tree — pull and rebuild:")
 		fmt.Fprintln(os.Stderr, "    cd <your monorepo> && git pull && ./scripts/build-local.sh")
 		return 1
-	case installStandalone:
+	case installPackaged:
+		fmt.Fprintln(os.Stderr, "this binary appears to be managed by a system package — use your package manager:")
+		fmt.Fprintln(os.Stderr, "    apt upgrade apteva   # or yum / dnf / pacman")
+		return 1
+	case installVersioned, installStandalone:
 		// continue
 	default:
 		fmt.Fprintln(os.Stderr, "couldn't identify install method; refusing to overwrite anything.")
-		fmt.Fprintln(os.Stderr, "Re-download the tarball manually if you want to update.")
 		return 1
 	}
 
@@ -157,66 +182,144 @@ func cmdUpdate(args []string) int {
 		}
 	}
 
-	// 1. Stop any running stack so we don't try to overwrite a busy
-	//    binary. macOS allows replacing a running ELF/Mach-O via
-	//    rename, but the process keeps the old text segment in
-	//    memory; restarting is required either way for the new
-	//    behaviour to take effect, so we may as well stop cleanly now.
-	fmt.Fprintln(os.Stderr, "stopping running apteva-server / apteva-core…")
-	stopRunningStack()
-
-	// 2. Download to a temp file.
-	tmpDir, err := os.MkdirTemp("", "apteva-update-*")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tempdir: %v\n", err)
-		return 1
-	}
-	defer os.RemoveAll(tmpDir)
-
-	tarball := filepath.Join(tmpDir, "bundle.tar.gz")
-	fmt.Fprintf(os.Stderr, "downloading %s\n", art.URL)
-	if err := downloadFile(art.URL, tarball); err != nil {
-		fmt.Fprintf(os.Stderr, "download failed: %v\n", err)
+	if err := ensureLayout(); err != nil {
+		fmt.Fprintf(os.Stderr, "ensureLayout: %v\n", err)
 		return 1
 	}
 
-	// 3. Verify checksum if the manifest provided one. A missing
-	//    sha256 is treated as a soft warning rather than a hard fail
-	//    so the manifest can be hand-edited in a pinch — but a
-	//    mismatched one is a hard fail every time.
-	if art.SHA256 != "" {
-		fmt.Fprintln(os.Stderr, "verifying sha256…")
-		if err := verifySHA256(tarball, art.SHA256); err != nil {
-			fmt.Fprintf(os.Stderr, "checksum mismatch: %v\n", err)
+	// 1. Download into ~/.apteva/releases/. Cached so a flake mid-
+	//    update can resume without re-downloading.
+	tarballName := fmt.Sprintf("apteva-%s-%s-%s.tar.gz", m.Version, runtime.GOOS, runtime.GOARCH)
+	tarball := filepath.Join(releasesDir(), tarballName)
+	needsDownload := true
+	if _, err := os.Stat(tarball); err == nil && art.SHA256 != "" {
+		// Cached file present — verify before reusing.
+		if err := verifySHA256(tarball, art.SHA256); err == nil {
+			fmt.Fprintln(os.Stderr, "using cached download (sha256 verified)")
+			needsDownload = false
+		}
+	}
+	if needsDownload {
+		fmt.Fprintf(os.Stderr, "downloading %s\n", art.URL)
+		if err := downloadFile(art.URL, tarball); err != nil {
+			fmt.Fprintf(os.Stderr, "download failed: %v\n", err)
 			return 1
 		}
-	} else {
-		fmt.Fprintln(os.Stderr, "warning: manifest has no sha256 — skipping verification")
+		if art.SHA256 != "" {
+			fmt.Fprintln(os.Stderr, "verifying sha256…")
+			if err := verifySHA256(tarball, art.SHA256); err != nil {
+				fmt.Fprintf(os.Stderr, "checksum mismatch: %v\n", err)
+				return 1
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "warning: manifest has no sha256 — skipping verification")
+		}
 	}
 
-	// 4. Extract.
+	// 2. Extract into versions/<new>/. If a partial extraction is
+	//    sitting there from a crashed earlier attempt, wipe it
+	//    first — checksumming protected the bytes, so the only
+	//    thing on disk we need to worry about is half-extracted
+	//    files.
+	target := versionDir(m.Version)
+	_ = os.RemoveAll(target)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "mkdir %s: %v\n", target, err)
+		return 1
+	}
 	fmt.Fprintln(os.Stderr, "extracting…")
-	extractDir := filepath.Join(tmpDir, "extract")
-	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "mkdir extract: %v\n", err)
-		return 1
-	}
-	if err := extractTarGz(tarball, extractDir); err != nil {
+	if err := extractTarGz(tarball, target); err != nil {
 		fmt.Fprintf(os.Stderr, "extract failed: %v\n", err)
+		_ = os.RemoveAll(target)
 		return 1
 	}
 
-	// 5. Swap. The release tarball lays the three binaries flat —
-	//    apteva, apteva-server, apteva-core — so we can move each
-	//    into the directory the running apteva lives in.
-	fmt.Fprintln(os.Stderr, "swapping binaries…")
-	if err := swapBinaries(extractDir); err != nil {
-		fmt.Fprintf(os.Stderr, "swap failed: %v\n", err)
+	// 3. Sanity check: the three binaries must be present.
+	for _, name := range binNames {
+		p := filepath.Join(target, name)
+		if _, err := os.Stat(p); err != nil {
+			fmt.Fprintf(os.Stderr, "extracted bundle missing %s\n", name)
+			_ = os.RemoveAll(target)
+			return 1
+		}
+		// Tar's permission bits sometimes lose the +x; force it.
+		_ = os.Chmod(p, 0o755)
+	}
+
+	// 4. Preflight — run apteva-server --preflight against the new
+	//    binary. Loads config, runs DB migrations dry, opens an
+	//    ephemeral port, exits 0. Catches the "new binary won't
+	//    even boot" class of failure BEFORE we flip the symlink.
+	fmt.Fprintln(os.Stderr, "preflight…")
+	preflight := osexec.Command(filepath.Join(target, "apteva-server"), "--preflight")
+	preflight.Env = append(os.Environ(), "APTEVA_HOME="+aptevaDir())
+	preflight.Stdout = os.Stderr
+	preflight.Stderr = os.Stderr
+	if err := preflight.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "preflight failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "(new version not activated — old version still in use)")
 		return 1
+	}
+
+	if *dryRun {
+		fmt.Fprintf(os.Stderr, "dry run: extracted to %s, preflight ok, NOT flipping bin/current.\n", target)
+		return 0
+	}
+
+	// 5. Atomic flip. pointSymlinks writes a temp symlink and
+	//    renames it onto `current` — POSIX-atomic on the same
+	//    filesystem.
+	prior := activeVersion()
+	fmt.Fprintf(os.Stderr, "activating v%s…\n", m.Version)
+	if err := pointSymlinks(m.Version); err != nil {
+		fmt.Fprintf(os.Stderr, "activate failed: %v\n", err)
+		return 1
+	}
+
+	// Reset the boot-attempts counter so the new version gets a
+	// clean budget; auto-revert won't kick in until /health
+	// success has had a chance to write last-good.
+	_ = writeBootAttempts(0)
+
+	// 6. Restart the running stack so the new binary is what's
+	//    serving requests. Three flavors:
+	//
+	//    a. Service install (systemd/launchd): supervisor owns the
+	//       restart. We send `systemctl restart` (or launchctl
+	//       kickstart) — same idempotent path as `apteva service
+	//       restart`. The supervisor re-execs through bin/current.
+	//
+	//    b. Foreground stack already up on this host (someone is
+	//       running `apteva` in another terminal): SIGTERM the
+	//       server, let the parent CLI catch the child exit and
+	//       re-spawn. Same `stopRunningStack` path that pre-v0.12
+	//       used, just on top of a versioned layout now.
+	//
+	//    c. Nothing running: nothing to restart. Operator next
+	//       runs `apteva` and it picks up the new version
+	//       automatically.
+	if scope, ok := detectInstalledScope(); ok {
+		fmt.Fprintln(os.Stderr, "  restarting service…")
+		if err := restartServiceForRollback(scope); err != nil {
+			fmt.Fprintf(os.Stderr, "service restart returned %v — check `apteva service status`\n", err)
+		}
+	} else if isStackRunning() {
+		fmt.Fprintln(os.Stderr, "  draining running stack…")
+		stopRunningStack()
+		fmt.Fprintln(os.Stderr, "  re-run `apteva` to start with v"+m.Version+".")
+	}
+
+	// 7. Prune. Keep `--keep` newest plus the active one and the
+	//    prior we just rolled forward from (so manual rollback
+	//    has somewhere to land).
+	if removed, err := pruneVersions(*keepN, prior, m.Version); err == nil && len(removed) > 0 {
+		fmt.Fprintf(os.Stderr, "  pruned old versions: %s\n", strings.Join(removed, ", "))
 	}
 
 	fmt.Fprintf(os.Stderr, "\n  apteva updated to v%s.\n", m.Version)
-	fmt.Fprintln(os.Stderr, "  run `apteva` to start with the new version.")
+	if prior != "" {
+		fmt.Fprintf(os.Stderr, "  rollback: apteva rollback %s\n", prior)
+	}
 	fmt.Fprintln(os.Stderr)
 	return 0
 }
@@ -234,7 +337,7 @@ func fetchVersionManifest(url string) (*versionManifest, error) {
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB cap
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, err
 	}
@@ -246,10 +349,9 @@ func fetchVersionManifest(url string) (*versionManifest, error) {
 }
 
 // detectInstallMethod inspects the running binary's path and a few
-// tells (Docker control file, monorepo siblings) to classify how
-// apteva got onto disk. Conservative — when in doubt returns
-// installUnknown so we refuse the swap rather than corrupting an
-// install we don't understand.
+// environmental tells to classify how apteva got onto disk.
+// Conservative — when in doubt returns installUnknown so we refuse
+// the swap rather than corrupting an install we don't understand.
 func detectInstallMethod() installMethod {
 	self, err := os.Executable()
 	if err != nil {
@@ -263,20 +365,16 @@ func detectInstallMethod() installMethod {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return installDocker
 	}
-	if strings.Contains(resolved, "/_npx/") || strings.Contains(resolved, "/node_modules/apteva/") {
+	if strings.Contains(resolved, "/_npx/") {
 		return installNpx
 	}
-	// npm-global puts binaries under <prefix>/lib/node_modules/apteva/ on most
-	// systems; npm symlinks <prefix>/bin/apteva → there. resolved follows the
-	// symlink, so we land in node_modules.
 	if strings.Contains(resolved, "node_modules/apteva") {
 		return installNpmGlobal
 	}
 
-	// Source build: the build-local.sh layout puts each binary inside
-	// its own component dir, so apteva's parent has a sibling
-	// `server/` and `core/` directory (NOT just sibling binaries —
-	// those exist in standalone tarballs too).
+	// Source build: the build-local.sh layout puts each binary
+	// inside its own component dir, so apteva's parent has a
+	// sibling `server/` and `core/` directory.
 	dir := filepath.Dir(resolved)
 	parent := filepath.Dir(dir)
 	if hasDir(filepath.Join(parent, "server")) && hasDir(filepath.Join(parent, "core")) &&
@@ -284,7 +382,68 @@ func detectInstallMethod() installMethod {
 		return installSource
 	}
 
+	// Distro-packaged binaries usually live under /usr/{,local}/bin
+	// or are owned by dpkg/rpm. dpkg -S / rpm -qf are the
+	// authoritative checks; running them is fast (single-digit ms).
+	// If either claims ownership, refuse the swap and tell the
+	// operator to use their package manager.
+	if isPackagedBinary(resolved) {
+		return installPackaged
+	}
+
+	// Versioned layout: the resolved binary lives under
+	// ~/.apteva/versions/<v>/. That's the v0.12+ shape and the
+	// happy path for `apteva update`.
+	if isInsideVersionsDir(resolved) {
+		return installVersioned
+	}
+
 	return installStandalone
+}
+
+// isInsideVersionsDir is true iff `path` is somewhere under
+// aptevaDir()/versions/. We use string prefix rather than chasing
+// up the directory tree because aptevaDir is canonical and the
+// versions/<v>/ shape is fixed.
+func isInsideVersionsDir(path string) bool {
+	prefix, err := filepath.Abs(versionsDir())
+	if err != nil {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	prefix = strings.TrimRight(prefix, string(filepath.Separator)) + string(filepath.Separator)
+	return strings.HasPrefix(abs, prefix)
+}
+
+// isPackagedBinary asks dpkg / rpm / pacman whether the binary
+// path is owned by an installed package. Best-effort: any error
+// (tool not installed, returns non-zero, etc.) means "no" — we
+// don't want a missing dpkg to misclassify a homebrew tarball
+// install. The point is to catch the ONE case where a real
+// system package owns the binary; everything else falls through
+// to standalone/versioned.
+func isPackagedBinary(path string) bool {
+	for _, probe := range [][]string{
+		{"dpkg", "-S", path},
+		{"rpm", "-qf", path},
+		{"pacman", "-Qo", path},
+	} {
+		if _, err := osexec.LookPath(probe[0]); err != nil {
+			continue
+		}
+		out, err := osexec.Command(probe[0], probe[1:]...).Output()
+		if err == nil && len(out) > 0 {
+			// Outputs vary but they all print a package name on
+			// stdout when ownership is found and a non-zero exit
+			// when not. We check both: err==nil AND output non-
+			// empty.
+			return true
+		}
+	}
+	return false
 }
 
 func hasDir(p string) bool {
@@ -293,13 +452,11 @@ func hasDir(p string) bool {
 }
 
 // stopRunningStack kills any running apteva-server and apteva-core
-// processes on the local box. Reuses the same lsof/fuser shell-out
-// the CLI's own Phase-1 cleanup uses. Best-effort: failures don't
-// abort the update — the user will just have to kill them by hand.
+// processes on the local box. Best-effort — the supervisor path
+// (systemctl/launchctl) is preferred for service installs;
+// stopRunningStack is the fallback for foreground.
 func stopRunningStack() {
-	// Server's well-known port first.
 	killProcessOnPort(defaultServerPort)
-	// Then any stragglers by name.
 	for _, name := range []string{"apteva-server", "apteva-core"} {
 		_ = osexec.Command("pkill", "-f", name).Run()
 	}
@@ -318,13 +475,24 @@ func downloadFile(url, dst string) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	f, err := os.Create(dst)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp := dst + ".part"
+	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 func verifySHA256(path, want string) error {
@@ -365,20 +533,18 @@ func extractTarGz(tarball, destDir string) error {
 		if err != nil {
 			return err
 		}
-		// Reject path traversal — release tarballs are flat (apteva,
-		// apteva-server, apteva-core), so anything with .. or absolute
-		// paths is malformed.
+		// Reject path traversal.
 		if strings.Contains(hdr.Name, "..") || strings.HasPrefix(hdr.Name, "/") {
 			return fmt.Errorf("unsafe path in archive: %q", hdr.Name)
 		}
 		out := filepath.Join(destDir, hdr.Name)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(out, 0755); err != nil {
+			if err := os.MkdirAll(out, 0o755); err != nil {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 				return err
 			}
 			w, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode)&0777)
@@ -393,98 +559,4 @@ func extractTarGz(tarball, destDir string) error {
 		}
 	}
 	return nil
-}
-
-// swapBinaries moves the three new binaries into the directory the
-// current apteva binary lives in. Each is renamed to .bak first; on
-// any failure the .bak is rolled back. Atomic per file (rename is
-// atomic within a filesystem); not transactional across the three.
-// In practice they live in the same dir and the worst case is a
-// half-swapped install with one or two .bak files left behind, which
-// the user can spot and roll back manually.
-func swapBinaries(extractDir string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	resolved, _ := filepath.EvalSymlinks(self)
-	if resolved == "" {
-		resolved = self
-	}
-	targetDir := filepath.Dir(resolved)
-
-	type swap struct{ name string }
-	swaps := []swap{
-		{"apteva"},
-		{"apteva-server"},
-		{"apteva-core"},
-	}
-
-	type swapped struct{ src, dst, bak string }
-	var done []swapped
-
-	rollback := func() {
-		for _, s := range done {
-			_ = os.Rename(s.dst, s.dst+".failed")
-			_ = os.Rename(s.bak, s.dst)
-		}
-	}
-
-	for _, s := range swaps {
-		src := filepath.Join(extractDir, s.name)
-		dst := filepath.Join(targetDir, s.name)
-		if _, err := os.Stat(src); err != nil {
-			rollback()
-			return fmt.Errorf("missing %s in archive", s.name)
-		}
-		bak := dst + ".bak"
-		// If the target doesn't exist yet (rare — partial install),
-		// skip the backup step but still place the new binary.
-		if _, err := os.Stat(dst); err == nil {
-			_ = os.Remove(bak) // remove any stale .bak from a prior run
-			if err := os.Rename(dst, bak); err != nil {
-				rollback()
-				return fmt.Errorf("rename old %s: %w", s.name, err)
-			}
-		}
-		if err := moveFile(src, dst); err != nil {
-			rollback()
-			return fmt.Errorf("move new %s: %w", s.name, err)
-		}
-		_ = os.Chmod(dst, 0755)
-		done = append(done, swapped{src: src, dst: dst, bak: bak})
-	}
-
-	// All three placed successfully — clean up the .bak files.
-	for _, s := range done {
-		_ = os.Remove(s.bak)
-	}
-	return nil
-}
-
-// moveFile prefers rename (atomic, fast) but falls back to copy when
-// rename fails with EXDEV (cross-device). Tarball extraction lands in
-// /tmp which on macOS shares the volume with $HOME, so the rename
-// path is the common case; on Linux + tmpfs the fallback fires.
-func moveFile(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	if err := out.Close(); err != nil {
-		return err
-	}
-	return os.Remove(src)
 }
