@@ -170,6 +170,24 @@ func resolveScope(s serviceScope) serviceScope {
 
 // ─── systemd ────────────────────────────────────────────────────────
 
+// systemdUnitTemplate — the unit installed by `apteva service
+// install`. Field order:
+//   1. ExecStart                  → bin/apteva-server symlink
+//   2. APTEVA_HOME                → install root
+//   3. PORT                       → 5280, the canonical apteva port
+//   4. DB_PATH                    → APTEVA_HOME/apteva.db (v0.11 path)
+//   5. DATA_DIR                   → APTEVA_HOME
+//   6. CORE_CMD                   → APTEVA_HOME/bin/apteva-core symlink
+//   7. WorkingDirectory            → APTEVA_HOME
+//   8. WantedBy                   → default.target / multi-user.target
+//
+// Why we set every env var explicitly even though apteva-server
+// derives the same values from APTEVA_HOME by default: an operator
+// running `cat /etc/systemd/system/apteva.service` should be able
+// to see the runtime configuration without consulting source.
+// Override via `systemctl edit apteva` (drops an override.conf
+// next to the unit) — the v0.12.1 install path doesn't touch
+// override.conf so operator overrides survive `apteva update`.
 const systemdUnitTemplate = `[Unit]
 Description=Apteva continuous thinking engine
 After=network-online.target
@@ -184,9 +202,11 @@ RestartSec=2
 # a clean exit lets systemd's Restart=on-failure path fire — which
 # now picks up the new binary through the bin/current symlink.
 SuccessExitStatus=11
-# Reasonable defaults; operators can drop in an override.conf
-# if they need to bind privileged ports / change the data dir / etc.
 Environment=APTEVA_HOME=%s
+Environment=PORT=5280
+Environment=DB_PATH=%s/apteva.db
+Environment=DATA_DIR=%s
+Environment=CORE_CMD=%s/bin/apteva-core
 WorkingDirectory=%s
 
 [Install]
@@ -206,7 +226,15 @@ func installSystemd(scope serviceScope, start, enable bool) int {
 
 	exec := resolveBin("apteva-server")
 	home := aptevaDir()
-	body := fmt.Sprintf(systemdUnitTemplate, exec, home, home, target)
+	body := fmt.Sprintf(systemdUnitTemplate,
+		exec,   // ExecStart
+		home,   // APTEVA_HOME
+		home,   // DB_PATH=$home/apteva.db
+		home,   // DATA_DIR
+		home,   // CORE_CMD=$home/bin/apteva-core
+		home,   // WorkingDirectory
+		target, // WantedBy
+	)
 	if err := os.WriteFile(unitPath, []byte(body), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "apteva service install: write %s: %v\n", unitPath, err)
 		return 1
@@ -288,6 +316,20 @@ func exec_loginctl(args ...string) error {
 
 // ─── launchd ────────────────────────────────────────────────────────
 
+// launchdPlistTemplate — same set of env vars systemd's unit
+// declares, written into EnvironmentVariables. Same rationale: the
+// operator can `cat ~/Library/LaunchAgents/ai.apteva.plist` to see
+// the full runtime config.
+//
+// Format-string positions (in order):
+//   1. Label                        (%s)
+//   2. ProgramArguments[0]          (%s — the binary)
+//   3-7. EnvironmentVariables       (%s ×5: APTEVA_HOME, PORT,
+//                                     DB_PATH, DATA_DIR, CORE_CMD)
+//   8. WorkingDirectory             (%s)
+//   9. RunAtLoad                    (%s — "true"/"false")
+//   10. StandardOutPath             (%s)
+//   11. StandardErrorPath           (%s)
 const launchdPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -302,6 +344,14 @@ const launchdPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <dict>
         <key>APTEVA_HOME</key>
         <string>%s</string>
+        <key>PORT</key>
+        <string>5280</string>
+        <key>DB_PATH</key>
+        <string>%s/apteva.db</string>
+        <key>DATA_DIR</key>
+        <string>%s</string>
+        <key>CORE_CMD</key>
+        <string>%s/bin/apteva-core</string>
     </dict>
     <key>WorkingDirectory</key>
     <string>%s</string>
@@ -342,7 +392,18 @@ func installLaunchd(scope serviceScope, start, enable bool) int {
 	if !start {
 		runAtLoad = "false"
 	}
-	body := fmt.Sprintf(launchdPlistTemplate, launchdLabel, exec, home, home, runAtLoad, stdoutLog, stderrLog)
+	body := fmt.Sprintf(launchdPlistTemplate,
+		launchdLabel, // Label
+		exec,         // ProgramArguments[0]
+		home,         // APTEVA_HOME
+		home,         // DB_PATH=$home/apteva.db
+		home,         // DATA_DIR
+		home,         // CORE_CMD=$home/bin/apteva-core
+		home,         // WorkingDirectory
+		runAtLoad,    // RunAtLoad
+		stdoutLog,    // StandardOutPath
+		stderrLog,    // StandardErrorPath
+	)
 	if err := os.WriteFile(plistPath, []byte(body), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "apteva service install: write %s: %v\n", plistPath, err)
 		return 1
