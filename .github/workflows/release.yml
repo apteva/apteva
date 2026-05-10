@@ -145,6 +145,20 @@ jobs:
             cp -r dist/ui/* ../server/integrations-ui/ 2>/dev/null || true
           fi
 
+      - name: Sync integration catalog JSONs into server/integrations-catalog/
+        shell: bash
+        run: |
+          # v0.13.1+ embeds integrations/src/apps/*.json into the
+          # server binary so `apteva update` ships a fresh catalog
+          # alongside the fresh server. Pre-v0.13.1 the catalog only
+          # existed on disk (downloaded once at first boot) and
+          # operators kept seeing stale JSONs after binary upgrades.
+          # Mirrors the integrations-ui sync above.
+          mkdir -p server/integrations-catalog
+          if [ -d integrations/src/apps ]; then
+            cp -f integrations/src/apps/*.json server/integrations-catalog/ 2>/dev/null || true
+          fi
+
       - name: Build binaries
         shell: bash
         env:
