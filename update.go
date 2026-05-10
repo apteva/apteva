@@ -110,8 +110,18 @@ func cmdUpdate(args []string) int {
 		return 1
 	}
 
-	if Version == m.Version {
-		fmt.Fprintf(os.Stderr, "already on latest (v%s)\n", Version)
+	// Semver-aware compare. The pre-v0.12.3 path used string
+	// equality, which would offer to "update" v0.12.1 → v0.12.0
+	// the moment version.json went stale (a regression we lived
+	// through twice). semverGreater is in layout.go.
+	if Version == m.Version || (Version != "dev" && semverGreater(Version, m.Version)) {
+		if Version == m.Version {
+			fmt.Fprintf(os.Stderr, "already on latest (v%s)\n", Version)
+		} else {
+			fmt.Fprintf(os.Stderr, "running v%s, manifest says v%s — already ahead, nothing to do.\n", Version, m.Version)
+			fmt.Fprintln(os.Stderr, "(if the manifest looks wrong, the dashboard's update banner reads from the same file at")
+			fmt.Fprintln(os.Stderr, " https://raw.githubusercontent.com/apteva/apteva/main/version.json — file an issue if it's stale.)")
+		}
 		return 0
 	}
 

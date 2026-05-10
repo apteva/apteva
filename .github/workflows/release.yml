@@ -257,7 +257,25 @@ jobs:
           LINUX_ARM64=$(sha256sum "artifacts/apteva-${VERSION}-linux-arm64.tar.gz" | awk '{print $1}')
           LINUX_AMD64=$(sha256sum "artifacts/apteva-${VERSION}-linux-amd64.tar.gz" | awk '{print $1}')
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          cat > version.json <<EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Retry loop. Pre-v0.12.3 this was a try-then-rebase shape
+          # that deadlocked on version.json merge conflicts (both sides
+          # edit the same file every release) AND silently exit-0'd via
+          # `git rebase --abort` returning 0, leaving "Update version.
+          # json on main" green while the manifest stayed stale. v0.12.3
+          # rewrites it as: each attempt resets to origin/main, writes
+          # the file fresh, commits, and pushes. If that loses a race
+          # we just start over from origin/main next iteration. Final
+          # `exit 1` ensures permanent failure surfaces in the run
+          # status.
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            cat > version.json <<EOF
           {
             "schema": "apteva-platform/v1",
             "version": "${VERSION}",
@@ -290,20 +308,21 @@ jobs:
             }
           }
           EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add version.json
-          git commit -m "v${VERSION}: bump version.json (auto)"
-          # Race with the human pushing v${VERSION} to main: their
-          # commit can land between our checkout and our push, so
-          # rebase before pushing. Retry on rebase conflicts (which
-          # would only happen if a human edited version.json in
-          # parallel — unlikely but worth handling).
-          for attempt in 1 2 3; do
-            if git push origin HEAD:main; then break; fi
-            git fetch origin main
-            git rebase origin/main || git rebase --abort
+
+            git add version.json
+            if git diff --cached --quiet; then
+              echo "version.json already at v${VERSION} on origin/main — nothing to push"
+              exit 0
+            fi
+            git commit -m "v${VERSION}: bump version.json (auto)"
+            if git push origin HEAD:main; then
+              echo "pushed version.json bump on attempt ${attempt}"
+              exit 0
+            fi
+            echo "push rejected on attempt ${attempt}, retrying…"
           done
+          echo "::error::Update version.json on main failed after 5 attempts" >&2
+          exit 1
 
   publish-npm:
     needs: release
