@@ -80,8 +80,12 @@ Run apteva as a long-lived background service. Wraps systemd on
 Linux and launchd on macOS.
 
 Commands:
-  install [--system|--user] [--no-start] [--no-enable]
+  install [--system|--user] [--bind <addr>] [--no-start] [--no-enable]
                   Write the unit/plist and start it (default).
+                  --bind defaults to 0.0.0.0 for --system installs
+                  (typical VPS shape) and 127.0.0.1 for --user installs
+                  (typical laptop). Pass --bind 127.0.0.1 on a system
+                  install if you want loopback-only.
   uninstall       Stop and remove the unit/plist.
   start           Start the running service.
   stop            Stop the running service.
@@ -105,6 +109,15 @@ func cmdServiceInstall(args []string) int {
 	user := fs.Bool("user", false, "install as user service")
 	noStart := fs.Bool("no-start", false, "don't start after install")
 	noEnable := fs.Bool("no-enable", false, "don't enable for boot/login start")
+	// --bind picks the listen interface for apteva-server. Default
+	// chosen by scope (see resolveBindDefault) so a `service install
+	// --system` on a public VPS doesn't silently bind to loopback
+	// (pre-v0.14.4 behaviour — server defaulted APTEVA_BIND=127.0.0.1
+	// and the unit never overrode it, so operators couldn't reach
+	// the dashboard from outside the box). Auth (bearer + setup
+	// token) gates every /api/ route so binding 0.0.0.0 on a system
+	// service is the expected shape, not a footgun.
+	bind := fs.String("bind", "", "listen address (default: 0.0.0.0 for --system, 127.0.0.1 for --user)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -120,6 +133,10 @@ func cmdServiceInstall(args []string) int {
 		scope = scopeUser
 	}
 	scope = resolveScope(scope)
+	bindAddr := *bind
+	if bindAddr == "" {
+		bindAddr = resolveBindDefault(scope)
+	}
 
 	// Precondition: the bin/ symlinks must exist. Without them the
 	// unit file's ExecStart path doesn't resolve. ensureLayout +
@@ -147,9 +164,9 @@ func cmdServiceInstall(args []string) int {
 
 	switch runtime.GOOS {
 	case "linux":
-		return installSystemd(scope, !*noStart, !*noEnable)
+		return installSystemd(scope, !*noStart, !*noEnable, bindAddr)
 	case "darwin":
-		return installLaunchd(scope, !*noStart, !*noEnable)
+		return installLaunchd(scope, !*noStart, !*noEnable, bindAddr)
 	default:
 		fmt.Fprintf(os.Stderr, "apteva service install: unsupported platform %s\n", runtime.GOOS)
 		return 1
@@ -168,6 +185,22 @@ func resolveScope(s serviceScope) serviceScope {
 	return scopeUser
 }
 
+// resolveBindDefault picks the default listen address for a service
+// install based on scope. System-scope is the "real server" shape —
+// running as root, exposed for the network, typically on a VPS —
+// so bind every interface (0.0.0.0). User-scope is the laptop / dev
+// box shape — bind loopback so an unsuspecting localhost dev doesn't
+// accidentally publish their apteva to the network. Either default
+// can be overridden via the explicit `--bind` flag; the chosen
+// value lands as Environment=APTEVA_BIND=... in the unit/plist so
+// operators can see what they got.
+func resolveBindDefault(s serviceScope) string {
+	if s == scopeSystem {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
+
 // ─── systemd ────────────────────────────────────────────────────────
 
 // systemdUnitTemplate — the unit installed by `apteva service
@@ -175,19 +208,21 @@ func resolveScope(s serviceScope) serviceScope {
 //   1. ExecStart                  → bin/apteva-server symlink
 //   2. APTEVA_HOME                → install root
 //   3. PORT                       → 5280, the canonical apteva port
-//   4. DB_PATH                    → APTEVA_HOME/apteva.db (v0.11 path)
-//   5. DATA_DIR                   → APTEVA_HOME
-//   6. CORE_CMD                   → APTEVA_HOME/bin/apteva-core symlink
-//   7. WorkingDirectory            → APTEVA_HOME
-//   8. WantedBy                   → default.target / multi-user.target
+//   4. APTEVA_BIND                → listen interface (per-scope default,
+//                                    overridable via `--bind`)
+//   5. DB_PATH                    → APTEVA_HOME/apteva.db (v0.11 path)
+//   6. DATA_DIR                   → APTEVA_HOME
+//   7. CORE_CMD                   → APTEVA_HOME/bin/apteva-core symlink
+//   8. WorkingDirectory           → APTEVA_HOME
+//   9. WantedBy                   → default.target / multi-user.target
 //
 // Why we set every env var explicitly even though apteva-server
 // derives the same values from APTEVA_HOME by default: an operator
 // running `cat /etc/systemd/system/apteva.service` should be able
 // to see the runtime configuration without consulting source.
 // Override via `systemctl edit apteva` (drops an override.conf
-// next to the unit) — the v0.12.1 install path doesn't touch
-// override.conf so operator overrides survive `apteva update`.
+// next to the unit) — the install path doesn't touch override.conf
+// so operator overrides survive `apteva update`.
 const systemdUnitTemplate = `[Unit]
 Description=Apteva continuous thinking engine
 After=network-online.target
@@ -204,6 +239,7 @@ RestartSec=2
 SuccessExitStatus=11
 Environment=APTEVA_HOME=%s
 Environment=PORT=5280
+Environment=APTEVA_BIND=%s
 Environment=DB_PATH=%s/apteva.db
 Environment=DATA_DIR=%s
 Environment=CORE_CMD=%s/bin/apteva-core
@@ -213,7 +249,7 @@ WorkingDirectory=%s
 WantedBy=%s
 `
 
-func installSystemd(scope serviceScope, start, enable bool) int {
+func installSystemd(scope serviceScope, start, enable bool, bindAddr string) int {
 	unitPath, target, err := systemdUnitPath(scope)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "apteva service install: %v\n", err)
@@ -227,13 +263,14 @@ func installSystemd(scope serviceScope, start, enable bool) int {
 	exec := resolveBin("apteva-server")
 	home := aptevaDir()
 	body := fmt.Sprintf(systemdUnitTemplate,
-		exec,   // ExecStart
-		home,   // APTEVA_HOME
-		home,   // DB_PATH=$home/apteva.db
-		home,   // DATA_DIR
-		home,   // CORE_CMD=$home/bin/apteva-core
-		home,   // WorkingDirectory
-		target, // WantedBy
+		exec,     // ExecStart
+		home,     // APTEVA_HOME
+		bindAddr, // APTEVA_BIND
+		home,     // DB_PATH=$home/apteva.db
+		home,     // DATA_DIR
+		home,     // CORE_CMD=$home/bin/apteva-core
+		home,     // WorkingDirectory
+		target,   // WantedBy
 	)
 	if err := os.WriteFile(unitPath, []byte(body), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "apteva service install: write %s: %v\n", unitPath, err)
@@ -271,15 +308,38 @@ func installSystemd(scope serviceScope, start, enable bool) int {
 			fmt.Fprintf(os.Stderr, "apteva service install: start: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "✓ Started — http://localhost:5280")
+		fmt.Fprintf(os.Stderr, "✓ Started — %s\n", reachableURL(bindAddr))
 	}
 
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  Status:  apteva service status")
-	fmt.Fprintln(os.Stderr, "  Logs:    apteva service logs --follow")
-	fmt.Fprintln(os.Stderr, "  Stop:    apteva service stop")
-	fmt.Fprintln(os.Stderr, "  Remove:  apteva service uninstall")
+	fmt.Fprintf(os.Stderr, "  Listening: %s:5280\n", bindAddr)
+	fmt.Fprintln(os.Stderr, "  Status:    apteva service status")
+	fmt.Fprintln(os.Stderr, "  Logs:      apteva service logs --follow")
+	fmt.Fprintln(os.Stderr, "  Stop:      apteva service stop")
+	fmt.Fprintln(os.Stderr, "  Remove:    apteva service uninstall")
+	if bindAddr == "0.0.0.0" {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  ⚠ Bound to all interfaces. Auth (bearer token + setup token)")
+		fmt.Fprintln(os.Stderr, "    gates every /api/ route; the setup token is printed at boot")
+		fmt.Fprintln(os.Stderr, "    and required for the FIRST admin registration. Lock down the")
+		fmt.Fprintln(os.Stderr, "    port at the firewall level if you want a private deployment.")
+	}
 	return 0
+}
+
+// reachableURL turns a bind address into a human-facing URL for the
+// success banner. 0.0.0.0 / :: are wildcards — operators reach the
+// dashboard through the box's actual hostname/IP, not "0.0.0.0", so
+// we substitute "<host>" as a placeholder. 127.0.0.1 and named
+// addresses pass through as-is.
+func reachableURL(bindAddr string) string {
+	switch bindAddr {
+	case "0.0.0.0", "::", "[::]":
+		return "http://<host>:5280"
+	case "127.0.0.1", "localhost":
+		return "http://localhost:5280"
+	}
+	return fmt.Sprintf("http://%s:5280", bindAddr)
 }
 
 func systemdUnitPath(scope serviceScope) (path, wantedBy string, err error) {
@@ -324,9 +384,9 @@ func exec_loginctl(args ...string) error {
 // Format-string positions (in order):
 //   1. Label                        (%s)
 //   2. ProgramArguments[0]          (%s — the binary)
-//   3-7. EnvironmentVariables       (%s ×5: APTEVA_HOME, PORT,
-//                                     DB_PATH, DATA_DIR, CORE_CMD)
-//   8. WorkingDirectory             (%s)
+//   3-8. EnvironmentVariables       (%s ×6: APTEVA_HOME, APTEVA_BIND,
+//                                     DB_PATH, DATA_DIR, CORE_CMD,
+//                                     WorkingDirectory)
 //   9. RunAtLoad                    (%s — "true"/"false")
 //   10. StandardOutPath             (%s)
 //   11. StandardErrorPath           (%s)
@@ -346,6 +406,8 @@ const launchdPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
         <string>%s</string>
         <key>PORT</key>
         <string>5280</string>
+        <key>APTEVA_BIND</key>
+        <string>%s</string>
         <key>DB_PATH</key>
         <string>%s/apteva.db</string>
         <key>DATA_DIR</key>
@@ -370,7 +432,7 @@ const launchdPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
-func installLaunchd(scope serviceScope, start, enable bool) int {
+func installLaunchd(scope serviceScope, start, enable bool, bindAddr string) int {
 	plistPath, err := launchdPlistPath(scope)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "apteva service install: %v\n", err)
@@ -396,6 +458,7 @@ func installLaunchd(scope serviceScope, start, enable bool) int {
 		launchdLabel, // Label
 		exec,         // ProgramArguments[0]
 		home,         // APTEVA_HOME
+		bindAddr,     // APTEVA_BIND
 		home,         // DB_PATH=$home/apteva.db
 		home,         // DATA_DIR
 		home,         // CORE_CMD=$home/bin/apteva-core
@@ -427,14 +490,21 @@ func installLaunchd(scope serviceScope, start, enable bool) int {
 			fmt.Fprintf(os.Stderr, "apteva service install: kickstart: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "✓ Started — http://localhost:5280")
+		fmt.Fprintf(os.Stderr, "✓ Started — %s\n", reachableURL(bindAddr))
 	}
 
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  Status:  apteva service status")
-	fmt.Fprintln(os.Stderr, "  Logs:    apteva service logs --follow")
-	fmt.Fprintln(os.Stderr, "  Stop:    apteva service stop")
-	fmt.Fprintln(os.Stderr, "  Remove:  apteva service uninstall")
+	fmt.Fprintf(os.Stderr, "  Listening: %s:5280\n", bindAddr)
+	fmt.Fprintln(os.Stderr, "  Status:    apteva service status")
+	fmt.Fprintln(os.Stderr, "  Logs:      apteva service logs --follow")
+	fmt.Fprintln(os.Stderr, "  Stop:      apteva service stop")
+	fmt.Fprintln(os.Stderr, "  Remove:    apteva service uninstall")
+	if bindAddr == "0.0.0.0" {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  ⚠ Bound to all interfaces. Auth (bearer token + setup token)")
+		fmt.Fprintln(os.Stderr, "    gates every /api/ route; the setup token is printed at boot.")
+		fmt.Fprintln(os.Stderr, "    Lock down the port at the firewall level for private deployments.")
+	}
 	return 0
 }
 
