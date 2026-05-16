@@ -361,7 +361,22 @@ jobs:
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
+      # Idempotency check — humans sometimes publish from their
+      # laptop before the workflow finishes. Without this guard the
+      # job's `npm publish` 403s on "version already published" and
+      # the run shows red even though everything is on npmjs.
+      - name: Check if version already published
+        id: check
+        run: |
+          if npm view "apteva@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "apteva@${{ steps.version.outputs.version }} is already on npm — skipping publish."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.check.outputs.already_published != 'true'
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
