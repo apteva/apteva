@@ -167,7 +167,9 @@ func (c *coreClient) pushProvidersToCore() {
 		switch p.Type {
 		case "fireworks", "openai", "anthropic", "google", "ollama":
 			detail, _ := c.serverGet(fmt.Sprintf("/providers/%d", p.ID))
-			var pd struct{ Data map[string]string `json:"data"` }
+			var pd struct {
+				Data map[string]string `json:"data"`
+			}
 			json.Unmarshal(detail, &pd)
 			entry := map[string]any{
 				"name":    p.Type,
@@ -564,17 +566,6 @@ func (c *coreClient) disconnectMCP(name string) error {
 	}
 
 	body, _ := json.Marshal(map[string]any{"mcp_servers": clean})
-	resp, err := c.do(c.putRequest("/config", body))
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	return nil
-}
-
-// setComputer updates the computer config via PUT /config.
-func (c *coreClient) setComputer(computer map[string]any) error {
-	body, _ := json.Marshal(map[string]any{"computer": computer})
 	resp, err := c.do(c.putRequest("/config", body))
 	if err != nil {
 		return err

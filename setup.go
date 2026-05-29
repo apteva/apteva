@@ -14,26 +14,26 @@ import (
 
 // setupConfig holds the choices made during onboarding.
 type setupConfig struct {
-	Remote       bool
-	RemoteURL    string
-	RemoteEmail  string
-	RemotePass   string
-	RemoteAPIKey string
-	Provider     string
-	APIKey       string
+	Remote          bool
+	RemoteURL       string
+	RemoteEmail     string
+	RemotePass      string
+	RemoteAPIKey    string
+	Provider        string
+	APIKey          string
 	AccountEmail    string
 	AccountPassword string
-	ModelLarge   string
-	ModelMedium  string
-	ModelSmall   string
-	Computer       bool
-	ComputerType   string // "local" or "browserbase"
-	BrowserbaseKey string
-	BrowserbasePID string
-	Integrations   bool
-	Telegram     bool
-	Projects     bool
-	Directive    string
+	ModelLarge      string
+	ModelMedium     string
+	ModelSmall      string
+	Computer        bool
+	ComputerType    string // "local" or "browserbase"
+	BrowserbaseKey  string
+	BrowserbasePID  string
+	Integrations    bool
+	Telegram        bool
+	Projects        bool
+	Directive       string
 }
 
 type providerOption struct {
@@ -55,34 +55,34 @@ var providers = []providerOption{
 type setupStep int
 
 const (
-	stepMode setupStep = iota // local vs remote
-	stepRemoteURL             // remote server URL
-	stepRemoteAuth            // login or API key
-	stepRemoteLogin           // email input
-	stepRemotePassword        // password input
-	stepRemoteKey             // API key input
-	stepRemoteInstance        // select instance
-	stepProvider              // local: LLM provider
-	stepAPIKey                // local: API key
-	stepCapabilities          // local: features
-	stepBrowserType           // local: browser type (only if browser enabled)
-	stepBrowserbaseKey        // local: browserbase API key
-	stepBrowserbasePID        // local: browserbase project ID
-	stepAccountEmail          // local: dashboard email
-	stepAccountPassword       // local: dashboard password
-	stepDirective             // local: directive
+	stepMode            setupStep = iota // local vs remote
+	stepRemoteURL                        // remote server URL
+	stepRemoteAuth                       // login or API key
+	stepRemoteLogin                      // email input
+	stepRemotePassword                   // password input
+	stepRemoteKey                        // API key input
+	stepRemoteInstance                   // select instance
+	stepProvider                         // local: LLM provider
+	stepAPIKey                           // local: API key
+	stepCapabilities                     // local: features
+	stepBrowserType                      // local: browser type (only if browser enabled)
+	stepBrowserbaseKey                   // local: browserbase API key
+	stepBrowserbasePID                   // local: browserbase project ID
+	stepAccountEmail                     // local: dashboard email
+	stepAccountPassword                  // local: dashboard password
+	stepDirective                        // local: directive
 	stepDone
 )
 
 type setupModel struct {
-	step     setupStep
-	cursor   int
-	input    textinput.Model
-	config   setupConfig
-	width    int
-	height   int
-	caps     []capOption
-	client   *coreClient    // server client for API calls
+	step      setupStep
+	cursor    int
+	input     textinput.Model
+	config    setupConfig
+	width     int
+	height    int
+	caps      []capOption
+	client    *coreClient   // server client for API calls
 	aptevaCfg *AptevaConfig // config to update
 }
 
@@ -117,7 +117,7 @@ func newSetupModel(client *coreClient, aptevaCfg *AptevaConfig) setupModel {
 			{label: "Browser (computer use)", key: "browser", enabled: false},
 			{label: "Integrations (GitHub, Stripe, 263+ apps)", key: "integrations", enabled: false},
 			{label: "Telegram gateway", key: "telegram", enabled: false},
-		{label: "Projects (multi-project)", key: "projects", enabled: false},
+			{label: "Projects (multi-project)", key: "projects", enabled: false},
 		},
 	}
 }
@@ -455,7 +455,7 @@ func (m *setupModel) applyConfig() {
 	cliLog("SETUP", fmt.Sprintf("using project: %s", projectID))
 	m.aptevaCfg.ProjectID = projectID
 
-	// Set up browser/computer if enabled — create as a provider BEFORE instance
+	// Set up browser provider credentials if enabled.
 	if m.config.Computer {
 		if m.config.ComputerType == "browserbase" && m.config.BrowserbaseKey != "" {
 			bbBody, _ := json.Marshal(map[string]any{

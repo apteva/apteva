@@ -106,7 +106,7 @@ One command (`./apteva`) starts everything. The CLI spawns the server, the serve
 | **Session Persistence** | Conversation history survives restarts. JSONL per thread, auto-compaction, never loses context. |
 | **Agent-Driven Safety** | No forced approval gates. The agent decides, learns from feedback, asks when unsure. Three modes: autonomous, cautious, learn. |
 | **263+ Integrations** | GitHub, Slack, Stripe, Shopify, and more. Each runs as its own MCP server. Credentials encrypted. |
-| **Browser Control** | Local Chrome or Browserbase. Navigate, click, type, screenshot. Claude gets native computer use protocol. |
+| **Browser Control** | Provided by the Computer app through MCP tools and app-managed sessions. |
 | **Multi-Channel** | CLI terminal, Telegram, Discord. Agent routes responses to the right channel. |
 | **Multi-Instance** | Run multiple agents in parallel. Each has its own directive, tools, and history. Projects for isolation. |
 | **Terminal UI** | Two-panel TUI with live status, thread thoughts, streaming responses, modal commands. |
@@ -130,7 +130,6 @@ One command (`./apteva`) starts everything. The CLI spawns the server, the serve
 | `/directive [text]` | Show or set directive |
 | `/mode` | Switch mode: autonomous, cautious, learn |
 | `/threads` | List/kill threads |
-| `/computer` | Browser: local, browserbase, off |
 | `/integrate <app>` | Connect an integration (263+ apps) |
 | `/connect telegram` | Connect Telegram bot |
 | `/channels` | List connected channels |
@@ -167,7 +166,6 @@ Select during setup. Switch anytime with `/mode` or the API.
 | [`apteva/apteva`](https://github.com/apteva/apteva) | This repo — CLI, setup wizard, TUI, npm launcher |
 | [`apteva/core`](https://github.com/apteva/core) | The thinking engine (Go) |
 | [`apteva/server`](https://github.com/apteva/server) | Management server — auth, instances, integrations, dashboard (Go) |
-| [`apteva/computer`](https://github.com/apteva/computer) | Browser control — local Chrome, Browserbase (Go) |
 | [`apteva/integrations`](https://github.com/apteva/integrations) | 263 app connectors + webhook registrar (TypeScript) |
 
 ## Configuration
