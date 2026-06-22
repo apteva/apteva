@@ -11,10 +11,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
-	"strings"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"time"
 
@@ -789,25 +789,72 @@ func waitForHealth(client *coreClient, timeout time.Duration) error {
 	return fmt.Errorf("timeout")
 }
 
-// killProcessOnPort kills any process listening on the given TCP port.
+// killProcessOnPort stops any process listening on the given TCP port.
+// Use SIGTERM first so apteva-server can run its shutdown policy:
+// default stops agent cores for restart on the new binary, while the
+// opt-in detach policy leaves cores alive for reattach. SIGKILL is
+// only a last resort for a stale listener that does not exit.
 func killProcessOnPort(port int) {
-	portStr := fmt.Sprintf("%d", port)
-	switch runtime.GOOS {
-	case "darwin":
-		// macOS: use lsof to find PIDs on the port, then kill them
-		out, err := exec.Command("lsof", "-ti", "tcp:"+portStr).Output()
-		if err == nil {
-			for _, pidStr := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-				if pidStr != "" {
-					exec.Command("kill", "-9", pidStr).Run()
-				}
-			}
+	pids := pidsOnPort(port)
+	if len(pids) == 0 {
+		return
+	}
+	for _, pid := range pids {
+		signalPID(pid, false)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(pidsOnPort(port)) == 0 {
+			return
 		}
-	default:
-		// Linux: fuser
-		exec.Command("fuser", "-k", portStr+"/tcp").Run()
+		time.Sleep(100 * time.Millisecond)
+	}
+	for _, pid := range pidsOnPort(port) {
+		signalPID(pid, true)
 	}
 	time.Sleep(300 * time.Millisecond)
+}
+
+func pidsOnPort(port int) []string {
+	portStr := fmt.Sprintf("%d", port)
+	out, err := exec.Command("lsof", "-ti", "tcp:"+portStr).Output()
+	if err == nil {
+		return splitPIDLines(out)
+	}
+	if runtime.GOOS == "linux" {
+		out, err = exec.Command("fuser", portStr+"/tcp").Output()
+		if err == nil {
+			return strings.Fields(string(out))
+		}
+	}
+	return nil
+}
+
+func splitPIDLines(out []byte) []string {
+	var pids []string
+	for _, pid := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		pid = strings.TrimSpace(pid)
+		if pid != "" {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+func signalPID(pid string, force bool) {
+	if runtime.GOOS == "windows" {
+		args := []string{"/PID", pid}
+		if force {
+			args = append(args, "/F")
+		}
+		_ = exec.Command("taskkill", args...).Run()
+		return
+	}
+	sig := "-TERM"
+	if force {
+		sig = "-KILL"
+	}
+	_ = exec.Command("kill", sig, pid).Run()
 }
 
 // copyDashboard copies the dashboard dist/ to ~/.apteva/dashboard/ if available.

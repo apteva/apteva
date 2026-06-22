@@ -300,10 +300,10 @@ func cmdUpdate(args []string) int {
 	//       restart`. The supervisor re-execs through bin/current.
 	//
 	//    b. Foreground stack already up on this host (someone is
-	//       running `apteva` in another terminal): SIGTERM the
-	//       server, let the parent CLI catch the child exit and
-	//       re-spawn. Same `stopRunningStack` path that pre-v0.12
-	//       used, just on top of a versioned layout now.
+	//       running `apteva` in another terminal): SIGTERM the server
+	//       listener. The server owns child lifecycle: by default it
+	//       stops agent cores so the next boot starts them on the new
+	//       core binary. Advanced detach mode can preserve cores.
 	//
 	//    c. Nothing running: nothing to restart. Operator next
 	//       runs `apteva` and it picks up the new version
@@ -461,15 +461,12 @@ func hasDir(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-// stopRunningStack kills any running apteva-server and apteva-core
-// processes on the local box. Best-effort — the supervisor path
-// (systemctl/launchctl) is preferred for service installs;
-// stopRunningStack is the fallback for foreground.
+// stopRunningStack stops the foreground apteva-server listener on the
+// local box. The server owns agent-core lifecycle on SIGTERM: default
+// policy stops cores for a clean restart on the new binary, while the
+// opt-in detach policy leaves cores alive for reattach.
 func stopRunningStack() {
 	killProcessOnPort(defaultServerPort)
-	for _, name := range []string{"apteva-server", "apteva-core"} {
-		_ = osexec.Command("pkill", "-f", name).Run()
-	}
 	time.Sleep(300 * time.Millisecond)
 }
 

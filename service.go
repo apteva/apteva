@@ -205,16 +205,16 @@ func resolveBindDefault(s serviceScope) string {
 
 // systemdUnitTemplate — the unit installed by `apteva service
 // install`. Field order:
-//   1. ExecStart                  → bin/apteva-server symlink
-//   2. APTEVA_HOME                → install root
-//   3. PORT                       → 5280, the canonical apteva port
-//   4. APTEVA_BIND                → listen interface (per-scope default,
-//                                    overridable via `--bind`)
-//   5. DB_PATH                    → APTEVA_HOME/apteva.db (v0.11 path)
-//   6. DATA_DIR                   → APTEVA_HOME
-//   7. CORE_CMD                   → APTEVA_HOME/bin/apteva-core symlink
-//   8. WorkingDirectory           → APTEVA_HOME
-//   9. WantedBy                   → default.target / multi-user.target
+//  1. ExecStart                  → bin/apteva-server symlink
+//  2. APTEVA_HOME                → install root
+//  3. PORT                       → 5280, the canonical apteva port
+//  4. APTEVA_BIND                → listen interface (per-scope default,
+//     overridable via `--bind`)
+//  5. DB_PATH                    → APTEVA_HOME/apteva.db (v0.11 path)
+//  6. DATA_DIR                   → APTEVA_HOME
+//  7. CORE_CMD                   → APTEVA_HOME/bin/apteva-core symlink
+//  8. WorkingDirectory           → APTEVA_HOME
+//  9. WantedBy                   → default.target / multi-user.target
 //
 // Why we set every env var explicitly even though apteva-server
 // derives the same values from APTEVA_HOME by default: an operator
@@ -233,6 +233,10 @@ Type=simple
 ExecStart=%s
 Restart=on-failure
 RestartSec=2
+# Let apteva-server own child lifecycle. On restart/update, systemd
+# should signal only the server process; the server stops agent cores
+# by default, or preserves them when its detach policy is enabled.
+KillMode=process
 # Exit code 11 = "binary updated, please re-exec." Treating it as
 # a clean exit lets systemd's Restart=on-failure path fire — which
 # now picks up the new binary through the bin/current symlink.
@@ -382,14 +386,17 @@ func exec_loginctl(args ...string) error {
 // the full runtime config.
 //
 // Format-string positions (in order):
-//   1. Label                        (%s)
-//   2. ProgramArguments[0]          (%s — the binary)
-//   3-8. EnvironmentVariables       (%s ×6: APTEVA_HOME, APTEVA_BIND,
-//                                     DB_PATH, DATA_DIR, CORE_CMD,
-//                                     WorkingDirectory)
-//   9. RunAtLoad                    (%s — "true"/"false")
-//   10. StandardOutPath             (%s)
-//   11. StandardErrorPath           (%s)
+//  1. Label
+//  2. ProgramArguments[0] — the binary
+//  3. APTEVA_HOME
+//  4. APTEVA_BIND
+//  5. DB_PATH
+//  6. DATA_DIR
+//  7. CORE_CMD
+//  8. WorkingDirectory
+//  9. RunAtLoad — "true"/"false"
+//  10. StandardOutPath
+//  11. StandardErrorPath
 const launchdPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
