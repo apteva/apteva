@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -111,6 +112,11 @@ jobs:
         id: version
         shell: bash
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Get build time
+        id: build_time
+        shell: bash
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       # ui-kit's build is invoked by dashboard/build.ts (panel
       # importmap), so its node_modules must be populated before
@@ -380,3 +386,93 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-docker:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout apteva (CLI)
+        uses: actions/checkout@v4
+        with:
+          path: apteva
+
+      - name: Checkout core
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/core
+          path: core
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout server
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/server
+          path: server
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout computer
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/computer
+          path: computer
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout dashboard
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/dashboard
+          path: dashboard
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout ui-kit
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/ui-kit
+          path: ui-kit
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout app-sdk
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/app-sdk
+          path: app-sdk
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Checkout integrations
+        uses: actions/checkout@v4
+        with:
+          repository: apteva/integrations
+          path: integrations
+          token: ${{ secrets.REPO_TOKEN }}
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apteva/Dockerfile.server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            APTEVA_VERSION=${{ steps.version.outputs.version }}
+            BUILD_TIME=${{ steps.build_time.outputs.value }}
+          tags: |
+            ghcr.io/apteva/apteva:${{ steps.version.outputs.version }}
+            ghcr.io/apteva/apteva:latest

@@ -1,85 +1,103 @@
-# Apteva — full deployment with dashboard
-# Same as Dockerfile but includes the web dashboard.
+# Apteva release image.
 #
-# Build:
-#   docker build -t apteva-full -f Dockerfile.server ..
+# Build context is the GitHub Actions workspace after sibling checkouts:
+#   apteva/ core/ server/ computer/ dashboard/ ui-kit/ app-sdk/ integrations/
 #
-# Run:
-#   docker run -d -p 5280:5280 -v apteva-data:/data \
-#     -e FIREWORKS_API_KEY=sk_... \
-#     apteva-full
+# Local equivalent:
+#   docker build -f apteva/Dockerfile.server -t ghcr.io/apteva/apteva:dev .
 
-# ─── Build dashboard ───
 FROM oven/bun:1 AS dashboard-builder
-WORKDIR /build/dashboard
-COPY dashboard/package.json dashboard/bun.lock* ./
-RUN bun install --frozen-lockfile 2>/dev/null || bun install
-COPY dashboard/ ./
-RUN bun run build.ts 2>/dev/null || echo "dashboard build skipped"
 
-# ─── Build Go binaries ───
-FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache git
+WORKDIR /build/ui-kit
+COPY ui-kit/package.json ui-kit/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY ui-kit/ ./
+
+WORKDIR /build/dashboard
+COPY dashboard/package.json dashboard/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY dashboard/ ./
+RUN bun run build
+
+FROM oven/bun:1 AS integrations-builder
+
+WORKDIR /build/integrations
+COPY integrations/package.json integrations/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY integrations/ ./
+RUN bun run scripts/build-ui.ts && mkdir -p dist/ui
+
+FROM golang:1.26-alpine AS go-builder
+
+ARG APTEVA_VERSION=dev
+ARG BUILD_TIME=dev
+
+RUN apk add --no-cache git jq
 
 WORKDIR /build
-COPY core/ core/
-COPY computer/ computer/
-COPY server/ server/
+COPY apteva/package.json ./apteva-package.json
+COPY dashboard/package.json ./dashboard-package.json
+COPY integrations/package.json ./integrations-package.json
+COPY core/ ./core/
+COPY computer/ ./computer/
+COPY app-sdk/ ./app-sdk/
+COPY server/ ./server/
 
-# package.json files drive the version stamps below. Copy them individually
-# so a version bump invalidates only the build step, not the Go deps cache.
-COPY package.json /build/versions/umbrella.json
-COPY apteva/package.json /build/versions/cli.json
-COPY dashboard/package.json /build/versions/dashboard.json
-COPY integrations/package.json /build/versions/integrations.json
+RUN CLI_VERSION=$(jq -r .version /build/apteva-package.json) && \
+    DASHBOARD_VERSION=$(jq -r .version /build/dashboard-package.json) && \
+    INTEGRATIONS_VERSION=$(jq -r .version /build/integrations-package.json) && \
+    { echo "CLI_VERSION=$CLI_VERSION"; \
+      echo "DASHBOARD_VERSION=$DASHBOARD_VERSION"; \
+      echo "INTEGRATIONS_VERSION=$INTEGRATIONS_VERSION"; } > /tmp/versions.env
 
-# Build core (versioned)
 WORKDIR /build/core
-RUN set -eux; \
-    V_UMBRELLA=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/umbrella.json | head -1); \
-    V_CLI=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/cli.json | head -1); \
-    BUILD=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
-    CGO_ENABLED=0 go build -ldflags="-s -w \
-        -X main.Version=$V_UMBRELLA \
-        -X main.CLIVersion=$V_CLI \
-        -X main.CoreVersion=$V_UMBRELLA \
-        -X main.BuildTime=$BUILD" \
-        -o /apteva-core .
+RUN . /tmp/versions.env && \
+    CGO_ENABLED=0 go build \
+      -ldflags="-s -w \
+        -X main.Version=$APTEVA_VERSION \
+        -X main.BuildTime=$BUILD_TIME \
+        -X main.CLIVersion=$CLI_VERSION \
+        -X main.DashboardVersion=$DASHBOARD_VERSION \
+        -X main.IntegrationsVersion=$INTEGRATIONS_VERSION \
+        -X main.CoreVersion=$APTEVA_VERSION" \
+      -o /apteva-core ./cmd/apteva-core
 
-# Build server with embedded dashboard (versioned)
 WORKDIR /build/server
 COPY --from=dashboard-builder /build/dashboard/dist/ ./dashboard/
-RUN set -eux; \
-    V_UMBRELLA=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/umbrella.json | head -1); \
-    V_CLI=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/cli.json | head -1); \
-    V_DASH=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/dashboard.json | head -1); \
-    V_INT=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /build/versions/integrations.json | head -1); \
-    BUILD=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
-    echo "versions: umbrella=$V_UMBRELLA cli=$V_CLI dashboard=$V_DASH integrations=$V_INT build=$BUILD"; \
-    CGO_ENABLED=0 go build -ldflags="-s -w \
-        -X main.Version=$V_UMBRELLA \
-        -X main.CLIVersion=$V_CLI \
-        -X main.DashboardVersion=$V_DASH \
-        -X main.IntegrationsVersion=$V_INT \
-        -X main.CoreVersion=$V_UMBRELLA \
-        -X main.BuildTime=$BUILD" \
-        -o /apteva-server .
+COPY --from=integrations-builder /build/integrations/dist/ui/ /tmp/integrations-ui/
+RUN rm -rf ./integrations-ui/* && mkdir -p ./integrations-ui && \
+    cp -r /tmp/integrations-ui/* ./integrations-ui/ 2>/dev/null || true
+COPY --from=integrations-builder /build/integrations/src/apps/ /tmp/integrations-catalog/
+RUN mkdir -p ./integrations-catalog && \
+    cp -f /tmp/integrations-catalog/*.json ./integrations-catalog/ 2>/dev/null || true
+RUN find ./dashboard ./integrations-ui -name '*.map' -delete
+RUN . /tmp/versions.env && \
+    CGO_ENABLED=0 go build \
+      -ldflags="-s -w \
+        -X main.Version=$APTEVA_VERSION \
+        -X main.BuildTime=$BUILD_TIME \
+        -X main.CLIVersion=$CLI_VERSION \
+        -X main.DashboardVersion=$DASHBOARD_VERSION \
+        -X main.IntegrationsVersion=$INTEGRATIONS_VERSION \
+        -X main.CoreVersion=$APTEVA_VERSION" \
+      -o /apteva-server .
 
-# ─── Runtime ───
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates chromium
 
-COPY --from=builder /apteva-core /usr/local/bin/apteva-core
-COPY --from=builder /apteva-server /usr/local/bin/apteva-server
+RUN apk add --no-cache ca-certificates
 
-VOLUME /data
-WORKDIR /data
+COPY --from=go-builder /apteva-core /usr/local/bin/apteva-core
+COPY --from=go-builder /apteva-server /usr/local/bin/apteva-server
 
 ENV PORT=5280
+ENV APTEVA_BIND=0.0.0.0
 ENV CORE_CMD=/usr/local/bin/apteva-core
 ENV DB_PATH=/data/apteva.db
 ENV DATA_DIR=/data
+ENV APTEVA_APPS_CACHE=/data/apps
+ENV QUIET=1
 
 EXPOSE 5280
+VOLUME /data
 
 ENTRYPOINT ["apteva-server"]
