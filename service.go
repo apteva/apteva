@@ -57,9 +57,9 @@ func cmdService(args []string) int {
 	case "start":
 		return runServiceCmd("start")
 	case "stop":
-		return runServiceCmd("stop")
+		return cmdServiceLifecycle("stop", rest)
 	case "restart":
-		return runServiceCmd("restart")
+		return cmdServiceLifecycle("restart", rest)
 	case "status":
 		return runServiceCmd("status")
 	case "logs":
@@ -71,6 +71,32 @@ func cmdService(args []string) int {
 	fmt.Fprintf(os.Stderr, "apteva service: unknown subcommand %q\n", sub)
 	printServiceUsage()
 	return 2
+}
+
+func cmdServiceLifecycle(verb string, args []string) int {
+	fs := flag.NewFlagSet("service "+verb, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agentPolicy := fs.String("agents", "", "agent handling for restart: restart, rolling, or preserve")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if verb == "stop" && *agentPolicy != "" {
+		fmt.Fprintln(os.Stderr, "service stop always stops agents; --agents is only valid for restart")
+		return 2
+	}
+	if _, err := normalizeLifecyclePolicy(*agentPolicy); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if err := writeLifecycleIntent(verb, *agentPolicy); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to prepare service %s: %v\n", verb, err)
+		return 1
+	}
+	code := runServiceCmd(verb)
+	if code != 0 {
+		clearLifecycleIntent()
+	}
+	return code
 }
 
 func printServiceUsage() {
@@ -88,8 +114,9 @@ Commands:
                   install if you want loopback-only.
   uninstall       Stop and remove the unit/plist.
   start           Start the running service.
-  stop            Stop the running service.
-  restart         Restart (graceful drain → exit-11 → supervisor).
+  stop            Stop the service and all agent processes.
+  restart [--agents restart|rolling|preserve]
+                  Restart the service with an optional agent policy override.
   status          Print supervisor status.
   logs [--follow] Tail the service log.
 

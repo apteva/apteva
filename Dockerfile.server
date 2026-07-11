@@ -27,7 +27,7 @@ RUN bun install --frozen-lockfile
 COPY integrations/ ./
 RUN bun run scripts/build-ui.ts && mkdir -p dist/ui
 
-FROM golang:1.26-alpine AS go-builder
+FROM golang:1.26.5-alpine AS go-builder
 
 ARG APTEVA_VERSION=dev
 ARG BUILD_TIME=dev

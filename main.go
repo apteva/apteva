@@ -49,6 +49,8 @@ func main() {
 			os.Exit(cmdUpdate(os.Args[2:]))
 		case "service":
 			os.Exit(cmdService(os.Args[2:]))
+		case "agents":
+			os.Exit(cmdAgents(os.Args[2:]))
 		case "versions":
 			os.Exit(cmdVersions(os.Args[2:]))
 		case "rollback":
@@ -173,6 +175,9 @@ func main() {
 	// Kill any stale server from a previous session on our port
 	// so we always start with the current binary
 	if !aptevaCfg.Remote && !*noSpawn {
+		if len(pidsOnPort(aptevaCfg.ServerPort)) > 0 {
+			_ = writeLifecycleIntent("restart", "")
+		}
 		killProcessOnPort(aptevaCfg.ServerPort)
 	}
 

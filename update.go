@@ -84,7 +84,12 @@ func cmdUpdate(args []string) int {
 	yes := fs.Bool("yes", false, "skip the confirmation prompt")
 	dryRun := fs.Bool("dry-run", false, "download + verify + preflight, but skip the symlink flip")
 	keepN := fs.Int("keep", 3, "number of prior versions to keep on disk")
+	agentPolicy := fs.String("agents", "", "agent handling: restart, rolling, or preserve (default: server setting)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if _, err := normalizeLifecyclePolicy(*agentPolicy); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 
@@ -309,11 +314,20 @@ func cmdUpdate(args []string) int {
 	//       runs `apteva` and it picks up the new version
 	//       automatically.
 	if scope, ok := detectInstalledScope(); ok {
+		if err := writeLifecycleIntent("update", *agentPolicy); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to prepare update restart: %v\n", err)
+			return 1
+		}
 		fmt.Fprintln(os.Stderr, "  restarting service…")
 		if err := restartServiceForRollback(scope); err != nil {
+			clearLifecycleIntent()
 			fmt.Fprintf(os.Stderr, "service restart returned %v — check `apteva service status`\n", err)
 		}
 	} else if isStackRunning() {
+		if err := writeLifecycleIntent("update", *agentPolicy); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to prepare update restart: %v\n", err)
+			return 1
+		}
 		fmt.Fprintln(os.Stderr, "  draining running stack…")
 		stopRunningStack()
 		fmt.Fprintln(os.Stderr, "  re-run `apteva` to start with v"+m.Version+".")
