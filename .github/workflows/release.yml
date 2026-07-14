@@ -135,6 +135,7 @@ jobs:
           bun install --frozen-lockfile
           bun run build
           mkdir -p ../server/dashboard
+          find ../server/dashboard -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec rm -rf {} +
           cp -r dist/* ../server/dashboard/
 
       - name: Build integration UI bundles
@@ -147,6 +148,7 @@ jobs:
           # Per-slug bundles land under dist/ui; copy each into the
           # server's embed tree. Empty result is fine — the embed root
           # has a .gitkeep so the directive succeeds either way.
+          find ../server/integrations-ui -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec rm -rf {} +
           if [ -d dist/ui ]; then
             cp -r dist/ui/* ../server/integrations-ui/ 2>/dev/null || true
           fi
@@ -161,6 +163,7 @@ jobs:
           # operators kept seeing stale JSONs after binary upgrades.
           # Mirrors the integrations-ui sync above.
           mkdir -p server/integrations-catalog
+          find server/integrations-catalog -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec rm -rf {} +
           if [ -d integrations/src/apps ]; then
             cp -f integrations/src/apps/*.json server/integrations-catalog/ 2>/dev/null || true
           fi

@@ -63,12 +63,13 @@ RUN . /tmp/versions.env && \
       -o /apteva-core ./cmd/apteva-core
 
 WORKDIR /build/server
+RUN rm -rf ./dashboard/* ./dashboard/.[!.]* ./dashboard/..?* 2>/dev/null || true
 COPY --from=dashboard-builder /build/dashboard/dist/ ./dashboard/
 COPY --from=integrations-builder /build/integrations/dist/ui/ /tmp/integrations-ui/
 RUN rm -rf ./integrations-ui/* && mkdir -p ./integrations-ui && \
     cp -r /tmp/integrations-ui/* ./integrations-ui/ 2>/dev/null || true
 COPY --from=integrations-builder /build/integrations/src/apps/ /tmp/integrations-catalog/
-RUN mkdir -p ./integrations-catalog && \
+RUN rm -rf ./integrations-catalog/* && mkdir -p ./integrations-catalog && \
     cp -f /tmp/integrations-catalog/*.json ./integrations-catalog/ 2>/dev/null || true
 RUN find ./dashboard ./integrations-ui -name '*.map' -delete
 RUN . /tmp/versions.env && \
