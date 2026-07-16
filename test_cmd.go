@@ -44,10 +44,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,42 +60,54 @@ import (
 )
 
 type testOpts struct {
+	ctx          context.Context
 	target       string
 	serverAddr   string // empty = auto-spawn
+	serverAPIKey string // existing-server owner auth; never logged
+	projectID    string
 	provider     string
 	appDir       string
 	timeout      time.Duration
 	maxBudgetUSD float64
+	artifactsDir string
 	verbose      bool
 	jsonOutput   bool
 }
 
 type Scenario struct {
-	Name          string         `yaml:"name"`
-	Description   string         `yaml:"description"`
-	Timeout       string         `yaml:"timeout"`        // duration string, default 90s
-	MaxIterations int            `yaml:"max_iterations"` // default 10
-	Setup         ScenarioSetup  `yaml:"setup"`
-	Directive     string         `yaml:"directive"`
-	Assert        []AssertClause `yaml:"assert"`
-	Budget        Budget         `yaml:"budget"`
+	Name             string         `yaml:"name"`
+	Description      string         `yaml:"description"`
+	Timeout          string         `yaml:"timeout"`            // duration string, default 90s
+	MaxIterations    int            `yaml:"max_iterations"`     // default 10
+	Runs             int            `yaml:"runs"`               // default 1
+	RequiredPassRate float64        `yaml:"required_pass_rate"` // default 1.0
+	Setup            ScenarioSetup  `yaml:"setup"`
+	Directive        string         `yaml:"directive"`
+	Assert           []AssertClause `yaml:"assert"`
+	OutcomeAssert    []AssertClause `yaml:"outcome_assert"`
+	TrajectoryAssert []AssertClause `yaml:"trajectory_assert"`
+	Budget           Budget         `yaml:"budget"`
 
 	// SourceDir — directory the YAML was read from. Used to resolve
 	// relative paths in setup.fixtures.file. Set by readScenario, not
 	// the YAML author.
-	SourceDir string `yaml:"-"`
+	SourceDir  string `yaml:"-"`
+	SourcePath string `yaml:"-"`
 }
 
 type ScenarioSetup struct {
-	App      AppSetup          `yaml:"app"`
-	Mode     string            `yaml:"mode"` // autonomous | cautious | learn
-	Config   map[string]string `yaml:"config"`
-	Fixtures []FixtureSpec     `yaml:"fixtures"` // pre-uploaded files / setup data
+	App         AppSetup          `yaml:"app"`
+	Mode        string            `yaml:"mode"` // autonomous | cautious | learn
+	Config      map[string]string `yaml:"config"`
+	Fixtures    []FixtureSpec     `yaml:"fixtures"` // pre-uploaded files / setup data
+	RequiredEnv []string          `yaml:"required_env"`
 }
 
 type AppSetup struct {
-	Path   string            `yaml:"path"`   // local path to the app being tested
-	Config map[string]string `yaml:"config"` // install-time config
+	Path          string            `yaml:"path"`           // local path to the app being tested
+	Config        map[string]string `yaml:"config"`         // install-time config
+	Env           map[string]string `yaml:"env"`            // sidecar process environment
+	ReuseExisting bool              `yaml:"reuse_existing"` // use the server's installed app and state
 }
 
 // FixtureSpec — pre-loaded data that has to be in place before the
@@ -98,22 +115,43 @@ type AppSetup struct {
 // app's MCP `files_upload` tool (or any tool with a similar shape).
 // Path is relative to the scenario YAML file's dir.
 type FixtureSpec struct {
-	App    string            `yaml:"app"`    // app slug — must be the unit-under-test or a dep
-	Tool   string            `yaml:"tool"`   // MCP tool name — e.g. files_upload
-	File   string            `yaml:"file"`   // relative path to a binary fixture
-	Args   map[string]any    `yaml:"args"`   // extra tool args (folder, content_type, …)
+	App  string         `yaml:"app"`  // app slug — must be the unit-under-test or a dep
+	Tool string         `yaml:"tool"` // MCP tool name — e.g. files_upload
+	File string         `yaml:"file"` // relative path to a binary fixture
+	Args map[string]any `yaml:"args"` // extra tool args (folder, content_type, …)
 }
 
 type AssertClause struct {
-	HTTP            string         `yaml:"http"`              // "GET /path"
-	ExpectStatus    int            `yaml:"expect_status"`     // default 200
-	ExpectCountAt   string         `yaml:"expect_count_at"`   // JSON field name to count under
-	ExpectCount     int            `yaml:"expect_count"`      // for the count_at clause
-	ExpectFieldAt   string         `yaml:"expect_field_at"`   // dotted path
-	ExpectFieldEq   any            `yaml:"expect_field_eq"`   // value to match
-	ToolCalled      string         `yaml:"tool_called"`       // any of (a|b|c) — at least one
-	FinishedWithin  string         `yaml:"finished_within"`   // duration
-	IterationsAtMost int           `yaml:"iterations_at_most"`
+	HTTP                  string             `yaml:"http"`            // "GET /path"
+	ExpectStatus          int                `yaml:"expect_status"`   // default 200
+	ExpectCountAt         string             `yaml:"expect_count_at"` // dotted JSON path to count under
+	ExpectCount           *int               `yaml:"expect_count"`    // exact size, including zero
+	ExpectCountMin        int                `yaml:"expect_count_min"`
+	ExpectCountMax        int                `yaml:"expect_count_max"`
+	ExpectFieldAt         string             `yaml:"expect_field_at"` // dotted path
+	ExpectFieldEq         any                `yaml:"expect_field_eq"` // value to match
+	ExpectFieldContains   string             `yaml:"expect_field_contains"`
+	ExpectFieldMatches    string             `yaml:"expect_field_matches"`
+	ToolCalled            string             `yaml:"tool_called"` // any of (a|b|c) — at least one
+	ToolNotCalled         string             `yaml:"tool_not_called"`
+	ToolCalledWith        *ToolCallAssertion `yaml:"tool_called_with"`
+	ToolNotCalledWith     *ToolCallAssertion `yaml:"tool_not_called_with"`
+	ResponseContains      string             `yaml:"response_contains"`
+	AgentResponseContains string             `yaml:"agent_response_contains"`
+	ResponseMatches       string             `yaml:"response_matches"`
+	AgentResponseMatches  string             `yaml:"agent_response_matches"`
+	FinishedWithin        string             `yaml:"finished_within"` // duration
+	IterationsAtMost      int                `yaml:"iterations_at_most"`
+	Category              string             `yaml:"-"`
+}
+
+type ToolCallAssertion struct {
+	Tool     string         `yaml:"tool"`
+	Args     map[string]any `yaml:"args"`
+	Count    *int           `yaml:"count"`
+	MinCount int            `yaml:"min_count"`
+	MaxCount int            `yaml:"max_count"`
+	Before   string         `yaml:"before"`
 }
 
 type Budget struct {
@@ -124,22 +162,40 @@ type Budget struct {
 }
 
 type ScenarioResult struct {
-	Name           string                  `json:"scenario"`
-	OK             bool                    `json:"ok"`
-	ElapsedMs      int64                   `json:"elapsed_ms"`
-	Iterations     int                     `json:"iterations"`
-	ToolCalls      []ToolCallResult        `json:"tool_calls"`
-	Tokens         TokenSummary            `json:"tokens"`
-	CostUSD        float64                 `json:"cost_usd"`
-	Asserts        []AssertResult          `json:"asserts"`
-	BudgetOK       bool                    `json:"budget_ok"`
-	Error          string                  `json:"error,omitempty"`
+	Name               string           `json:"scenario"`
+	OK                 bool             `json:"ok"`
+	ElapsedMs          int64            `json:"elapsed_ms"`
+	Iterations         int              `json:"iterations"`
+	ToolCalls          []ToolCallResult `json:"tool_calls"`
+	Tokens             TokenSummary     `json:"tokens"`
+	CostUSD            float64          `json:"cost_usd"`
+	Asserts            []AssertResult   `json:"asserts"`
+	BudgetOK           bool             `json:"budget_ok"`
+	Run                int              `json:"run,omitempty"`
+	RunCount           int              `json:"run_count,omitempty"`
+	PassCount          int              `json:"pass_count,omitempty"`
+	PassRate           float64          `json:"pass_rate,omitempty"`
+	RequiredPassRate   float64          `json:"required_pass_rate,omitempty"`
+	Attempts           []ScenarioResult `json:"attempts,omitempty"`
+	AssistantResponses []string         `json:"assistant_responses,omitempty"`
+	ArtifactsDir       string           `json:"artifacts_dir,omitempty"`
+	Error              string           `json:"error,omitempty"`
+	telemetry          []telemetryEvent
 }
 
 type ToolCallResult struct {
-	Name string `json:"name"`
-	Ms   int64  `json:"ms"`
-	OK   bool   `json:"ok"`
+	ID                  string            `json:"id,omitempty"`
+	Name                string            `json:"name"`
+	Args                map[string]string `json:"args,omitempty"`
+	Reason              string            `json:"reason,omitempty"`
+	Ms                  int64             `json:"ms"`
+	OK                  bool              `json:"ok"`
+	Result              string            `json:"result,omitempty"`
+	ResultOriginalBytes int               `json:"result_original_bytes,omitempty"`
+	ResultContextBytes  int               `json:"result_context_bytes,omitempty"`
+	ResultPreviewBytes  int               `json:"result_preview_bytes,omitempty"`
+	ResultImageBytes    int               `json:"result_image_bytes,omitempty"`
+	ResultTruncated     bool              `json:"result_truncated,omitempty"`
 }
 
 type TokenSummary struct {
@@ -149,20 +205,26 @@ type TokenSummary struct {
 }
 
 type AssertResult struct {
-	Clause string `json:"clause"`
-	OK     bool   `json:"ok"`
-	Got    any    `json:"got,omitempty"`
-	Want   any    `json:"want,omitempty"`
-	Note   string `json:"note,omitempty"`
+	Clause   string `json:"clause"`
+	Category string `json:"category,omitempty"`
+	OK       bool   `json:"ok"`
+	Got      any    `json:"got,omitempty"`
+	Want     any    `json:"want,omitempty"`
+	Note     string `json:"note,omitempty"`
 }
 
 func cmdTest(args []string) int {
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stopSignals()
+
 	fs := flag.NewFlagSet("test", flag.ExitOnError)
 	serverAddr := fs.String("server", "", "use an existing apteva-server at this address (default: spawn a clean one in a temp dir)")
+	projectID := fs.String("project-id", "", "existing project to use with --server (default: create and remove an isolated test project)")
 	provider := fs.String("provider", "", "LLM provider name (e.g. opencode-go); default: whatever the spawned server picks up from env")
 	appDir := fs.String("app-dir", ".", "path to the app under test (used when scenarios omit setup.app.path)")
 	timeoutFlag := fs.Duration("timeout", 90*time.Second, "default per-scenario timeout")
 	maxBudgetUSD := fs.Float64("max-budget-usd", 0, "abort when cumulative cost exceeds this (0 = unbounded)")
+	artifactsDir := fs.String("artifacts-dir", ".apteva-test-artifacts", "directory for failed-run telemetry and logs")
 	verbose := fs.Bool("v", false, "verbose: stream telemetry events as they arrive")
 	jsonOut := fs.Bool("json", false, "emit machine-readable results to stdout")
 	fs.Parse(args)
@@ -175,12 +237,16 @@ func cmdTest(args []string) int {
 	target := fs.Arg(0)
 
 	opts := testOpts{
+		ctx:          ctx,
 		target:       target,
 		serverAddr:   *serverAddr,
+		serverAPIKey: resolveTestServerAPIKey(*serverAddr),
+		projectID:    *projectID,
 		provider:     *provider,
 		appDir:       *appDir,
 		timeout:      *timeoutFlag,
 		maxBudgetUSD: *maxBudgetUSD,
+		artifactsDir: *artifactsDir,
 		verbose:      *verbose,
 		jsonOutput:   *jsonOut,
 	}
@@ -207,7 +273,7 @@ func cmdTest(args []string) int {
 	allOK := true
 	for _, s := range scenarios {
 		fmt.Fprintf(os.Stderr, "▶ %s\n", s.Name)
-		res := runScenario(server, s, opts)
+		res := runScenarioEvaluation(server, s, opts)
 		results = append(results, res)
 		printSummary(os.Stderr, res, opts.verbose)
 		cumulativeCost += res.CostUSD
@@ -217,6 +283,10 @@ func cmdTest(args []string) int {
 		if opts.maxBudgetUSD > 0 && cumulativeCost > opts.maxBudgetUSD {
 			fmt.Fprintf(os.Stderr, "✗ cumulative cost $%.4f exceeds --max-budget-usd $%.4f — aborting\n",
 				cumulativeCost, opts.maxBudgetUSD)
+			allOK = false
+			break
+		}
+		if ctx.Err() != nil {
 			allOK = false
 			break
 		}
@@ -240,6 +310,76 @@ func cmdTest(args []string) int {
 			passed, len(results), cumulativeCost)
 	}
 	if !allOK {
+		return 1
+	}
+	return 0
+}
+
+func runScenarioEvaluation(server *testServer, s Scenario, opts testOpts) ScenarioResult {
+	runs := s.Runs
+	if runs <= 0 {
+		runs = 1
+	}
+	required := s.RequiredPassRate
+	if required <= 0 {
+		required = 1
+	}
+	if required > 1 {
+		required = 1
+	}
+
+	attempts := make([]ScenarioResult, 0, runs)
+	for run := 1; run <= runs; run++ {
+		if runs > 1 {
+			fmt.Fprintf(os.Stderr, "  run %d/%d\n", run, runs)
+		}
+		attempt := runScenario(server, s, opts)
+		attempt.Run = run
+		attempt.RunCount = runs
+		if !attempt.OK {
+			attempt.ArtifactsDir = writeFailureArtifacts(opts, server, s, attempt)
+		}
+		attempts = append(attempts, attempt)
+		if runs > 1 {
+			printSummary(os.Stderr, attempt, opts.verbose)
+		}
+	}
+
+	if runs == 1 {
+		result := attempts[0]
+		result.PassCount = boolInt(result.OK)
+		result.PassRate = float64(result.PassCount)
+		result.RequiredPassRate = required
+		return result
+	}
+
+	aggregate := ScenarioResult{
+		Name: s.Name, RunCount: runs, RequiredPassRate: required,
+		BudgetOK: true, Attempts: attempts,
+	}
+	for _, attempt := range attempts {
+		aggregate.ElapsedMs += attempt.ElapsedMs
+		aggregate.Iterations += attempt.Iterations
+		aggregate.ToolCalls = append(aggregate.ToolCalls, attempt.ToolCalls...)
+		aggregate.Tokens.Prompt += attempt.Tokens.Prompt
+		aggregate.Tokens.Completion += attempt.Tokens.Completion
+		aggregate.Tokens.Total += attempt.Tokens.Total
+		aggregate.CostUSD += attempt.CostUSD
+		aggregate.BudgetOK = aggregate.BudgetOK && attempt.BudgetOK
+		if attempt.OK {
+			aggregate.PassCount++
+		}
+	}
+	aggregate.PassRate = float64(aggregate.PassCount) / float64(runs)
+	aggregate.OK = aggregate.PassRate >= required
+	if !aggregate.OK {
+		aggregate.Error = fmt.Sprintf("pass rate %.0f%% is below required %.0f%%", aggregate.PassRate*100, required*100)
+	}
+	return aggregate
+}
+
+func boolInt(v bool) int {
+	if v {
 		return 1
 	}
 	return 0
@@ -311,10 +451,83 @@ func readScenario(path string) (Scenario, error) {
 	}
 	if abs, err := filepath.Abs(path); err == nil {
 		s.SourceDir = filepath.Dir(abs)
+		s.SourcePath = abs
 	} else {
 		s.SourceDir = filepath.Dir(path)
+		s.SourcePath = path
+	}
+	for i := range s.Assert {
+		s.Assert[i].Category = "assert"
+	}
+	for i := range s.OutcomeAssert {
+		s.OutcomeAssert[i].Category = "outcome"
+	}
+	for i := range s.TrajectoryAssert {
+		s.TrajectoryAssert[i].Category = "trajectory"
+	}
+	if s.RequiredPassRate < 0 || s.RequiredPassRate > 1 {
+		return Scenario{}, fmt.Errorf("required_pass_rate must be between 0 and 1")
+	}
+	if err := expandScenarioEnvironment(&s); err != nil {
+		return Scenario{}, err
 	}
 	return s, nil
+}
+
+func expandScenarioEnvironment(s *Scenario) error {
+	values := map[string]string{}
+	for _, name := range s.Setup.RequiredEnv {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		value, ok := os.LookupEnv(name)
+		if !ok || strings.TrimSpace(value) == "" {
+			return fmt.Errorf("required environment variable %s is not set", name)
+		}
+		values[name] = value
+	}
+	replace := func(value string) string {
+		for name, replacement := range values {
+			value = strings.ReplaceAll(value, "${"+name+"}", replacement)
+		}
+		return value
+	}
+	s.Directive = replace(s.Directive)
+	for _, group := range [][]AssertClause{s.Assert, s.OutcomeAssert, s.TrajectoryAssert} {
+		for i := range group {
+			group[i].HTTP = replace(group[i].HTTP)
+			group[i].ResponseContains = replace(group[i].ResponseContains)
+			group[i].AgentResponseContains = replace(group[i].AgentResponseContains)
+			group[i].ResponseMatches = replace(group[i].ResponseMatches)
+			group[i].AgentResponseMatches = replace(group[i].AgentResponseMatches)
+			group[i].ExpectFieldEq = replaceStringValue(group[i].ExpectFieldEq, replace)
+			for _, match := range []*ToolCallAssertion{group[i].ToolCalledWith, group[i].ToolNotCalledWith} {
+				if match == nil {
+					continue
+				}
+				for key, value := range match.Args {
+					match.Args[key] = replaceStringValue(value, replace)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func replaceStringValue(value any, replace func(string) string) any {
+	if text, ok := value.(string); ok {
+		return replace(text)
+	}
+	return value
+}
+
+func scenarioAssertions(s Scenario) []AssertClause {
+	out := make([]AssertClause, 0, len(s.Assert)+len(s.OutcomeAssert)+len(s.TrajectoryAssert))
+	out = append(out, s.Assert...)
+	out = append(out, s.OutcomeAssert...)
+	out = append(out, s.TrajectoryAssert...)
+	return out
 }
 
 // ─── Server bootstrap ──────────────────────────────────────────────
@@ -348,13 +561,33 @@ func (s *testServer) Stop() {
 
 func bootstrapServer(opts testOpts) (*testServer, error) {
 	if opts.serverAddr != "" {
-		// Caller pointed us at an existing server — register a test
-		// user, return a client. No spawn, no teardown of state.
-		key, err := registerTestUser(opts.serverAddr)
-		if err != nil {
-			return nil, fmt.Errorf("register on existing server: %w", err)
+		if opts.serverAPIKey == "" {
+			return nil, fmt.Errorf("--server requires owner authentication: set APTEVA_TEST_SERVER_API_KEY or use an active Apteva config containing api_key")
 		}
-		return &testServer{addr: opts.serverAddr, apiKey: key}, nil
+		srv := &testServer{addr: opts.serverAddr, apiKey: opts.serverAPIKey}
+		var projectID string
+		var err error
+		if strings.TrimSpace(opts.projectID) == "" {
+			projectID, err = createTestProject(srv)
+			if err == nil {
+				srv.teardown = func() { deleteTestProject(srv, projectID) }
+			}
+		} else {
+			projectID, err = resolveTestProject(srv, opts.projectID)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("prepare existing server: %w", err)
+		}
+		srv.projectID = projectID
+		if err := verifyServerProvider(srv, opts.provider); err != nil {
+			if srv.teardown != nil {
+				srv.teardown()
+				srv.teardown = nil
+			}
+			return nil, err
+		}
+		fmt.Fprintf(os.Stderr, "using apteva-server at %s (project: %s; provider credentials stay server-side)\n", opts.serverAddr, projectID)
+		return srv, nil
 	}
 	// Spawn a clean instance.
 	port, err := pickFreePort()
@@ -428,6 +661,145 @@ func bootstrapServer(opts testOpts) (*testServer, error) {
 	srv.projectID = pid
 	fmt.Fprintf(os.Stderr, "spawned apteva-server at %s (data: %s, project: %s)\n", addr, dataDir, pid)
 	return srv, nil
+}
+
+func createTestProject(server *testServer) (string, error) {
+	name := fmt.Sprintf("Tier 3 test %s", time.Now().Format("20060102-150405"))
+	body, _ := json.Marshal(map[string]string{
+		"name": name, "description": "Temporary project created by apteva test", "color": "#64748b",
+	})
+	req, _ := http.NewRequest(http.MethodPost, "http://"+server.addr+"/api/projects", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("create isolated project: HTTP %d: %s", resp.StatusCode, tcTruncate(string(raw), 200))
+	}
+	var project struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
+		return "", err
+	}
+	if project.ID == "" {
+		return "", fmt.Errorf("create isolated project returned no id")
+	}
+	return project.ID, nil
+}
+
+func deleteTestProject(server *testServer, projectID string) {
+	if projectID == "" {
+		return
+	}
+	req, _ := http.NewRequest(http.MethodDelete, "http://"+server.addr+"/api/projects/"+url.PathEscape(projectID), nil)
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
+func resolveTestServerAPIKey(serverAddr string) string {
+	if serverAddr == "" {
+		return ""
+	}
+	if key := strings.TrimSpace(os.Getenv("APTEVA_TEST_SERVER_API_KEY")); key != "" {
+		return key
+	}
+	return strings.TrimSpace(loadAptevaConfig().APIKey)
+}
+
+func resolveTestProject(server *testServer, requested string) (string, error) {
+	req, _ := http.NewRequest(http.MethodGet, "http://"+server.addr+"/api/projects", nil)
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("GET /api/projects returned %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+	}
+	var projects []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&projects); err != nil {
+		return "", err
+	}
+	if len(projects) == 0 {
+		return "", fmt.Errorf("authenticated user has no projects")
+	}
+	candidate := strings.TrimSpace(requested)
+	if candidate == "" {
+		candidate = strings.TrimSpace(loadAptevaConfig().ProjectID)
+	}
+	if candidate != "" {
+		for _, project := range projects {
+			if project.ID == candidate || strings.EqualFold(project.Name, candidate) {
+				return project.ID, nil
+			}
+		}
+		return "", fmt.Errorf("project %q is not accessible", candidate)
+	}
+	return projects[0].ID, nil
+}
+
+func verifyServerProvider(server *testServer, requested string) error {
+	endpoint := "http://" + server.addr + "/api/providers?project_id=" + url.QueryEscape(server.projectID)
+	req, _ := http.NewRequest(http.MethodGet, endpoint, nil)
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("list existing-server providers: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("list existing-server providers: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+	}
+	var providers []struct {
+		Type   string `json:"type"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
+		return fmt.Errorf("decode existing-server providers: %w", err)
+	}
+	want := normalizeProviderName(requested)
+	for _, provider := range providers {
+		name := normalizeProviderName(provider.Name)
+		isLLM := strings.EqualFold(provider.Type, "llm") || knownLLMProvider(name)
+		if isLLM && !strings.EqualFold(provider.Status, "disabled") && (want == "" || name == want) {
+			return nil
+		}
+	}
+	if want != "" {
+		return fmt.Errorf("LLM provider %q is not configured for project %s", requested, server.projectID)
+	}
+	return fmt.Errorf("no LLM provider is configured for project %s", server.projectID)
+}
+
+func normalizeProviderName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "-")
+	value = strings.ReplaceAll(value, " ", "-")
+	return value
+}
+
+func knownLLMProvider(value string) bool {
+	switch value {
+	case "fireworks", "openai", "openai-codex", "anthropic", "google", "ollama", "nvidia", "opencode-go", "venice":
+		return true
+	default:
+		return false
+	}
 }
 
 // registerTestUser creates a user, logs in to get a session cookie,
@@ -513,8 +885,9 @@ func registerTestUser(addr string) (string, error) {
 // ─── Scenario execution ────────────────────────────────────────────
 
 func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioResult) {
-	res = ScenarioResult{Name: s.Name}
+	res = ScenarioResult{Name: s.Name, BudgetOK: true}
 	start := time.Now()
+	assertions := scenarioAssertions(s)
 	// Named return so the deferred elapsed-time write actually
 	// reaches the caller. Closures over a value-type local don't
 	// propagate to a value-type return.
@@ -543,61 +916,95 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		return res
 	}
 
-	// Install + spawn dependent apps first. The manifest's
-	// requires.apps lists peer apps the unit under test calls
-	// over HTTP (e.g. media → storage). Resolve each by sibling-
-	// directory convention: for an app at <appDir>, look for the
-	// dep at <appDir>/../<dep_name>/. Install order matters — the
-	// dep must be 'running' before the main app's worker starts
-	// trying to talk to it.
-	deps, err := installDeps(server, appDir, manifestYAML)
-	if err != nil {
-		res.Error = fmt.Sprintf("install deps: %v", err)
-		return res
+	appName := manifestNameFromYAML(manifestYAML)
+	if appName == "" {
+		appName = "app"
 	}
-	defer func() {
-		for i := len(deps) - 1; i >= 0; i-- {
-			deps[i].sidecar.Stop()
-			uninstallApp(server, deps[i].installID)
+
+	var (
+		deps       []depBundle
+		installed  *installResp
+		sidecarURL string
+		mcpServers []map[string]any
+	)
+	if s.Setup.App.ReuseExisting {
+		if opts.serverAddr == "" || strings.TrimSpace(opts.projectID) == "" {
+			res.Error = "setup.app.reuse_existing requires --server and an explicit --project-id"
+			return res
 		}
-	}()
+		if len(s.Setup.App.Config) > 0 || len(s.Setup.App.Env) > 0 || len(s.Setup.Fixtures) > 0 {
+			res.Error = "setup.app.reuse_existing cannot use app config, app env, or fixtures"
+			return res
+		}
+		installed, err = findExistingAppInstall(server, appName)
+		if err != nil {
+			res.Error = fmt.Sprintf("reuse existing app: %v", err)
+			return res
+		}
+		relay, relayErr := startScopedAppMCPRelay(server, appName, installed.InstallID)
+		if relayErr != nil {
+			res.Error = fmt.Sprintf("start app MCP relay: %v", relayErr)
+			return res
+		}
+		defer relay.Close()
+		mcpServers = append(mcpServers, map[string]any{
+			"name": appName, "transport": "http", "url": relay.URL,
+			"main_access": true, "no_spawn": true,
+		})
+	} else {
+		// Install + spawn dependent apps first. The manifest's
+		// requires.apps lists peer apps the unit under test calls over
+		// HTTP. Each local sidecar is removed after the run.
+		deps, err = installDeps(server, appDir, manifestYAML)
+		if err != nil {
+			res.Error = fmt.Sprintf("install deps: %v", err)
+			return res
+		}
+		defer func() {
+			for i := len(deps) - 1; i >= 0; i-- {
+				deps[i].sidecar.Stop()
+				uninstallApp(server, deps[i].installID)
+			}
+		}()
 
-	// Install the app under test. The server clones from the
-	// configured source repo by default; for local-test we'd rather
-	// it bind to the app at appDir directly. The install handler
-	// accepts manifest_yaml inline; we then override the sidecar URL
-	// to the local sidecar built from appDir.
-	installed, err := installApp(server, manifestYAML, server.projectID, s.Setup.App.Config)
-	if err != nil {
-		res.Error = fmt.Sprintf("install app: %v", err)
-		return res
-	}
-	defer uninstallApp(server, installed.InstallID)
+		installed, err = installApp(server, manifestYAML, server.projectID, s.Setup.App.Config)
+		if err != nil {
+			res.Error = fmt.Sprintf("install app: %v", err)
+			return res
+		}
+		defer uninstallApp(server, installed.InstallID)
 
-	sidecar, err := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config, "http://"+server.addr)
-	if err != nil {
-		res.Error = fmt.Sprintf("spawn local sidecar: %v", err)
-		return res
-	}
-	defer sidecar.Stop()
-	if err := setSidecarURL(server, installed.InstallID, sidecar.URL); err != nil {
-		res.Error = fmt.Sprintf("set sidecar url: %v", err)
-		return res
-	}
+		sidecar, spawnErr := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config, s.Setup.App.Env, "http://"+server.addr)
+		if spawnErr != nil {
+			res.Error = fmt.Sprintf("spawn local sidecar: %v", spawnErr)
+			return res
+		}
+		defer sidecar.Stop()
+		sidecarURL = sidecar.URL
+		if err := setSidecarURL(server, installed.InstallID, sidecarURL); err != nil {
+			res.Error = fmt.Sprintf("set sidecar url: %v", err)
+			return res
+		}
 
-	// Pre-upload fixtures before the agent starts. Lets a scenario
-	// say "the catalog already has this clip in it" without burning
-	// LLM iterations on the upload. Fixtures call MCP tools on the
-	// peer apps directly, with the file's bytes shipped as
-	// content_base64.
-	mainAppName := manifestNameFromYAML(manifestYAML)
-	sidecarsByApp := map[string]string{mainAppName: sidecar.URL}
-	for _, d := range deps {
-		sidecarsByApp[d.name] = d.sidecar.URL
-	}
-	if err := loadFixtures(s.Setup.Fixtures, s.SourceDir, server.projectID, sidecarsByApp); err != nil {
-		res.Error = fmt.Sprintf("load fixtures: %v", err)
-		return res
+		// Pre-upload fixtures before the agent starts. Fixtures call MCP
+		// tools on the peer apps directly, with file bytes as base64.
+		sidecarsByApp := map[string]string{appName: sidecarURL}
+		for _, d := range deps {
+			sidecarsByApp[d.name] = d.sidecar.URL
+		}
+		if err := loadFixtures(s.Setup.Fixtures, s.SourceDir, server.projectID, sidecarsByApp); err != nil {
+			res.Error = fmt.Sprintf("load fixtures: %v", err)
+			return res
+		}
+
+		mcpServers = append(mcpServers, map[string]any{
+			"name": appName, "transport": "http", "url": sidecarURL + "/mcp", "main_access": true,
+		})
+		for _, d := range deps {
+			mcpServers = append(mcpServers, map[string]any{
+				"name": d.name, "transport": "http", "url": d.sidecar.URL + "/mcp", "main_access": false,
+			})
+		}
 	}
 
 	// Pick the project the agent runs in. testServer fetched it at
@@ -615,30 +1022,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if mode == "" {
 		mode = "autonomous"
 	}
-	appName := manifestNameFromYAML(manifestYAML)
-	if appName == "" {
-		appName = "app"
-	}
-	mcpServers := []map[string]any{
-		{
-			"name":        appName,
-			"transport":   "http",
-			"url":         sidecar.URL + "/mcp",
-			"main_access": true,
-		},
-	}
-	// Dependent apps' MCP endpoints — main_access:false so their
-	// tools are visible to the agent but the unit under test stays
-	// the spotlight.
-	for _, d := range deps {
-		mcpServers = append(mcpServers, map[string]any{
-			"name":        d.name,
-			"transport":   "http",
-			"url":         d.sidecar.URL + "/mcp",
-			"main_access": false,
-		})
-	}
-	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, mcpServers)
+	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers)
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
@@ -660,7 +1044,11 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		return res
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	parentCtx := opts.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	// Start the agent FIRST — the events endpoint refuses with
@@ -675,10 +1063,8 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		res.Error = fmt.Sprintf("wait running: %v", err)
 		return res
 	}
-	// Now subscribe — minor race: events emitted in the brief window
-	// between status=running and SSE-open may be missed. Acceptable
-	// because the assert poller is the authoritative correctness check;
-	// telemetry is for token/cost accounting which trends over the run.
+	// Now subscribe. A persisted-telemetry poll below reconciles events
+	// emitted before the SSE connection opens or after a live stream drops.
 	telemetry, errCh, _ := streamTelemetry(ctx, server, inst.ID)
 
 	// Wait for the asserts to pass (early-stop) OR max_iterations OR
@@ -697,10 +1083,31 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	deadline := time.Now().Add(timeout)
 	assertPoll := time.NewTicker(500 * time.Millisecond)
 	defer assertPoll.Stop()
+	telemetryPoll := time.NewTicker(2 * time.Second)
+	defer telemetryPoll.Stop()
 	stopReason := ""
+	seenTelemetry := map[string]struct{}{}
 	probeNow := func() {
-		if probeAsserts(server, installed.InstallID, s.Assert, &res) {
+		if probeAsserts(server, installed.InstallID, sidecarURL, assertions, &res) {
 			stopReason = "asserts passed"
+		}
+	}
+	processTelemetry := func(ev telemetryEvent) {
+		if !acceptTelemetry(&res, ev, seenTelemetry) {
+			return
+		}
+		if opts.verbose {
+			fmt.Fprintf(os.Stderr, "  · %s\n", ev.Type)
+		} else if ev.Type == "tool.call" {
+			if name, ok := ev.Data["name"].(string); ok {
+				fmt.Fprintf(os.Stderr, "    · %d %s\n", res.Iterations, name)
+			}
+		}
+		if ev.Type == "tool.result" {
+			probeNow()
+		}
+		if res.Iterations >= maxIter {
+			stopReason = fmt.Sprintf("max_iterations (%d) reached", maxIter)
 		}
 	}
 	for time.Now().Before(deadline) {
@@ -711,30 +1118,29 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 				telemetry = nil
 				continue
 			}
-			applyTelemetry(&res, ev)
-			if opts.verbose {
-				fmt.Fprintf(os.Stderr, "  · %s\n", ev.Type)
-			} else if ev.Type == "tool.call" {
-				// Always show tool names live — gives the operator a
-				// sense of progress without -v's full event firehose.
-				if name, ok := ev.Data["name"].(string); ok {
-					fmt.Fprintf(os.Stderr, "    · %d %s\n", res.Iterations, name)
-				}
-			}
-			// On tool.result, probe immediately — the task may have
-			// just completed, no point waiting for the next tick.
-			if ev.Type == "tool.result" {
-				probeNow()
-			}
-			if res.Iterations >= maxIter {
-				stopReason = fmt.Sprintf("max_iterations (%d) reached", maxIter)
-			}
+			processTelemetry(ev)
 		case err := <-errCh:
 			if opts.verbose {
 				fmt.Fprintf(os.Stderr, "  telemetry err: %v\n", err)
 			}
 		case <-assertPoll.C:
 			probeNow()
+		case <-telemetryPoll.C:
+			events, fetchErr := fetchStoredTelemetry(server, inst.ID, start.Add(-time.Second))
+			if fetchErr != nil {
+				if opts.verbose {
+					fmt.Fprintf(os.Stderr, "  telemetry reconcile err: %v\n", fetchErr)
+				}
+				break
+			}
+			for _, ev := range events {
+				processTelemetry(ev)
+				if stopReason != "" {
+					break
+				}
+			}
+		case <-ctx.Done():
+			stopReason = "cancelled"
 		}
 		if stopReason != "" {
 			break
@@ -744,12 +1150,16 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if stopReason == "" {
 		stopReason = "timeout"
 	}
+	if stopReason == "cancelled" {
+		res.Error = "scenario cancelled"
+	}
 
 	// Stop the agent so the next scenario starts clean.
 	_ = stopInstanceAPI(server, inst.ID)
 
 	// Run asserts.
-	res.Asserts = runAsserts(server, installed.InstallID, s.Assert, &res)
+	res.ElapsedMs = time.Since(start).Milliseconds()
+	res.Asserts = runAsserts(server, installed.InstallID, sidecarURL, assertions, &res)
 
 	// Budget check.
 	res.BudgetOK = checkBudget(s.Budget, res.Tokens, res.CostUSD)
@@ -775,34 +1185,138 @@ type telemetryEvent struct {
 	Data map[string]any `json:"data"`
 }
 
+func acceptTelemetry(res *ScenarioResult, ev telemetryEvent, seen map[string]struct{}) bool {
+	raw, err := json.Marshal(ev)
+	if err == nil {
+		fingerprint := string(raw)
+		if _, duplicate := seen[fingerprint]; duplicate {
+			return false
+		}
+		seen[fingerprint] = struct{}{}
+	}
+	res.telemetry = append(res.telemetry, ev)
+	applyTelemetry(res, ev)
+	return true
+}
+
+func fetchStoredTelemetry(server *testServer, instanceID int64, since time.Time) ([]telemetryEvent, error) {
+	target := fmt.Sprintf("http://%s/api/telemetry", server.addr)
+	req, _ := http.NewRequest(http.MethodGet, target, nil)
+	query := req.URL.Query()
+	query.Set("agent_id", strconv.FormatInt(instanceID, 10))
+	query.Set("since", since.UTC().Format(time.RFC3339))
+	query.Set("limit", "1000")
+	req.URL.RawQuery = query.Encode()
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("query telemetry: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+	}
+	var events []telemetryEvent
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		return nil, err
+	}
+	// The query API returns newest-first. Apply oldest-first so tool
+	// calls precede results and iteration accounting follows execution.
+	for left, right := 0, len(events)-1; left < right; left, right = left+1, right-1 {
+		events[left], events[right] = events[right], events[left]
+	}
+	return events, nil
+}
+
 func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 	switch ev.Type {
 	case "llm.done":
 		res.Iterations++
-		if v, ok := ev.Data["tokens_in"].(float64); ok {
-			res.Tokens.Prompt += int(v)
+		res.Tokens.Prompt += int(numberValue(ev.Data["tokens_in"]))
+		res.Tokens.Completion += int(numberValue(ev.Data["tokens_out"]))
+		cost := numberValue(ev.Data["cost_usd"])
+		if cost == 0 {
+			cost = numberValue(ev.Data["cost"])
 		}
-		if v, ok := ev.Data["tokens_out"].(float64); ok {
-			res.Tokens.Completion += int(v)
-		}
-		if v, ok := ev.Data["cost"].(float64); ok {
-			res.CostUSD += v
+		res.CostUSD += cost
+		if message, _ := ev.Data["message"].(string); strings.TrimSpace(message) != "" {
+			res.AssistantResponses = append(res.AssistantResponses, message)
 		}
 		res.Tokens.Total = res.Tokens.Prompt + res.Tokens.Completion
 	case "tool.call":
 		name, _ := ev.Data["name"].(string)
-		res.ToolCalls = append(res.ToolCalls, ToolCallResult{Name: name})
+		res.ToolCalls = append(res.ToolCalls, ToolCallResult{
+			ID: stringMapValue(ev.Data, "id"), Name: name,
+			Args: stringMap(ev.Data["args"]), Reason: stringMapValue(ev.Data, "reason"),
+		})
 	case "tool.result":
 		name, _ := ev.Data["name"].(string)
-		ok, _ := ev.Data["ok"].(bool)
+		id := stringMapValue(ev.Data, "id")
+		ok, hasOK := ev.Data["success"].(bool)
+		if !hasOK {
+			ok, _ = ev.Data["ok"].(bool)
+		}
 		// Mark the most recent matching tool call as done.
 		for i := len(res.ToolCalls) - 1; i >= 0; i-- {
-			if res.ToolCalls[i].Name == name {
+			if (id != "" && res.ToolCalls[i].ID == id) || (id == "" && res.ToolCalls[i].Name == name) {
 				res.ToolCalls[i].OK = ok
+				res.ToolCalls[i].Ms = int64(numberValue(ev.Data["duration_ms"]))
+				res.ToolCalls[i].Result = stringMapValue(ev.Data, "result")
+				res.ToolCalls[i].ResultOriginalBytes = int(numberValue(ev.Data["result_original_bytes"]))
+				res.ToolCalls[i].ResultContextBytes = int(numberValue(ev.Data["result_context_bytes"]))
+				res.ToolCalls[i].ResultPreviewBytes = int(numberValue(ev.Data["result_preview_bytes"]))
+				res.ToolCalls[i].ResultImageBytes = int(numberValue(ev.Data["result_image_bytes"]))
+				res.ToolCalls[i].ResultTruncated, _ = ev.Data["result_truncated"].(bool)
 				break
 			}
 		}
 	}
+}
+
+func numberValue(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	default:
+		return 0
+	}
+}
+
+func stringMapValue(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+func stringMap(v any) map[string]string {
+	out := map[string]string{}
+	switch values := v.(type) {
+	case map[string]any:
+		for key, value := range values {
+			if s, ok := value.(string); ok {
+				out[key] = s
+			} else if raw, err := json.Marshal(value); err == nil {
+				out[key] = string(raw)
+			}
+		}
+	case map[string]string:
+		for key, value := range values {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ─── Asserts ───────────────────────────────────────────────────────
@@ -817,48 +1331,85 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 // the moment HTTP count became 1 (Bob created), before the agent
 // could call log_activity. The asserts collectively define
 // "complete" — any one passing isn't enough.
-func probeAsserts(server *testServer, installID int64, clauses []AssertClause, res *ScenarioResult) bool {
+func probeAsserts(server *testServer, installID int64, sidecarURL string, clauses []AssertClause, res *ScenarioResult) bool {
 	if len(clauses) == 0 {
 		return false
 	}
+	terminal := 0
 	for _, c := range clauses {
 		switch {
 		case c.HTTP != "":
-			if !assertHTTP(server, installID, c).OK {
+			terminal++
+			if !assertHTTP(server, installID, sidecarURL, c).OK {
 				return false
 			}
 		case c.ToolCalled != "":
+			terminal++
 			if !assertToolCalled(c, res).OK {
 				return false
 			}
-		case c.IterationsAtMost > 0:
-			// Trivially passes during the run; only meaningful at
-			// the final pass.
+		case c.ToolCalledWith != nil:
+			terminal++
+			if !assertToolCallMatch(c.ToolCalledWith, false, res).OK {
+				return false
+			}
+		case responsePattern(c) != "":
+			terminal++
+			if !assertResponseMatches(c, res).OK {
+				return false
+			}
+		case responseNeedle(c) != "":
+			terminal++
+			if !assertResponseContains(c, res).OK {
+				return false
+			}
+		case c.IterationsAtMost > 0, c.FinishedWithin != "", c.ToolNotCalled != "", c.ToolNotCalledWith != nil:
+			// Limits and negative assertions are final checks, not evidence
+			// that the requested work has completed.
 			continue
 		}
 	}
-	return true
+	return terminal > 0
 }
 
-func runAsserts(server *testServer, installID int64, clauses []AssertClause, res *ScenarioResult) []AssertResult {
+func runAsserts(server *testServer, installID int64, sidecarURL string, clauses []AssertClause, res *ScenarioResult) []AssertResult {
 	out := []AssertResult{}
 	for i, c := range clauses {
-		ar := AssertResult{Clause: assertLabel(i, c)}
+		ar := AssertResult{Clause: assertLabel(i, c), Category: c.Category}
 		switch {
 		case c.HTTP != "":
-			ar = assertHTTP(server, installID, c)
+			ar = assertHTTP(server, installID, sidecarURL, c)
 		case c.ToolCalled != "":
 			ar = assertToolCalled(c, res)
+		case c.ToolNotCalled != "":
+			ar = assertToolNotCalled(c, res)
+		case c.ToolCalledWith != nil:
+			ar = assertToolCallMatch(c.ToolCalledWith, false, res)
+		case c.ToolNotCalledWith != nil:
+			ar = assertToolCallMatch(c.ToolNotCalledWith, true, res)
+		case responsePattern(c) != "":
+			ar = assertResponseMatches(c, res)
+		case responseNeedle(c) != "":
+			ar = assertResponseContains(c, res)
+		case c.FinishedWithin != "":
+			limit, err := time.ParseDuration(c.FinishedWithin)
+			if err != nil {
+				ar = AssertResult{Clause: "finished_within " + c.FinishedWithin, OK: false, Note: err.Error()}
+			} else {
+				ar = AssertResult{Clause: "finished_within " + c.FinishedWithin,
+					OK: res.ElapsedMs <= limit.Milliseconds(), Got: time.Duration(res.ElapsedMs) * time.Millisecond, Want: limit}
+			}
 		case c.IterationsAtMost > 0:
 			ok := res.Iterations <= c.IterationsAtMost
 			ar = AssertResult{
 				Clause: fmt.Sprintf("iterations_at_most %d", c.IterationsAtMost),
-				OK: ok, Got: res.Iterations, Want: c.IterationsAtMost,
+				OK:     ok, Got: res.Iterations, Want: c.IterationsAtMost,
 			}
 		default:
 			ar.OK = false
 			ar.Note = "unrecognised assert clause"
 		}
+		ar.Category = c.Category
 		out = append(out, ar)
 	}
 	return out
@@ -871,26 +1422,61 @@ func assertLabel(i int, c AssertClause) string {
 	if c.ToolCalled != "" {
 		return "tool_called " + c.ToolCalled
 	}
+	if c.ToolNotCalled != "" {
+		return "tool_not_called " + c.ToolNotCalled
+	}
+	if c.ToolCalledWith != nil {
+		return "tool_called_with " + c.ToolCalledWith.Tool
+	}
+	if c.ToolNotCalledWith != nil {
+		return "tool_not_called_with " + c.ToolNotCalledWith.Tool
+	}
+	if responsePattern(c) != "" {
+		return "response_matches " + responsePattern(c)
+	}
+	if responseNeedle(c) != "" {
+		return "response_contains " + responseNeedle(c)
+	}
+	if c.FinishedWithin != "" {
+		return "finished_within " + c.FinishedWithin
+	}
+	if c.IterationsAtMost > 0 {
+		return fmt.Sprintf("iterations_at_most %d", c.IterationsAtMost)
+	}
 	return fmt.Sprintf("clause #%d", i+1)
 }
 
-func assertHTTP(server *testServer, installID int64, c AssertClause) AssertResult {
+func assertHTTP(server *testServer, installID int64, sidecarURL string, c AssertClause) AssertResult {
 	parts := strings.SplitN(c.HTTP, " ", 2)
 	if len(parts) != 2 {
 		return AssertResult{Clause: c.HTTP, OK: false, Note: "expected 'METHOD /path'"}
 	}
 	method, path := parts[0], parts[1]
-	// Translate /api/apps/<name>/* through the server's app proxy. We
-	// need the install_id query param so the panel-style routing works.
-	req, err := http.NewRequest(method, "http://"+server.addr+path, nil)
+	target := "http://" + server.addr + path
+	directSidecar := false
+	if sidecarURL != "" && strings.HasPrefix(path, "/api/apps/") {
+		rest := strings.TrimPrefix(path, "/api/apps/")
+		if slash := strings.Index(rest, "/"); slash >= 0 {
+			target = strings.TrimRight(sidecarURL, "/") + rest[slash:]
+		} else {
+			target = strings.TrimRight(sidecarURL, "/") + "/"
+		}
+		directSidecar = true
+	}
+	req, err := http.NewRequest(method, target, nil)
 	if err != nil {
 		return AssertResult{Clause: c.HTTP, OK: false, Note: err.Error()}
 	}
 	q := req.URL.Query()
-	q.Set("install_id", fmt.Sprintf("%d", installID))
+	if !directSidecar {
+		q.Set("install_id", fmt.Sprintf("%d", installID))
+	}
 	q.Set("project_id", server.projectID)
 	req.URL.RawQuery = q.Encode()
-	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	if !directSidecar {
+		req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	}
+	req.Header.Set("X-Apteva-Project-ID", server.projectID)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return AssertResult{Clause: c.HTTP, OK: false, Note: err.Error()}
@@ -905,18 +1491,106 @@ func assertHTTP(server *testServer, installID int64, c AssertClause) AssertResul
 		return AssertResult{Clause: c.HTTP, OK: false, Got: resp.StatusCode, Want: want,
 			Note: tcTruncate(string(body), 200)}
 	}
-	if c.ExpectCountAt != "" {
-		var data map[string]any
-		_ = json.Unmarshal(body, &data)
-		arr, _ := data[c.ExpectCountAt].([]any)
-		if len(arr) != c.ExpectCount {
-			return AssertResult{Clause: c.HTTP + " count " + c.ExpectCountAt,
-				OK: false, Got: len(arr), Want: c.ExpectCount}
+	if c.ExpectCountAt != "" || c.ExpectCount != nil || c.ExpectCountMin != 0 || c.ExpectCountMax != 0 {
+		var data any
+		if err := json.Unmarshal(body, &data); err != nil {
+			return AssertResult{Clause: c.HTTP, OK: false, Note: "invalid JSON response: " + err.Error()}
 		}
-		return AssertResult{Clause: c.HTTP + " count " + c.ExpectCountAt,
-			OK: true, Got: len(arr), Want: c.ExpectCount}
+		value := data
+		if c.ExpectCountAt != "" {
+			var ok bool
+			value, ok = jsonPathValue(data, c.ExpectCountAt)
+			if !ok {
+				return AssertResult{Clause: c.HTTP + " count " + c.ExpectCountAt, OK: false, Note: "JSON path not found"}
+			}
+		}
+		count, ok := valueCount(value)
+		if !ok {
+			return AssertResult{Clause: c.HTTP + " count " + c.ExpectCountAt, OK: false, Got: value, Note: "value is not countable"}
+		}
+		want, countOK := any("count assertion"), true
+		if c.ExpectCount != nil {
+			want, countOK = *c.ExpectCount, count == *c.ExpectCount
+		}
+		if c.ExpectCountMin > 0 {
+			want, countOK = fmt.Sprintf(">= %d", c.ExpectCountMin), count >= c.ExpectCountMin
+		}
+		if c.ExpectCountMax > 0 {
+			want, countOK = fmt.Sprintf("<= %d", c.ExpectCountMax), count <= c.ExpectCountMax
+		}
+		return AssertResult{Clause: c.HTTP + " count " + c.ExpectCountAt, OK: countOK, Got: count, Want: want}
+	}
+	if c.ExpectFieldAt != "" {
+		var data any
+		if err := json.Unmarshal(body, &data); err != nil {
+			return AssertResult{Clause: c.HTTP, OK: false, Note: "invalid JSON response: " + err.Error()}
+		}
+		value, ok := jsonPathValue(data, c.ExpectFieldAt)
+		if !ok {
+			return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt, OK: false, Note: "JSON path not found"}
+		}
+		if c.ExpectFieldContains != "" {
+			got := fmt.Sprint(value)
+			return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt, OK: strings.Contains(got, c.ExpectFieldContains), Got: got, Want: c.ExpectFieldContains}
+		}
+		if c.ExpectFieldMatches != "" {
+			re, err := regexp.Compile(c.ExpectFieldMatches)
+			if err != nil {
+				return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt, OK: false, Note: err.Error()}
+			}
+			got := fmt.Sprint(value)
+			return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt, OK: re.MatchString(got), Got: got, Want: c.ExpectFieldMatches}
+		}
+		return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt,
+			OK: valuesEqual(value, c.ExpectFieldEq), Got: value, Want: c.ExpectFieldEq}
 	}
 	return AssertResult{Clause: c.HTTP, OK: true, Got: resp.StatusCode}
+}
+
+func jsonPathValue(data any, path string) (any, bool) {
+	current := data
+	for _, segment := range strings.Split(path, ".") {
+		switch value := current.(type) {
+		case map[string]any:
+			var ok bool
+			current, ok = value[segment]
+			if !ok {
+				return nil, false
+			}
+		case []any:
+			index, err := strconv.Atoi(segment)
+			if err != nil || index < 0 || index >= len(value) {
+				return nil, false
+			}
+			current = value[index]
+		default:
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func valueCount(value any) (int, bool) {
+	switch v := value.(type) {
+	case []any:
+		return len(v), true
+	case map[string]any:
+		return len(v), true
+	case string:
+		return len(v), true
+	default:
+		return 0, false
+	}
+}
+
+func valuesEqual(got, want any) bool {
+	if reflect.DeepEqual(got, want) {
+		return true
+	}
+	if _, ok := got.(float64); ok {
+		return numberValue(got) == numberValue(want)
+	}
+	return fmt.Sprint(got) == fmt.Sprint(want)
 }
 
 // assertToolCalled matches by exact name OR by suffix-after-underscore.
@@ -929,13 +1603,163 @@ func assertToolCalled(c AssertClause, res *ScenarioResult) AssertResult {
 	for _, w := range wants {
 		w = strings.TrimSpace(w)
 		for _, t := range res.ToolCalls {
-			if t.Name == w || strings.HasSuffix(t.Name, "_"+w) {
+			if toolNameMatches(t.Name, w) {
 				return AssertResult{Clause: "tool_called " + c.ToolCalled, OK: true, Got: t.Name}
 			}
 		}
 	}
 	return AssertResult{Clause: "tool_called " + c.ToolCalled, OK: false,
 		Got: toolCallNames(res.ToolCalls)}
+}
+
+func assertToolNotCalled(c AssertClause, res *ScenarioResult) AssertResult {
+	wants := strings.Split(c.ToolNotCalled, "|")
+	for _, w := range wants {
+		w = strings.TrimSpace(w)
+		for _, t := range res.ToolCalls {
+			if toolNameMatches(t.Name, w) {
+				return AssertResult{Clause: "tool_not_called " + c.ToolNotCalled, OK: false, Got: t.Name}
+			}
+		}
+	}
+	return AssertResult{Clause: "tool_not_called " + c.ToolNotCalled, OK: true, Got: toolCallNames(res.ToolCalls)}
+}
+
+func assertToolCallMatch(want *ToolCallAssertion, negate bool, res *ScenarioResult) AssertResult {
+	label := "tool_called_with "
+	if negate {
+		label = "tool_not_called_with "
+	}
+	if want == nil || strings.TrimSpace(want.Tool) == "" {
+		return AssertResult{Clause: label, OK: false, Note: "tool is required"}
+	}
+	matches := make([]int, 0)
+	for i, call := range res.ToolCalls {
+		if toolNameMatches(call.Name, want.Tool) && toolCallArgsMatch(call, want.Args) {
+			matches = append(matches, i)
+		}
+	}
+	if negate {
+		return AssertResult{Clause: label + want.Tool, OK: len(matches) == 0, Got: len(matches), Want: 0}
+	}
+	ok := len(matches) > 0
+	wantCount := any(">= 1")
+	if want.Count != nil {
+		ok, wantCount = len(matches) == *want.Count, *want.Count
+	} else if want.MinCount > 0 {
+		ok, wantCount = len(matches) >= want.MinCount, fmt.Sprintf(">= %d", want.MinCount)
+	} else if want.MaxCount > 0 {
+		ok, wantCount = len(matches) <= want.MaxCount, fmt.Sprintf("<= %d", want.MaxCount)
+	}
+	if ok && want.Before != "" {
+		other := -1
+		for i, call := range res.ToolCalls {
+			if toolNameMatches(call.Name, want.Before) {
+				other = i
+				break
+			}
+		}
+		ok = other >= 0 && len(matches) > 0 && matches[0] < other
+		wantCount = "before " + want.Before
+	}
+	return AssertResult{Clause: label + want.Tool, OK: ok, Got: len(matches), Want: wantCount}
+}
+
+func toolNameMatches(actual, want string) bool {
+	want = strings.TrimSpace(want)
+	if strings.Contains(want, "|") {
+		for _, alternative := range strings.Split(want, "|") {
+			if toolNameMatches(actual, alternative) {
+				return true
+			}
+		}
+		return false
+	}
+	return actual == want || strings.HasSuffix(actual, "_"+want)
+}
+
+func toolArgsMatch(actual map[string]string, wants map[string]any) bool {
+	for key, want := range wants {
+		got, ok := actual[key]
+		if !ok {
+			return false
+		}
+		if fmt.Sprint(want) == got {
+			continue
+		}
+		var decoded any
+		if json.Unmarshal([]byte(got), &decoded) != nil || !valuesEqual(decoded, want) {
+			return false
+		}
+	}
+	return true
+}
+
+func toolCallArgsMatch(call ToolCallResult, wants map[string]any) bool {
+	if toolArgsMatch(call.Args, wants) {
+		return true
+	}
+	action, ok := compatibilityToolAction(call.Name)
+	if !ok || call.Args["action"] != "" {
+		return false
+	}
+	effective := make(map[string]string, len(call.Args)+1)
+	for key, value := range call.Args {
+		effective[key] = value
+	}
+	effective["action"] = action
+	return toolArgsMatch(effective, wants)
+}
+
+func compatibilityToolAction(name string) (string, bool) {
+	for suffix, action := range map[string]string{
+		"browser_open": "open", "browser_close": "close", "browser_screenshot": "screenshot",
+	} {
+		if name == suffix || strings.HasSuffix(name, "_"+suffix) {
+			return action, true
+		}
+	}
+	return "", false
+}
+
+func responseNeedle(c AssertClause) string {
+	if c.AgentResponseContains != "" {
+		return c.AgentResponseContains
+	}
+	return c.ResponseContains
+}
+
+func responsePattern(c AssertClause) string {
+	if c.AgentResponseMatches != "" {
+		return c.AgentResponseMatches
+	}
+	return c.ResponseMatches
+}
+
+func assertResponseMatches(c AssertClause, res *ScenarioResult) AssertResult {
+	pattern := responsePattern(c)
+	clause := "response_matches " + pattern
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return AssertResult{Clause: clause, OK: false, Want: pattern, Note: "invalid response regex: " + err.Error()}
+	}
+	joined := strings.Join(res.AssistantResponses, "\n")
+	if compiled.MatchString(joined) {
+		return AssertResult{Clause: clause, OK: true, Got: "matched", Want: pattern}
+	}
+	return AssertResult{Clause: clause, OK: false, Got: tcTruncate(joined, 300), Want: pattern}
+}
+
+func assertResponseContains(c AssertClause, res *ScenarioResult) AssertResult {
+	needle := responseNeedle(c)
+	joined := strings.Join(res.AssistantResponses, "\n")
+	for _, alternative := range strings.Split(needle, "|") {
+		alternative = strings.Trim(strings.TrimSpace(alternative), `"'`)
+		if alternative != "" && strings.Contains(strings.ToLower(joined), strings.ToLower(alternative)) {
+			return AssertResult{Clause: "response_contains " + needle, OK: true, Got: alternative}
+		}
+	}
+	return AssertResult{Clause: "response_contains " + needle, OK: false, Got: tcTruncate(joined, 300), Want: needle}
 }
 
 func toolCallNames(tcs []ToolCallResult) []string {
@@ -1009,7 +1833,7 @@ func installDeps(server *testServer, appDir string, manifestYAML []byte) ([]depB
 			rollback(out)
 			return nil, fmt.Errorf("install dep %q: %w", name, err)
 		}
-		sc, err := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, "http://"+server.addr)
+		sc, err := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, nil, "http://"+server.addr)
 		if err != nil {
 			uninstallApp(server, installed.InstallID)
 			rollback(out)
@@ -1164,6 +1988,111 @@ type installResp struct {
 	AppID     int64 `json:"app_id"`
 }
 
+func findExistingAppInstall(server *testServer, appName string) (*installResp, error) {
+	req, _ := http.NewRequest(http.MethodGet, "http://"+server.addr+"/api/apps", nil)
+	query := req.URL.Query()
+	query.Set("project_id", server.projectID)
+	req.URL.RawQuery = query.Encode()
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list apps: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+	}
+	var apps []struct {
+		InstallID int64  `json:"install_id"`
+		AppID     int64  `json:"app_id"`
+		Name      string `json:"name"`
+		ProjectID string `json:"project_id"`
+		Status    string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apps); err != nil {
+		return nil, fmt.Errorf("decode app list: %w", err)
+	}
+	var fallback *installResp
+	for _, app := range apps {
+		if !strings.EqualFold(strings.TrimSpace(app.Name), strings.TrimSpace(appName)) || app.Status != "running" {
+			continue
+		}
+		candidate := &installResp{InstallID: app.InstallID, AppID: app.AppID}
+		if app.ProjectID == server.projectID {
+			return candidate, nil
+		}
+		if app.ProjectID == "" {
+			fallback = candidate
+		}
+	}
+	if fallback != nil {
+		return fallback, nil
+	}
+	return nil, fmt.Errorf("no running %q install is visible in project %s", appName, server.projectID)
+}
+
+type scopedAppMCPRelay struct {
+	URL      string
+	server   *http.Server
+	listener net.Listener
+}
+
+func startScopedAppMCPRelay(server *testServer, appName string, installID int64) (*scopedAppMCPRelay, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	target := fmt.Sprintf("http://%s/api/apps/%s/mcp", server.addr, url.PathEscape(appName))
+	handler := http.HandlerFunc(func(w http.ResponseWriter, incoming *http.Request) {
+		request, err := http.NewRequestWithContext(incoming.Context(), incoming.Method, target, incoming.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		request.Header = incoming.Header.Clone()
+		request.Header.Del("Authorization")
+		request.Header.Del("Cookie")
+		request.Header.Del("X-Apteva-Internal-App-Caller-ID")
+		request.Header.Set("Authorization", "Bearer "+server.apiKey)
+		request.Header.Set("X-Apteva-Project-ID", server.projectID)
+		query := incoming.URL.Query()
+		query.Set("install_id", strconv.FormatInt(installID, 10))
+		query.Set("project_id", server.projectID)
+		request.URL.RawQuery = query.Encode()
+
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer response.Body.Close()
+		for key, values := range response.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, response.Body)
+	})
+	httpServer := &http.Server{Handler: handler}
+	relay := &scopedAppMCPRelay{
+		URL: "http://" + listener.Addr().String(), server: httpServer, listener: listener,
+	}
+	go func() { _ = httpServer.Serve(listener) }()
+	return relay, nil
+}
+
+func (relay *scopedAppMCPRelay) Close() {
+	if relay == nil || relay.server == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = relay.server.Shutdown(ctx)
+	_ = relay.listener.Close()
+}
+
 func installApp(server *testServer, manifestYAML []byte, projectID string, config map[string]string) (*installResp, error) {
 	body := map[string]any{
 		"manifest_yaml": string(manifestYAML),
@@ -1215,13 +2144,16 @@ type instanceResp struct {
 	ID int64 `json:"id"`
 }
 
-func tcCreateInstance(server *testServer, projectID, name, directive, mode string, mcpServers []map[string]any) (*instanceResp, error) {
+func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider string, mcpServers []map[string]any) (*instanceResp, error) {
 	// config_json carries the agent's MCP servers + any other config
 	// the core needs at boot. The platform writes this to the
 	// instance dir's config.json; the core picks it up on start.
 	config := map[string]any{}
 	if len(mcpServers) > 0 {
 		config["mcp_servers"] = mcpServers
+	}
+	if strings.TrimSpace(provider) != "" {
+		config["default_provider"] = normalizeProviderName(provider)
 	}
 	configJSON, _ := json.Marshal(config)
 
@@ -1233,7 +2165,7 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode strin
 		"project_id":            projectID,
 		"start":                 false, // we start it ourselves so SSE is wired up first
 		"config":                string(configJSON),
-		"include_apteva_server": &includeFalse, // lean instance — only the app under test
+		"include_apteva_server": &includeFalse,
 		"include_channels":      &includeFalse,
 	}
 	out := &instanceResp{}
@@ -1439,7 +2371,7 @@ func (s *localSidecar) Stop() {
 	}
 }
 
-func spawnLocalSidecar(appDir string, installID int64, projectID string, config map[string]string, gatewayURL string) (*localSidecar, error) {
+func spawnLocalSidecar(appDir string, installID int64, projectID string, config, extraEnv map[string]string, gatewayURL string) (*localSidecar, error) {
 	abs, err := filepath.Abs(appDir)
 	if err != nil {
 		return nil, err
@@ -1480,6 +2412,9 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config 
 		"APTEVA_GATEWAY_URL="+gatewayURL,
 		"DB_PATH="+filepath.Join(dataDir, "app.db"),
 	)
+	for key, value := range extraEnv {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 	logFile, _ := os.Create(filepath.Join(dataDir, "sidecar.log"))
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -1614,6 +2549,65 @@ func tcTruncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
+func writeFailureArtifacts(opts testOpts, server *testServer, scenario Scenario, result ScenarioResult) string {
+	if strings.TrimSpace(opts.artifactsDir) == "" {
+		return ""
+	}
+	root, err := filepath.Abs(opts.artifactsDir)
+	if err != nil {
+		root = opts.artifactsDir
+	}
+	name := sanitizeArtifactName(scenario.Name)
+	dir := filepath.Join(root, fmt.Sprintf("%s-run-%d-%s", name, result.Run, time.Now().Format("20060102T150405.000000000")))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "  artifact error: %v\n", err)
+		return ""
+	}
+
+	if body, err := json.MarshalIndent(result, "", "  "); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, "result.json"), append(body, '\n'), 0644)
+	}
+	if body, err := yaml.Marshal(scenario); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, "scenario.yaml"), body, 0644)
+	}
+	var events bytes.Buffer
+	encoder := json.NewEncoder(&events)
+	for _, event := range result.telemetry {
+		_ = encoder.Encode(event)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "telemetry.jsonl"), events.Bytes(), 0644)
+	if server.dataDir != "" {
+		copyFileTail(filepath.Join(server.dataDir, "server.log"), filepath.Join(dir, "server.log"), 2<<20)
+	}
+	fmt.Fprintf(os.Stderr, "  failure artifacts: %s\n", dir)
+	return dir
+}
+
+func sanitizeArtifactName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = regexp.MustCompile(`[^a-z0-9._-]+`).ReplaceAllString(value, "-")
+	value = strings.Trim(value, "-.")
+	if value == "" {
+		return "scenario"
+	}
+	return value
+}
+
+func copyFileTail(source, destination string, maxBytes int64) {
+	file, err := os.Open(source)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	if info, err := file.Stat(); err == nil && info.Size() > maxBytes {
+		_, _ = file.Seek(info.Size()-maxBytes, io.SeekStart)
+	}
+	body, err := io.ReadAll(file)
+	if err == nil {
+		_ = os.WriteFile(destination, body, 0644)
+	}
+}
+
 func printSummary(w io.Writer, r ScenarioResult, verbose bool) {
 	mark := "✓"
 	if !r.OK {
@@ -1621,6 +2615,10 @@ func printSummary(w io.Writer, r ScenarioResult, verbose bool) {
 	}
 	fmt.Fprintf(w, "%s %s · %dms · %d iter · %d tokens · $%.4f\n",
 		mark, r.Name, r.ElapsedMs, r.Iterations, r.Tokens.Total, r.CostUSD)
+	if r.RunCount > 1 && len(r.Attempts) > 0 {
+		fmt.Fprintf(w, "    pass rate: %d/%d (%.0f%%), required %.0f%%\n",
+			r.PassCount, r.RunCount, r.PassRate*100, r.RequiredPassRate*100)
+	}
 	if r.Error != "" {
 		fmt.Fprintf(w, "    error: %s\n", r.Error)
 	}
