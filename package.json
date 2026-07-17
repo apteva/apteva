@@ -1,6 +1,6 @@
 {
   "name": "apteva",
-  "version": "0.25.11",
+  "version": "0.25.12",
   "description": "AI agent platform with multi-thread orchestration, MCP integrations, and dashboard",
   "bin": {
     "apteva": "./cli.js"

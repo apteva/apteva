@@ -190,6 +190,7 @@ type ToolCallResult struct {
 	Reason              string            `json:"reason,omitempty"`
 	Ms                  int64             `json:"ms"`
 	OK                  bool              `json:"ok"`
+	Completed           bool              `json:"completed"`
 	Result              string            `json:"result,omitempty"`
 	ResultOriginalBytes int               `json:"result_original_bytes,omitempty"`
 	ResultContextBytes  int               `json:"result_context_bytes,omitempty"`
@@ -493,6 +494,21 @@ func expandScenarioEnvironment(s *Scenario) error {
 		}
 		return value
 	}
+	replaceScenarioValues(s, replace)
+	return nil
+}
+
+func expandScenarioRuntime(s *Scenario, values map[string]string) {
+	replace := func(value string) string {
+		for name, replacement := range values {
+			value = strings.ReplaceAll(value, "${"+name+"}", replacement)
+		}
+		return value
+	}
+	replaceScenarioValues(s, replace)
+}
+
+func replaceScenarioValues(s *Scenario, replace func(string) string) {
 	s.Directive = replace(s.Directive)
 	for _, group := range [][]AssertClause{s.Assert, s.OutcomeAssert, s.TrajectoryAssert} {
 		for i := range group {
@@ -512,7 +528,6 @@ func expandScenarioEnvironment(s *Scenario) error {
 			}
 		}
 	}
-	return nil
 }
 
 func replaceStringValue(value any, replace func(string) string) any {
@@ -887,7 +902,6 @@ func registerTestUser(addr string) (string, error) {
 func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioResult) {
 	res = ScenarioResult{Name: s.Name, BudgetOK: true}
 	start := time.Now()
-	assertions := scenarioAssertions(s)
 	// Named return so the deferred elapsed-time write actually
 	// reaches the caller. Closures over a value-type local don't
 	// propagate to a value-type return.
@@ -1011,6 +1025,14 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// bootstrap so every scenario shares the same one — keeps the
 	// CRM's per-project data isolated by run, not per-scenario.
 	projectID := server.projectID
+	expandScenarioRuntime(&s, map[string]string{
+		"APTEVA_TEST_APP_URL":    sidecarURL,
+		"APTEVA_TEST_SERVER_URL": "http://" + server.addr,
+		"APTEVA_TEST_PROJECT_ID": projectID,
+		"APTEVA_TEST_APP_NAME":   appName,
+		"APTEVA_TEST_INSTALL_ID": strconv.FormatInt(installed.InstallID, 10),
+	})
+	assertions := scenarioAssertions(s)
 
 	// Create + start the agent. Pass the CRM sidecar's /mcp endpoint
 	// as a system MCP server in the instance config so the agent's
@@ -1106,7 +1128,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		if ev.Type == "tool.result" {
 			probeNow()
 		}
-		if res.Iterations >= maxIter {
+		if scenarioIterationLimitReached(&res, maxIter) {
 			stopReason = fmt.Sprintf("max_iterations (%d) reached", maxIter)
 		}
 	}
@@ -1260,6 +1282,7 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 		// Mark the most recent matching tool call as done.
 		for i := len(res.ToolCalls) - 1; i >= 0; i-- {
 			if (id != "" && res.ToolCalls[i].ID == id) || (id == "" && res.ToolCalls[i].Name == name) {
+				res.ToolCalls[i].Completed = true
 				res.ToolCalls[i].OK = ok
 				res.ToolCalls[i].Ms = int64(numberValue(ev.Data["duration_ms"]))
 				res.ToolCalls[i].Result = stringMapValue(ev.Data, "result")
@@ -1272,6 +1295,18 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 			}
 		}
 	}
+}
+
+func scenarioIterationLimitReached(res *ScenarioResult, maxIterations int) bool {
+	if res == nil || maxIterations <= 0 || res.Iterations < maxIterations {
+		return false
+	}
+	for _, call := range res.ToolCalls {
+		if !call.Completed {
+			return false
+		}
+	}
+	return true
 }
 
 func numberValue(v any) float64 {
@@ -2356,9 +2391,10 @@ func streamTelemetry(ctx context.Context, server *testServer, instanceID int64) 
 // ─── Local sidecar ─────────────────────────────────────────────────
 
 type localSidecar struct {
-	URL  string
-	cmd  *exec.Cmd
-	stop func()
+	URL     string
+	cmd     *exec.Cmd
+	dataDir string
+	binPath string
 }
 
 func (s *localSidecar) Stop() {
@@ -2366,8 +2402,15 @@ func (s *localSidecar) Stop() {
 		_ = s.cmd.Process.Kill()
 		_ = s.cmd.Wait()
 	}
-	if s.stop != nil {
-		s.stop()
+	if s.binPath != "" {
+		_ = os.Remove(s.binPath)
+	}
+	if s.dataDir != "" {
+		if os.Getenv("APTEVA_TEST_KEEP") != "" {
+			fmt.Fprintf(os.Stderr, "kept sidecar data: %s\n", s.dataDir)
+		} else {
+			_ = os.RemoveAll(s.dataDir)
+		}
 	}
 }
 
@@ -2377,10 +2420,12 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config,
 		return nil, err
 	}
 	binPath := filepath.Join(abs, "_test_sidecar_bin")
-	build := exec.Command("go", "build", "-o", binPath, ".")
-	build.Dir = abs
-	if out, err := build.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("go build %s: %s", appDir, string(out))
+	buildOutput, buildErr := buildLocalSidecarBinary(abs, binPath, false)
+	if buildErr != nil && strings.Contains(string(buildOutput), "not one of the workspace modules listed in go.work") {
+		buildOutput, buildErr = buildLocalSidecarBinary(abs, binPath, true)
+	}
+	if buildErr != nil {
+		return nil, fmt.Errorf("go build %s: %s", appDir, string(buildOutput))
 	}
 	port, err := pickFreePort()
 	if err != nil {
@@ -2427,10 +2472,16 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config,
 		_ = cmd.Process.Kill()
 		return nil, err
 	}
-	return &localSidecar{URL: url, cmd: cmd, stop: func() {
-		_ = os.RemoveAll(dataDir)
-		_ = os.Remove(binPath)
-	}}, nil
+	return &localSidecar{URL: url, cmd: cmd, dataDir: dataDir, binPath: binPath}, nil
+}
+
+func buildLocalSidecarBinary(dir, binPath string, disableWorkspace bool) ([]byte, error) {
+	build := exec.Command("go", "build", "-o", binPath, ".")
+	build.Dir = dir
+	if disableWorkspace {
+		build.Env = append(os.Environ(), "GOWORK=off")
+	}
+	return build.CombinedOutput()
 }
 
 // ─── Misc ──────────────────────────────────────────────────────────

@@ -44,6 +44,28 @@ func TestExpandScenarioEnvironmentRequiresValue(t *testing.T) {
 	}
 }
 
+func TestExpandScenarioRuntime(t *testing.T) {
+	scenario := Scenario{
+		Directive: "Open ${APTEVA_TEST_APP_URL}/test/form in ${APTEVA_TEST_PROJECT_ID}",
+		OutcomeAssert: []AssertClause{{
+			HTTP:          "GET ${APTEVA_TEST_APP_URL}/test/form/status",
+			ExpectFieldEq: "${APTEVA_TEST_PROJECT_ID}",
+		}},
+		TrajectoryAssert: []AssertClause{{ToolCalledWith: &ToolCallAssertion{
+			Tool: "browser_session", Args: map[string]any{"url": "${APTEVA_TEST_APP_URL}/test/form"},
+		}}},
+	}
+	expandScenarioRuntime(&scenario, map[string]string{
+		"APTEVA_TEST_APP_URL": "http://127.0.0.1:9876", "APTEVA_TEST_PROJECT_ID": "project-test",
+	})
+	if scenario.Directive != "Open http://127.0.0.1:9876/test/form in project-test" ||
+		scenario.OutcomeAssert[0].HTTP != "GET http://127.0.0.1:9876/test/form/status" ||
+		scenario.OutcomeAssert[0].ExpectFieldEq != "project-test" ||
+		scenario.TrajectoryAssert[0].ToolCalledWith.Args["url"] != "http://127.0.0.1:9876/test/form" {
+		t.Fatalf("runtime values were not expanded: %+v", scenario)
+	}
+}
+
 func TestApplyTelemetryRetainsToolTrajectory(t *testing.T) {
 	result := &ScenarioResult{}
 	applyTelemetry(result, telemetryEvent{Type: "tool.call", Data: map[string]any{
@@ -67,7 +89,7 @@ func TestApplyTelemetryRetainsToolTrajectory(t *testing.T) {
 		t.Fatalf("tool calls = %d", len(result.ToolCalls))
 	}
 	call := result.ToolCalls[0]
-	if call.ID != "call-1" || call.Args["action"] != "navigate" || !call.OK || call.Ms != 42 {
+	if call.ID != "call-1" || call.Args["action"] != "navigate" || !call.Completed || !call.OK || call.Ms != 42 {
 		t.Fatalf("tool call = %+v", call)
 	}
 	if !call.ResultTruncated || call.ResultOriginalBytes != 1200 || call.ResultImageBytes != 200 {
@@ -75,6 +97,23 @@ func TestApplyTelemetryRetainsToolTrajectory(t *testing.T) {
 	}
 	if result.Tokens.Total != 120 || result.CostUSD != 0.004 || result.AssistantResponses[0] != "Navigation complete." {
 		t.Fatalf("LLM aggregation = %+v", result)
+	}
+}
+
+func TestIterationLimitWaitsForInflightToolResult(t *testing.T) {
+	result := &ScenarioResult{}
+	applyTelemetry(result, telemetryEvent{Type: "tool.call", Data: map[string]any{
+		"id": "close-1", "name": "computer_browser_close",
+	}})
+	applyTelemetry(result, telemetryEvent{Type: "llm.done", Data: map[string]any{}})
+	if scenarioIterationLimitReached(result, 1) {
+		t.Fatal("iteration limit stopped before the in-flight close result")
+	}
+	applyTelemetry(result, telemetryEvent{Type: "tool.result", Data: map[string]any{
+		"id": "close-1", "name": "computer_browser_close", "success": true,
+	}})
+	if !scenarioIterationLimitReached(result, 1) {
+		t.Fatal("iteration limit did not stop after the close result")
 	}
 }
 
