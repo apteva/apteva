@@ -29,6 +29,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-core ./cmd/apteva-core
 # Build server
 WORKDIR /build/server
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-server .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-mcp-runner ./cmd/apteva-mcp-runner
 
 # ─── Runtime ───
 FROM alpine:3.21
@@ -36,6 +37,7 @@ RUN apk add --no-cache ca-certificates chromium
 
 COPY --from=builder /apteva-core /usr/local/bin/apteva-core
 COPY --from=builder /apteva-server /usr/local/bin/apteva-server
+COPY --from=builder /apteva-mcp-runner /usr/local/bin/apteva-mcp-runner
 
 VOLUME /data
 WORKDIR /data

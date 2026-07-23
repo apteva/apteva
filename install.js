@@ -45,7 +45,7 @@ const RELEASES_DIR = path.join(APTEVA_HOME, "releases");
 const VERSION_DIR = path.join(VERSIONS_DIR, VERSION);
 const CURRENT_LINK = path.join(BIN_DIR, "current");
 
-const BIN_NAMES = ["apteva", "apteva-server", "apteva-core"];
+const BIN_NAMES = ["apteva", "apteva-server", "apteva-core", "apteva-mcp-runner"];
 
 function download(url) {
   return new Promise((resolve, reject) => {

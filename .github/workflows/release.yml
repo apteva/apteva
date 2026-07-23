@@ -206,6 +206,7 @@ jobs:
           echo "Building server..."
           cd server
           go build -ldflags="$LDFLAGS" -o "../dist/apteva-server${EXT}" .
+          go build -ldflags="$LDFLAGS" -o "../dist/apteva-mcp-runner${EXT}" ./cmd/apteva-mcp-runner
           cd ..
 
           echo "Building cli..."

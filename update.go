@@ -249,7 +249,7 @@ func cmdUpdate(args []string) int {
 		return 1
 	}
 
-	// 3. Sanity check: the three binaries must be present.
+	// 3. Sanity check: every versioned binary must be present.
 	for _, name := range binNames {
 		p := filepath.Join(target, name)
 		if _, err := os.Stat(p); err != nil {

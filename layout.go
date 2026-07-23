@@ -72,7 +72,7 @@ func versionDir(version string) string {
 // Order matters for symlink rebuild: apteva first so foreground
 // users get an executable shim even if a partial extract didn't
 // produce the others.
-var binNames = []string{"apteva", "apteva-server", "apteva-core"}
+var binNames = []string{"apteva", "apteva-server", "apteva-core", "apteva-mcp-runner"}
 
 // resolveBin returns the path inside binDir() for a given binary
 // name — e.g. resolveBin("apteva-server") → ~/.apteva/bin/apteva-server.
@@ -140,9 +140,9 @@ func ensureLayout() error {
 // pointSymlinks atomically (re)points the layout's symlinks at the
 // given version. Sequence:
 //
-//   1. Write a temp symlink "current.tmp" → ../versions/<v>
-//   2. os.Rename the temp onto current (POSIX-atomic on same fs)
-//   3. Recreate each per-binary shim: bin/<name> → current/<name>
+//  1. Write a temp symlink "current.tmp" → ../versions/<v>
+//  2. os.Rename the temp onto current (POSIX-atomic on same fs)
+//  3. Recreate each per-binary shim: bin/<name> → current/<name>
 //
 // Step 2 is the load-bearing atomic flip. Step 3 just keeps the
 // per-binary shims valid; they don't need to be atomic because they
@@ -444,7 +444,7 @@ func copyFileWithMode(src, dst string) error {
 
 const rollbackThreshold = 3
 
-func bootAttemptsFile() string  { return filepath.Join(aptevaDir(), "boot-attempts") }
+func bootAttemptsFile() string    { return filepath.Join(aptevaDir(), "boot-attempts") }
 func lastGoodVersionFile() string { return filepath.Join(aptevaDir(), "last-good-version") }
 
 // readBootAttempts returns the count, defaulting to 0 on any error.

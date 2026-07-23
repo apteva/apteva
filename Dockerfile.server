@@ -82,6 +82,8 @@ RUN . /tmp/versions.env && \
         -X main.IntegrationsVersion=$INTEGRATIONS_VERSION \
         -X main.CoreVersion=$APTEVA_VERSION" \
       -o /apteva-server .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" \
+      -o /apteva-mcp-runner ./cmd/apteva-mcp-runner
 
 FROM alpine:3.21
 
@@ -89,6 +91,7 @@ RUN apk add --no-cache ca-certificates
 
 COPY --from=go-builder /apteva-core /usr/local/bin/apteva-core
 COPY --from=go-builder /apteva-server /usr/local/bin/apteva-server
+COPY --from=go-builder /apteva-mcp-runner /usr/local/bin/apteva-mcp-runner
 
 ENV PORT=5280
 ENV APTEVA_BIND=0.0.0.0
