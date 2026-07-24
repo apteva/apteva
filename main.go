@@ -31,34 +31,52 @@ const defaultServerPort = 5280
 var Version = "dev"
 
 func main() {
-	// Run the v0.11.x → v0.12+ layout migration once per invocation
-	// before anything reads aptevaDir(). Idempotent + cheap; the
-	// only path that does real work is the first invocation after
-	// upgrading from a pre-v0.12 release. See layout.go for the
-	// shape of the move.
-	_ = migrateLegacyLayout()
-
-	// Subcommand dispatch — `apteva <subcommand> [args]`. Only the
-	// known subcommands are intercepted; everything else falls through
-	// to the default behaviour (run as a normal client / TUI).
-	if len(os.Args) >= 2 {
-		switch os.Args[1] {
-		case "test":
-			os.Exit(cmdTest(os.Args[2:]))
-		case "update":
-			os.Exit(cmdUpdate(os.Args[2:]))
-		case "service":
-			os.Exit(cmdService(os.Args[2:]))
-		case "agents":
-			os.Exit(cmdAgents(os.Args[2:]))
-		case "versions":
-			os.Exit(cmdVersions(os.Args[2:]))
-		case "rollback":
-			os.Exit(cmdRollback(os.Args[2:]))
-		case "version", "--version", "-v":
-			fmt.Printf("apteva %s\n", Version)
-			os.Exit(0)
+	invocation, err := parseCLIInvocation(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "apteva: %v\nRun 'apteva --help' for usage.\n", err)
+		os.Exit(2)
+	}
+	if invocation.mode == cliModeVersion {
+		fmt.Printf("apteva %s\n", Version)
+		return
+	}
+	if invocation.mode != cliModeRun {
+		// Known subcommands retain the legacy layout migration, but unknown
+		// commands have already exited without touching local state.
+		_ = migrateLegacyLayout()
+		switch invocation.mode {
+		case cliModeTest:
+			os.Exit(cmdTest(invocation.args))
+		case cliModeUpdate:
+			os.Exit(cmdUpdate(invocation.args))
+		case cliModeService:
+			os.Exit(cmdService(invocation.args))
+		case cliModeAgents:
+			os.Exit(cmdAgents(invocation.args))
+		case cliModeVersions:
+			os.Exit(cmdVersions(invocation.args))
+		case cliModeRollback:
+			os.Exit(cmdRollback(invocation.args))
 		}
+	}
+
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprintln(out, `Usage:
+  apteva [flags]
+  apteva <command> [arguments]
+
+Commands:
+  test       Run agent/provider scenarios
+  update     Update Apteva
+  service    Manage the system service
+  agents     Manage agent runtime rollouts
+  versions   List installed versions
+  rollback   Roll back to an installed version
+  version    Print the CLI version
+
+Flags:`)
+		flag.PrintDefaults()
 	}
 
 	themeName := flag.String("theme", "orange", "color theme: orange, amber, white")
@@ -78,6 +96,10 @@ func main() {
 	port := flag.Int("port", 0, "server port (overrides ServerPort from apteva.json; default 5280)")
 	flag.Parse()
 	_ = headless // accepted for backward compat; default is already dashboard mode
+	if flag.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "apteva: unknown command %q\nRun 'apteva --help' for usage.\n", flag.Arg(0))
+		os.Exit(2)
+	}
 
 	// --data-dir wins over $APTEVA_HOME for this run, then propagates as
 	// APTEVA_HOME so every aptevaDir() call (config load, log init,
@@ -91,6 +113,12 @@ func main() {
 		}
 		os.Setenv("APTEVA_HOME", abs)
 	}
+
+	// Run the v0.11.x → v0.12+ layout migration only after the invocation
+	// has been fully validated and --data-dir has selected the intended
+	// installation. Rejected commands and informational flags stay
+	// side-effect free.
+	_ = migrateLegacyLayout()
 
 	initCLILog()
 
