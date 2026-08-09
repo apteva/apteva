@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestExpandScenarioEnvironment(t *testing.T) {
@@ -47,6 +51,7 @@ func TestExpandScenarioEnvironmentRequiresValue(t *testing.T) {
 func TestExpandScenarioRuntime(t *testing.T) {
 	scenario := Scenario{
 		Directive: "Open ${APTEVA_TEST_APP_URL}/test/form in ${APTEVA_TEST_PROJECT_ID}",
+		Prompt:    "Continue in ${APTEVA_TEST_CONVERSATION_THREAD_ID}",
 		OutcomeAssert: []AssertClause{{
 			HTTP:          "GET ${APTEVA_TEST_APP_URL}/test/form/status",
 			ExpectFieldEq: "${APTEVA_TEST_PROJECT_ID}",
@@ -57,12 +62,27 @@ func TestExpandScenarioRuntime(t *testing.T) {
 	}
 	expandScenarioRuntime(&scenario, map[string]string{
 		"APTEVA_TEST_APP_URL": "http://127.0.0.1:9876", "APTEVA_TEST_PROJECT_ID": "project-test",
+		"APTEVA_TEST_CONVERSATION_THREAD_ID": "chat-conv-test",
+		"APTEVA_TEST_AGENT_ID":               "42",
 	})
 	if scenario.Directive != "Open http://127.0.0.1:9876/test/form in project-test" ||
+		scenario.Prompt != "Continue in chat-conv-test" ||
 		scenario.OutcomeAssert[0].HTTP != "GET http://127.0.0.1:9876/test/form/status" ||
 		scenario.OutcomeAssert[0].ExpectFieldEq != "project-test" ||
 		scenario.TrajectoryAssert[0].ToolCalledWith.Args["url"] != "http://127.0.0.1:9876/test/form" {
 		t.Fatalf("runtime values were not expanded: %+v", scenario)
+	}
+}
+
+func TestToolCallAssertionExactNameDoesNotMatchSuffix(t *testing.T) {
+	result := &ScenarioResult{ToolCalls: []ToolCallResult{{Name: "channels_send", ThreadID: "chat-1"}}}
+	assertion := &ToolCallAssertion{Tool: "send", Exact: true, ThreadID: "chat-1"}
+	if got := assertToolCallMatch(assertion, true, result); !got.OK {
+		t.Fatalf("exact negative assertion matched channels_send: %+v", got)
+	}
+	assertion.Exact = false
+	if got := assertToolCallMatch(assertion, true, result); got.OK {
+		t.Fatalf("suffix-compatible assertion did not match channels_send: %+v", got)
 	}
 }
 
@@ -193,6 +213,52 @@ func TestToolArgumentAndNegativeAssertions(t *testing.T) {
 	}
 }
 
+func TestToolAssertionsCanPinOpaqueConversationThread(t *testing.T) {
+	result := &ScenarioResult{ToolCalls: []ToolCallResult{
+		{Name: "tasks_tasks_create", ThreadID: "chat-conv-1"},
+		{Name: "tasks_tasks_update", ThreadID: "main"},
+		{Name: "tasks_tasks_complete", ThreadID: "main"},
+	}}
+	one := 1
+	createdByConversation := &ToolCallAssertion{Tool: "tasks_create", ThreadID: "chat-conv-1", Count: &one}
+	if got := assertToolCallMatch(createdByConversation, false, result); !got.OK {
+		t.Fatalf("conversation create assertion = %+v", got)
+	}
+	conversationDidNotExecute := &ToolCallAssertion{Tool: "tasks_update | tasks_complete", ThreadID: "chat-conv-1"}
+	if got := assertToolCallMatch(conversationDidNotExecute, true, result); !got.OK {
+		t.Fatalf("conversation execution boundary = %+v", got)
+	}
+	mainCompleted := &ToolCallAssertion{Tool: "tasks_complete", ThreadID: "main", Count: &one}
+	if got := assertToolCallMatch(mainCompleted, false, result); !got.OK {
+		t.Fatalf("main completion assertion = %+v", got)
+	}
+}
+
+func TestConversationAssertionsUseVisibleFinalMessages(t *testing.T) {
+	const apiKey = "owner-key"
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/apps/channel-chat/messages" || r.URL.Query().Get("chat_id") != "conv-1" {
+			t.Fatalf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+apiKey {
+			t.Fatal("missing owner authentication")
+		}
+		_, _ = w.Write([]byte(`[
+			{"role":"user","content":"Run it later","status":"final"},
+			{"role":"agent","content":"I'll schedule it.","status":"final","metadata":{"phase":"acknowledgement"}},
+			{"role":"agent","content":"READINESS CHECK PASSED","status":"final","metadata":{"phase":"final"}}
+		]`))
+	}))
+	defer httpServer.Close()
+	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: apiKey}
+	if got := assertChatResponse(server, "conv-1", AssertClause{ChatResponseContains: "readiness check passed"}, false); !got.OK {
+		t.Fatalf("chat response assertion = %+v", got)
+	}
+	if got := assertChatFinalMessages(server, "conv-1", 1); !got.OK {
+		t.Fatalf("chat final count = %+v", got)
+	}
+}
+
 func TestAssertHTTPDottedFieldsAndCounts(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("install_id") != "9" || r.URL.Query().Get("project_id") != "project-1" {
@@ -220,7 +286,7 @@ func TestAssertHTTPDottedFieldsAndCounts(t *testing.T) {
 	}
 }
 
-func TestAssertHTTPCallsTestedSidecarDirectly(t *testing.T) {
+func TestAssertHTTPCallsTestedSidecarDirectlyWithRunnerServer(t *testing.T) {
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/sessions" || r.URL.Query().Get("project_id") != "project-1" {
 			t.Fatalf("sidecar request = %s?%s", r.URL.Path, r.URL.RawQuery)
@@ -235,12 +301,33 @@ func TestAssertHTTPCallsTestedSidecarDirectly(t *testing.T) {
 	}))
 	defer sidecar.Close()
 
-	server := &testServer{addr: "127.0.0.1:1", apiKey: "owner-key", projectID: "project-1"}
+	server := &testServer{addr: "127.0.0.1:1", apiKey: "owner-key", projectID: "project-1", dataDir: t.TempDir()}
 	result := assertHTTP(server, 9, sidecar.URL, AssertClause{
 		HTTP: "GET /api/apps/computer/sessions", ExpectFieldAt: "sessions.0.status", ExpectFieldEq: "closed",
 	})
 	if !result.OK {
 		t.Fatalf("direct sidecar assertion = %+v", result)
+	}
+}
+
+func TestAssertHTTPUsesInstallGatewayWithExistingServer(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/apps/computer/sessions" || r.URL.Query().Get("install_id") != "9" || r.URL.Query().Get("project_id") != "project-1" {
+			t.Fatalf("gateway request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer owner-key" {
+			t.Fatalf("missing owner authorization: %+v", r.Header)
+		}
+		_, _ = w.Write([]byte(`{"sessions":[{"status":"closed"}]}`))
+	}))
+	defer gateway.Close()
+
+	server := &testServer{addr: strings.TrimPrefix(gateway.URL, "http://"), apiKey: "owner-key", projectID: "project-1"}
+	result := assertHTTP(server, 9, "http://127.0.0.1:1", AssertClause{
+		HTTP: "GET /api/apps/computer/sessions", ExpectFieldAt: "sessions.0.status", ExpectFieldEq: "closed",
+	})
+	if !result.OK {
+		t.Fatalf("gateway assertion = %+v", result)
 	}
 }
 
@@ -390,6 +477,9 @@ func TestScopedAppMCPRelayRoutesOnlySelectedInstall(t *testing.T) {
 		if r.Header.Get("Cookie") != "" || r.Header.Get("X-Apteva-Internal-App-Caller-ID") != "" {
 			t.Fatalf("unsafe headers reached upstream: %+v", r.Header)
 		}
+		if r.Header.Get("X-Apteva-Caller-Agent") != "42" {
+			t.Fatalf("trusted Core caller header was lost: %+v", r.Header)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}`))
 	}))
@@ -408,6 +498,7 @@ func TestScopedAppMCPRelayRoutesOnlySelectedInstall(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer untrusted-caller")
 	req.Header.Set("Cookie", "session=untrusted")
 	req.Header.Set("X-Apteva-Internal-App-Caller-ID", "untrusted")
+	req.Header.Set("X-Apteva-Caller-Agent", "42")
 	response, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("call relay: %v", err)
@@ -415,6 +506,76 @@ func TestScopedAppMCPRelayRoutesOnlySelectedInstall(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/json" {
 		t.Fatalf("response = %d %+v", response.StatusCode, response.Header)
+	}
+}
+
+func TestManualMountManifestPreservesCapabilitiesWithoutSourceDelivery(t *testing.T) {
+	raw := []byte(`schema: apteva-app/v1
+name: tasks
+provides:
+  mcp_tools:
+    - name: create
+      description: Create work.
+runtime:
+  kind: source
+  source:
+    repo: github.com/apteva/apps
+    ref: main
+    entry: mcp/tasks
+  port: 8080
+  health_check: /health
+`)
+	converted, err := manualMountManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := yaml.Unmarshal(converted, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	runtime := manifest["runtime"].(map[string]any)
+	if runtime["kind"] != "service" || runtime["source"] != nil || runtime["image"] != "apteva-test/manual-mount" || runtime["port"] != 8080 {
+		t.Fatalf("runtime = %+v", runtime)
+	}
+	provides := manifest["provides"].(map[string]any)
+	if _, ok := provides["mcp_tools"]; !ok {
+		t.Fatalf("capabilities were removed: %+v", manifest)
+	}
+}
+
+func TestInlineLocalSkillBodiesUsesAppCheckout(t *testing.T) {
+	appDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(appDir, "skills"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	const skillBody = "# Tasks\n\nMulti-source reviews create one task.\n"
+	if err := os.WriteFile(filepath.Join(appDir, "skills", "tasks.md"), []byte(skillBody), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`schema: apteva-app/v1
+name: tasks
+provides:
+  skills:
+    - name: how-to-use-tasks
+      description: Task guidance.
+      body_file: skills/tasks.md
+runtime:
+  kind: source
+  source: { repo: github.com/apteva/apps, ref: main, entry: mcp/tasks }
+`)
+	converted, err := inlineLocalSkillBodies(raw, appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := yaml.Unmarshal(converted, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	provides := manifest["provides"].(map[string]any)
+	skills := provides["skills"].([]any)
+	skill := skills[0].(map[string]any)
+	if skill["body"] != skillBody || skill["body_file"] != nil {
+		t.Fatalf("resolved skill = %+v", skill)
 	}
 }
 
@@ -432,11 +593,38 @@ func TestCreateInstanceKeepsPlatformGatewayDisabled(t *testing.T) {
 	defer httpServer.Close()
 
 	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
-	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", nil)
+	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", nil, nil, false)
 	if err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
 	if instance.ID != 42 {
+		t.Fatalf("instance = %+v", instance)
+	}
+}
+
+func TestCreateConversationScenarioEnablesOnlyChannelsGateway(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["include_apteva_server"] != false || body["include_channels"] != true {
+			t.Fatalf("gateway flags = %+v", body)
+		}
+		bound, _ := body["bound_app_install_ids"].([]any)
+		if len(bound) != 1 || bound[0] != float64(91) {
+			t.Fatalf("bound app installs = %+v", body["bound_app_install_ids"])
+		}
+		_, _ = w.Write([]byte(`{"id":43}`))
+	}))
+	defer httpServer.Close()
+
+	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
+	instance, err := tcCreateInstance(server, "project-1", "chat-test", "directive", "autonomous", "openai-codex", nil, []int64{91}, true)
+	if err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+	if instance.ID != 43 {
 		t.Fatalf("instance = %+v", instance)
 	}
 }

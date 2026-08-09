@@ -16,7 +16,7 @@
 
 <p align="center">
   Give agents goals. They remember context, react to events, schedule and resume work,<br />
-  delegate to workers, and operate through apps and 575+ integrations.
+  delegate to workers, and operate through apps and 590+ integrations.
 </p>
 
 <p align="center">
@@ -82,7 +82,7 @@ Apteva apps extend the platform with any combination of:
 - Background workers and scheduled jobs
 - Channels, memory, and shared operational data
 
-The current catalog contains **575+ integrations**, including GitHub, Slack, Stripe, Shopify, Airtable, Twilio, HubSpot, Google Workspace, cloud providers, databases, media tools, and model APIs.
+The current catalog contains **590+ integrations**, including GitHub, Slack, Stripe, Shopify, Airtable, Twilio, HubSpot, Google Workspace, cloud providers, databases, media tools, and model APIs.
 
 [Browse apps](https://apteva.ai/apps) · [Explore the integrations repository](https://github.com/apteva/integrations) · [Build with the App SDK](https://github.com/apteva/app-sdk)
 
@@ -96,7 +96,7 @@ flowchart LR
     A --> W["Durable tasks and workers"]
     S --> P["Apps"]
     P --> C["Tools, UI, routes, channels, and memory"]
-    P --> I["575+ integrations"]
+    P --> I["590+ integrations"]
 ```
 
 The CLI installs and starts the platform. The server manages authentication, projects, agent runtimes, apps, connections, events, and the dashboard. Each agent core owns its thinking loop, threads, tools, memory, and persistent history.

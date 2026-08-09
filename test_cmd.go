@@ -78,11 +78,13 @@ type Scenario struct {
 	Name             string         `yaml:"name"`
 	Description      string         `yaml:"description"`
 	Timeout          string         `yaml:"timeout"`            // duration string, default 90s
+	SettleFor        string         `yaml:"settle_for"`         // assertions must remain true for this duration
 	MaxIterations    int            `yaml:"max_iterations"`     // default 10
 	Runs             int            `yaml:"runs"`               // default 1
 	RequiredPassRate float64        `yaml:"required_pass_rate"` // default 1.0
 	Setup            ScenarioSetup  `yaml:"setup"`
 	Directive        string         `yaml:"directive"`
+	Prompt           string         `yaml:"prompt"` // user input when setup.interaction=conversation
 	Assert           []AssertClause `yaml:"assert"`
 	OutcomeAssert    []AssertClause `yaml:"outcome_assert"`
 	TrajectoryAssert []AssertClause `yaml:"trajectory_assert"`
@@ -97,7 +99,8 @@ type Scenario struct {
 
 type ScenarioSetup struct {
 	App         AppSetup          `yaml:"app"`
-	Mode        string            `yaml:"mode"` // autonomous | cautious | learn
+	Mode        string            `yaml:"mode"`        // autonomous | cautious | learn
+	Interaction string            `yaml:"interaction"` // autonomous (default) | conversation
 	Config      map[string]string `yaml:"config"`
 	Fixtures    []FixtureSpec     `yaml:"fixtures"` // pre-uploaded files / setup data
 	RequiredEnv []string          `yaml:"required_env"`
@@ -140,6 +143,9 @@ type AssertClause struct {
 	AgentResponseContains string             `yaml:"agent_response_contains"`
 	ResponseMatches       string             `yaml:"response_matches"`
 	AgentResponseMatches  string             `yaml:"agent_response_matches"`
+	ChatResponseContains  string             `yaml:"chat_response_contains"`
+	ChatResponseMatches   string             `yaml:"chat_response_matches"`
+	ChatFinalMessages     *int               `yaml:"chat_final_messages"`
 	FinishedWithin        string             `yaml:"finished_within"` // duration
 	IterationsAtMost      int                `yaml:"iterations_at_most"`
 	Category              string             `yaml:"-"`
@@ -147,6 +153,8 @@ type AssertClause struct {
 
 type ToolCallAssertion struct {
 	Tool     string         `yaml:"tool"`
+	Exact    bool           `yaml:"exact"`
+	ThreadID string         `yaml:"thread_id"`
 	Args     map[string]any `yaml:"args"`
 	Count    *int           `yaml:"count"`
 	MinCount int            `yaml:"min_count"`
@@ -162,30 +170,32 @@ type Budget struct {
 }
 
 type ScenarioResult struct {
-	Name               string           `json:"scenario"`
-	OK                 bool             `json:"ok"`
-	ElapsedMs          int64            `json:"elapsed_ms"`
-	Iterations         int              `json:"iterations"`
-	ToolCalls          []ToolCallResult `json:"tool_calls"`
-	Tokens             TokenSummary     `json:"tokens"`
-	CostUSD            float64          `json:"cost_usd"`
-	Asserts            []AssertResult   `json:"asserts"`
-	BudgetOK           bool             `json:"budget_ok"`
-	Run                int              `json:"run,omitempty"`
-	RunCount           int              `json:"run_count,omitempty"`
-	PassCount          int              `json:"pass_count,omitempty"`
-	PassRate           float64          `json:"pass_rate,omitempty"`
-	RequiredPassRate   float64          `json:"required_pass_rate,omitempty"`
-	Attempts           []ScenarioResult `json:"attempts,omitempty"`
-	AssistantResponses []string         `json:"assistant_responses,omitempty"`
-	ArtifactsDir       string           `json:"artifacts_dir,omitempty"`
-	Error              string           `json:"error,omitempty"`
-	telemetry          []telemetryEvent
+	Name                  string           `json:"scenario"`
+	OK                    bool             `json:"ok"`
+	ElapsedMs             int64            `json:"elapsed_ms"`
+	Iterations            int              `json:"iterations"`
+	ToolCalls             []ToolCallResult `json:"tool_calls"`
+	Tokens                TokenSummary     `json:"tokens"`
+	CostUSD               float64          `json:"cost_usd"`
+	Asserts               []AssertResult   `json:"asserts"`
+	BudgetOK              bool             `json:"budget_ok"`
+	Run                   int              `json:"run,omitempty"`
+	RunCount              int              `json:"run_count,omitempty"`
+	PassCount             int              `json:"pass_count,omitempty"`
+	PassRate              float64          `json:"pass_rate,omitempty"`
+	RequiredPassRate      float64          `json:"required_pass_rate,omitempty"`
+	Attempts              []ScenarioResult `json:"attempts,omitempty"`
+	AssistantResponses    []string         `json:"assistant_responses,omitempty"`
+	ConversationResponses []string         `json:"conversation_responses,omitempty"`
+	ArtifactsDir          string           `json:"artifacts_dir,omitempty"`
+	Error                 string           `json:"error,omitempty"`
+	telemetry             []telemetryEvent
 }
 
 type ToolCallResult struct {
 	ID                  string            `json:"id,omitempty"`
 	Name                string            `json:"name"`
+	ThreadID            string            `json:"thread_id,omitempty"`
 	Args                map[string]string `json:"args,omitempty"`
 	Reason              string            `json:"reason,omitempty"`
 	Ms                  int64             `json:"ms"`
@@ -510,6 +520,7 @@ func expandScenarioRuntime(s *Scenario, values map[string]string) {
 
 func replaceScenarioValues(s *Scenario, replace func(string) string) {
 	s.Directive = replace(s.Directive)
+	s.Prompt = replace(s.Prompt)
 	for _, group := range [][]AssertClause{s.Assert, s.OutcomeAssert, s.TrajectoryAssert} {
 		for i := range group {
 			group[i].HTTP = replace(group[i].HTTP)
@@ -517,11 +528,14 @@ func replaceScenarioValues(s *Scenario, replace func(string) string) {
 			group[i].AgentResponseContains = replace(group[i].AgentResponseContains)
 			group[i].ResponseMatches = replace(group[i].ResponseMatches)
 			group[i].AgentResponseMatches = replace(group[i].AgentResponseMatches)
+			group[i].ChatResponseContains = replace(group[i].ChatResponseContains)
+			group[i].ChatResponseMatches = replace(group[i].ChatResponseMatches)
 			group[i].ExpectFieldEq = replaceStringValue(group[i].ExpectFieldEq, replace)
 			for _, match := range []*ToolCallAssertion{group[i].ToolCalledWith, group[i].ToolNotCalledWith} {
 				if match == nil {
 					continue
 				}
+				match.ThreadID = replace(match.ThreadID)
 				for key, value := range match.Args {
 					match.Args[key] = replaceStringValue(value, replace)
 				}
@@ -936,10 +950,11 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	}
 
 	var (
-		deps       []depBundle
-		installed  *installResp
-		sidecarURL string
-		mcpServers []map[string]any
+		deps        []depBundle
+		installed   *installResp
+		sidecarURL  string
+		mcpServers  []map[string]any
+		localRelays []*scopedAppMCPRelay
 	)
 	if s.Setup.App.ReuseExisting {
 		if opts.serverAddr == "" || strings.TrimSpace(opts.projectID) == "" {
@@ -975,13 +990,16 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			return res
 		}
 		defer func() {
+			for i := len(localRelays) - 1; i >= 0; i-- {
+				localRelays[i].Close()
+			}
 			for i := len(deps) - 1; i >= 0; i-- {
 				deps[i].sidecar.Stop()
 				uninstallApp(server, deps[i].installID)
 			}
 		}()
 
-		installed, err = installApp(server, manifestYAML, server.projectID, s.Setup.App.Config)
+		installed, err = installApp(server, manifestYAML, appDir, server.projectID, s.Setup.App.Config)
 		if err != nil {
 			res.Error = fmt.Sprintf("install app: %v", err)
 			return res
@@ -1011,12 +1029,24 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			return res
 		}
 
+		appRelay, relayErr := startScopedAppMCPRelay(server, appName, installed.InstallID)
+		if relayErr != nil {
+			res.Error = fmt.Sprintf("start app MCP relay: %v", relayErr)
+			return res
+		}
+		localRelays = append(localRelays, appRelay)
 		mcpServers = append(mcpServers, map[string]any{
-			"name": appName, "transport": "http", "url": sidecarURL + "/mcp", "main_access": true,
+			"name": appName, "transport": "http", "url": appRelay.URL, "main_access": true, "no_spawn": true,
 		})
 		for _, d := range deps {
+			depRelay, relayErr := startScopedAppMCPRelay(server, d.name, d.installID)
+			if relayErr != nil {
+				res.Error = fmt.Sprintf("start %s MCP relay: %v", d.name, relayErr)
+				return res
+			}
+			localRelays = append(localRelays, depRelay)
 			mcpServers = append(mcpServers, map[string]any{
-				"name": d.name, "transport": "http", "url": d.sidecar.URL + "/mcp", "main_access": false,
+				"name": d.name, "transport": "http", "url": depRelay.URL, "main_access": false, "no_spawn": true,
 			})
 		}
 	}
@@ -1032,7 +1062,18 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		"APTEVA_TEST_APP_NAME":   appName,
 		"APTEVA_TEST_INSTALL_ID": strconv.FormatInt(installed.InstallID, 10),
 	})
-	assertions := scenarioAssertions(s)
+	interaction := strings.ToLower(strings.TrimSpace(s.Setup.Interaction))
+	if interaction == "" {
+		interaction = "autonomous"
+	}
+	if interaction != "autonomous" && interaction != "conversation" {
+		res.Error = fmt.Sprintf("unsupported setup.interaction %q", s.Setup.Interaction)
+		return res
+	}
+	if interaction == "conversation" && strings.TrimSpace(s.Prompt) == "" {
+		res.Error = "setup.interaction=conversation requires prompt"
+		return res
+	}
 
 	// Create + start the agent. Pass the CRM sidecar's /mcp endpoint
 	// as a system MCP server in the instance config so the agent's
@@ -1044,7 +1085,8 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if mode == "" {
 		mode = "autonomous"
 	}
-	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers)
+	includeChannels := interaction == "conversation"
+	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers, []int64{installed.InstallID}, includeChannels)
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
@@ -1054,6 +1096,9 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if os.Getenv("APTEVA_TEST_KEEP") == "" {
 		defer tcDeleteInstance(server, inst.ID)
 	}
+	expandScenarioRuntime(&s, map[string]string{
+		"APTEVA_TEST_AGENT_ID": strconv.FormatInt(inst.ID, 10),
+	})
 
 	// Write the instance's config.json with our mcp_servers BEFORE
 	// starting the agent. instances.go's Start() reads disk first
@@ -1061,7 +1106,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// /api/instances only carries server-side flags (include_apteva_
 	// server, etc.), not the agent's tool list. The on-disk
 	// config.json is the single source of truth core consumes.
-	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, mcpServers); err != nil {
+	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, mcpServers, includeChannels); err != nil {
 		res.Error = fmt.Sprintf("write instance config.json: %v", err)
 		return res
 	}
@@ -1089,6 +1134,27 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// emitted before the SSE connection opens or after a live stream drops.
 	telemetry, errCh, _ := streamTelemetry(ctx, server, inst.ID)
 
+	conversationID := ""
+	if interaction == "conversation" {
+		conversation, err := openScenarioConversation(server, inst.ID, s.Name)
+		if err != nil {
+			res.Error = fmt.Sprintf("open conversation: %v", err)
+			return res
+		}
+		defer conversation.Close(server)
+		conversationID = conversation.ID
+		expandScenarioRuntime(&s, map[string]string{
+			"APTEVA_TEST_CONVERSATION_ID":        conversation.ID,
+			"APTEVA_TEST_CONVERSATION_THREAD_ID": conversation.ThreadID,
+			"APTEVA_TEST_DEFAULT_THREAD_ID":      "main",
+		})
+		if err := postScenarioConversation(server, conversation.ID, s.Prompt); err != nil {
+			res.Error = fmt.Sprintf("post conversation prompt: %v", err)
+			return res
+		}
+	}
+	assertions := scenarioAssertions(s)
+
 	// Wait for the asserts to pass (early-stop) OR max_iterations OR
 	// timeout. We deliberately don't trust the agent's `paused` flag
 	// as a "done" signal — autonomous agents loop forever; only the
@@ -1103,15 +1169,37 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	//      scenarios: we exit ~0.5s after the final tool, not ~2s.
 	//   3. max_iterations hit OR timeout deadline.
 	deadline := time.Now().Add(timeout)
+	settleFor := time.Duration(0)
+	if strings.TrimSpace(s.SettleFor) != "" {
+		parsed, parseErr := time.ParseDuration(s.SettleFor)
+		if parseErr != nil || parsed < 0 {
+			res.Error = fmt.Sprintf("invalid settle_for %q", s.SettleFor)
+			return res
+		}
+		settleFor = parsed
+	}
 	assertPoll := time.NewTicker(500 * time.Millisecond)
 	defer assertPoll.Stop()
 	telemetryPoll := time.NewTicker(2 * time.Second)
 	defer telemetryPoll.Stop()
 	stopReason := ""
+	var assertsPassingSince time.Time
 	seenTelemetry := map[string]struct{}{}
 	probeNow := func() {
-		if probeAsserts(server, installed.InstallID, sidecarURL, assertions, &res) {
+		if !probeAsserts(server, installed.InstallID, sidecarURL, conversationID, assertions, &res) {
+			assertsPassingSince = time.Time{}
+			return
+		}
+		if settleFor == 0 {
 			stopReason = "asserts passed"
+			return
+		}
+		if assertsPassingSince.IsZero() {
+			assertsPassingSince = time.Now()
+			return
+		}
+		if time.Since(assertsPassingSince) >= settleFor {
+			stopReason = "asserts remained stable for " + settleFor.String()
 		}
 	}
 	processTelemetry := func(ev telemetryEvent) {
@@ -1181,7 +1269,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 
 	// Run asserts.
 	res.ElapsedMs = time.Since(start).Milliseconds()
-	res.Asserts = runAsserts(server, installed.InstallID, sidecarURL, assertions, &res)
+	res.Asserts = runAsserts(server, installed.InstallID, sidecarURL, conversationID, assertions, &res)
 
 	// Budget check.
 	res.BudgetOK = checkBudget(s.Budget, res.Tokens, res.CostUSD)
@@ -1203,8 +1291,9 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 // ─── Telemetry → result aggregation ────────────────────────────────
 
 type telemetryEvent struct {
-	Type string         `json:"type"`
-	Data map[string]any `json:"data"`
+	Type     string         `json:"type"`
+	ThreadID string         `json:"thread_id,omitempty"`
+	Data     map[string]any `json:"data"`
 }
 
 func acceptTelemetry(res *ScenarioResult, ev telemetryEvent, seen map[string]struct{}) bool {
@@ -1269,7 +1358,7 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 	case "tool.call":
 		name, _ := ev.Data["name"].(string)
 		res.ToolCalls = append(res.ToolCalls, ToolCallResult{
-			ID: stringMapValue(ev.Data, "id"), Name: name,
+			ID: stringMapValue(ev.Data, "id"), Name: name, ThreadID: ev.ThreadID,
 			Args: stringMap(ev.Data["args"]), Reason: stringMapValue(ev.Data, "reason"),
 		})
 	case "tool.result":
@@ -1366,7 +1455,7 @@ func stringMap(v any) map[string]string {
 // the moment HTTP count became 1 (Bob created), before the agent
 // could call log_activity. The asserts collectively define
 // "complete" — any one passing isn't enough.
-func probeAsserts(server *testServer, installID int64, sidecarURL string, clauses []AssertClause, res *ScenarioResult) bool {
+func probeAsserts(server *testServer, installID int64, sidecarURL, conversationID string, clauses []AssertClause, res *ScenarioResult) bool {
 	if len(clauses) == 0 {
 		return false
 	}
@@ -1398,6 +1487,20 @@ func probeAsserts(server *testServer, installID int64, sidecarURL string, clause
 			if !assertResponseContains(c, res).OK {
 				return false
 			}
+		case c.ChatResponseMatches != "":
+			terminal++
+			if !assertChatResponse(server, conversationID, c, true).OK {
+				return false
+			}
+		case c.ChatResponseContains != "":
+			terminal++
+			if !assertChatResponse(server, conversationID, c, false).OK {
+				return false
+			}
+		case c.ChatFinalMessages != nil:
+			if !assertChatFinalMessages(server, conversationID, *c.ChatFinalMessages).OK {
+				return false
+			}
 		case c.IterationsAtMost > 0, c.FinishedWithin != "", c.ToolNotCalled != "", c.ToolNotCalledWith != nil:
 			// Limits and negative assertions are final checks, not evidence
 			// that the requested work has completed.
@@ -1407,8 +1510,17 @@ func probeAsserts(server *testServer, installID int64, sidecarURL string, clause
 	return terminal > 0
 }
 
-func runAsserts(server *testServer, installID int64, sidecarURL string, clauses []AssertClause, res *ScenarioResult) []AssertResult {
+func runAsserts(server *testServer, installID int64, sidecarURL, conversationID string, clauses []AssertClause, res *ScenarioResult) []AssertResult {
 	out := []AssertResult{}
+	if conversationID != "" {
+		if messages, err := fetchScenarioConversationMessages(server, conversationID); err == nil {
+			for _, message := range messages {
+				if message.Role == "agent" {
+					res.ConversationResponses = append(res.ConversationResponses, message.Content)
+				}
+			}
+		}
+	}
 	for i, c := range clauses {
 		ar := AssertResult{Clause: assertLabel(i, c), Category: c.Category}
 		switch {
@@ -1426,6 +1538,12 @@ func runAsserts(server *testServer, installID int64, sidecarURL string, clauses 
 			ar = assertResponseMatches(c, res)
 		case responseNeedle(c) != "":
 			ar = assertResponseContains(c, res)
+		case c.ChatResponseMatches != "":
+			ar = assertChatResponse(server, conversationID, c, true)
+		case c.ChatResponseContains != "":
+			ar = assertChatResponse(server, conversationID, c, false)
+		case c.ChatFinalMessages != nil:
+			ar = assertChatFinalMessages(server, conversationID, *c.ChatFinalMessages)
 		case c.FinishedWithin != "":
 			limit, err := time.ParseDuration(c.FinishedWithin)
 			if err != nil {
@@ -1472,6 +1590,15 @@ func assertLabel(i int, c AssertClause) string {
 	if responseNeedle(c) != "" {
 		return "response_contains " + responseNeedle(c)
 	}
+	if c.ChatResponseMatches != "" {
+		return "chat_response_matches " + c.ChatResponseMatches
+	}
+	if c.ChatResponseContains != "" {
+		return "chat_response_contains " + c.ChatResponseContains
+	}
+	if c.ChatFinalMessages != nil {
+		return fmt.Sprintf("chat_final_messages %d", *c.ChatFinalMessages)
+	}
 	if c.FinishedWithin != "" {
 		return "finished_within " + c.FinishedWithin
 	}
@@ -1489,7 +1616,13 @@ func assertHTTP(server *testServer, installID int64, sidecarURL string, c Assert
 	method, path := parts[0], parts[1]
 	target := "http://" + server.addr + path
 	directSidecar := false
-	if sidecarURL != "" && strings.HasPrefix(path, "/api/apps/") {
+	// A runner-spawned server is configured to use the local sidecar below, so
+	// querying it directly is exact and avoids unnecessary gateway machinery.
+	// With --server, however, the existing server may have launched the install
+	// itself and can legitimately ignore our duplicate sidecar override. Verify
+	// through that server's install-scoped gateway so assertions observe the
+	// same app process the agent called.
+	if sidecarURL != "" && server.dataDir != "" && strings.HasPrefix(path, "/api/apps/") {
 		rest := strings.TrimPrefix(path, "/api/apps/")
 		if slash := strings.Index(rest, "/"); slash >= 0 {
 			target = strings.TrimRight(sidecarURL, "/") + rest[slash:]
@@ -1553,7 +1686,11 @@ func assertHTTP(server *testServer, installID int64, sidecarURL string, c Assert
 		if c.ExpectCountMax > 0 {
 			want, countOK = fmt.Sprintf("<= %d", c.ExpectCountMax), count <= c.ExpectCountMax
 		}
-		return AssertResult{Clause: c.HTTP + " count " + c.ExpectCountAt, OK: countOK, Got: count, Want: want}
+		result := AssertResult{Clause: c.HTTP + " count " + c.ExpectCountAt, OK: countOK, Got: count, Want: want}
+		if !countOK {
+			result.Note = tcTruncate(string(body), 500)
+		}
+		return result
 	}
 	if c.ExpectFieldAt != "" {
 		var data any
@@ -1562,7 +1699,7 @@ func assertHTTP(server *testServer, installID int64, sidecarURL string, c Assert
 		}
 		value, ok := jsonPathValue(data, c.ExpectFieldAt)
 		if !ok {
-			return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt, OK: false, Note: "JSON path not found"}
+			return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt, OK: false, Note: "JSON path not found in " + tcTruncate(string(body), 500)}
 		}
 		if c.ExpectFieldContains != "" {
 			got := fmt.Sprint(value)
@@ -1670,7 +1807,9 @@ func assertToolCallMatch(want *ToolCallAssertion, negate bool, res *ScenarioResu
 	}
 	matches := make([]int, 0)
 	for i, call := range res.ToolCalls {
-		if toolNameMatches(call.Name, want.Tool) && toolCallArgsMatch(call, want.Args) {
+		if toolCallNameMatches(call.Name, want.Tool, want.Exact) &&
+			(strings.TrimSpace(want.ThreadID) == "" || call.ThreadID == want.ThreadID) &&
+			toolCallArgsMatch(call, want.Args) {
 			matches = append(matches, i)
 		}
 	}
@@ -1711,6 +1850,18 @@ func toolNameMatches(actual, want string) bool {
 		return false
 	}
 	return actual == want || strings.HasSuffix(actual, "_"+want)
+}
+
+func toolCallNameMatches(actual, want string, exact bool) bool {
+	if !exact {
+		return toolNameMatches(actual, want)
+	}
+	for _, alternative := range strings.Split(want, "|") {
+		if actual == strings.TrimSpace(alternative) {
+			return true
+		}
+	}
+	return false
 }
 
 func toolArgsMatch(actual map[string]string, wants map[string]any) bool {
@@ -1797,6 +1948,90 @@ func assertResponseContains(c AssertClause, res *ScenarioResult) AssertResult {
 	return AssertResult{Clause: "response_contains " + needle, OK: false, Got: tcTruncate(joined, 300), Want: needle}
 }
 
+type scenarioChatMessage struct {
+	Role     string         `json:"role"`
+	Content  string         `json:"content"`
+	Status   string         `json:"status"`
+	Metadata map[string]any `json:"metadata"`
+}
+
+func fetchScenarioConversationMessages(server *testServer, conversationID string) ([]scenarioChatMessage, error) {
+	if server == nil || strings.TrimSpace(conversationID) == "" {
+		return nil, fmt.Errorf("conversation interaction is not active")
+	}
+	target := "http://" + server.addr + "/api/apps/channel-chat/messages?chat_id=" +
+		url.QueryEscape(conversationID) + "&limit=200"
+	req, _ := http.NewRequest(http.MethodGet, target, nil)
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("messages returned HTTP %d: %s", resp.StatusCode, tcTruncate(string(raw), 300))
+	}
+	var messages []scenarioChatMessage
+	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func finalScenarioAgentMessages(messages []scenarioChatMessage) []scenarioChatMessage {
+	out := make([]scenarioChatMessage, 0, len(messages))
+	for _, message := range messages {
+		if message.Role != "agent" {
+			continue
+		}
+		phase, _ := message.Metadata["phase"].(string)
+		if strings.EqualFold(strings.TrimSpace(phase), "final") ||
+			(strings.TrimSpace(phase) == "" && strings.EqualFold(message.Status, "final")) {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+func assertChatResponse(server *testServer, conversationID string, c AssertClause, usePattern bool) AssertResult {
+	messages, err := fetchScenarioConversationMessages(server, conversationID)
+	if err != nil {
+		return AssertResult{Clause: "chat response", OK: false, Note: err.Error()}
+	}
+	finals := finalScenarioAgentMessages(messages)
+	texts := make([]string, 0, len(finals))
+	for _, message := range finals {
+		texts = append(texts, message.Content)
+	}
+	joined := strings.Join(texts, "\n")
+	if usePattern {
+		pattern := c.ChatResponseMatches
+		compiled, compileErr := regexp.Compile(pattern)
+		if compileErr != nil {
+			return AssertResult{Clause: "chat_response_matches " + pattern, OK: false, Want: pattern, Note: compileErr.Error()}
+		}
+		return AssertResult{Clause: "chat_response_matches " + pattern, OK: compiled.MatchString(joined), Got: tcTruncate(joined, 300), Want: pattern}
+	}
+	needle := c.ChatResponseContains
+	for _, alternative := range strings.Split(needle, "|") {
+		alternative = strings.Trim(strings.TrimSpace(alternative), `"'`)
+		if alternative != "" && strings.Contains(strings.ToLower(joined), strings.ToLower(alternative)) {
+			return AssertResult{Clause: "chat_response_contains " + needle, OK: true, Got: alternative}
+		}
+	}
+	return AssertResult{Clause: "chat_response_contains " + needle, OK: false, Got: tcTruncate(joined, 300), Want: needle}
+}
+
+func assertChatFinalMessages(server *testServer, conversationID string, want int) AssertResult {
+	messages, err := fetchScenarioConversationMessages(server, conversationID)
+	if err != nil {
+		return AssertResult{Clause: fmt.Sprintf("chat_final_messages %d", want), OK: false, Note: err.Error()}
+	}
+	got := len(finalScenarioAgentMessages(messages))
+	return AssertResult{Clause: fmt.Sprintf("chat_final_messages %d", want), OK: got == want, Got: got, Want: want}
+}
+
 func toolCallNames(tcs []ToolCallResult) []string {
 	out := make([]string, 0, len(tcs))
 	for _, t := range tcs {
@@ -1863,7 +2098,7 @@ func installDeps(server *testServer, appDir string, manifestYAML []byte) ([]depB
 			rollback(out)
 			return nil, fmt.Errorf("dep %q manifest not found at %s — sibling-dir convention expects it next to the app under test", name, manifestPath)
 		}
-		installed, err := installApp(server, depYAML, server.projectID, nil)
+		installed, err := installApp(server, depYAML, depDir, server.projectID, nil)
 		if err != nil {
 			rollback(out)
 			return nil, fmt.Errorf("install dep %q: %w", name, err)
@@ -2112,7 +2347,11 @@ func startScopedAppMCPRelay(server *testServer, appName string, installID int64)
 	})
 	httpServer := &http.Server{Handler: handler}
 	relay := &scopedAppMCPRelay{
-		URL: "http://" + listener.Addr().String(), server: httpServer, listener: listener,
+		// Keep the canonical loopback app-MCP path on the relay URL. Core uses
+		// that shape to attach its trusted caller-agent header and hidden opaque
+		// thread id; the relay then forwards both through the real Server gateway.
+		URL:    "http://" + listener.Addr().String() + "/api/apps/" + url.PathEscape(appName) + "/mcp",
+		server: httpServer, listener: listener,
 	}
 	go func() { _ = httpServer.Serve(listener) }()
 	return relay, nil
@@ -2128,9 +2367,28 @@ func (relay *scopedAppMCPRelay) Close() {
 	_ = relay.listener.Close()
 }
 
-func installApp(server *testServer, manifestYAML []byte, projectID string, config map[string]string) (*installResp, error) {
+func installApp(server *testServer, manifestYAML []byte, appDir, projectID string, config map[string]string) (*installResp, error) {
+	// Scenario installs use inline manifest YAML rather than a public manifest
+	// URL. Resolve repo-local skill bodies before posting so the normal app
+	// install and agent-binding path can register and synchronize the exact skill
+	// shipped by the app under test.
+	installManifest, err := inlineLocalSkillBodies(manifestYAML, appDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve local app skills: %w", err)
+	}
+	if server.dataDir == "" {
+		// --server points at a process whose normal local-install policy may
+		// eagerly build and launch runtime.source. The scenario runner already
+		// builds the checkout under test and mounts that exact sidecar below.
+		// Register a temporary manual-service delivery shape so there is only
+		// one process and the LLM exercises the local source being tested.
+		installManifest, err = manualMountManifest(installManifest)
+		if err != nil {
+			return nil, fmt.Errorf("prepare manual test manifest: %w", err)
+		}
+	}
 	body := map[string]any{
-		"manifest_yaml": string(manifestYAML),
+		"manifest_yaml": string(installManifest),
 		"project_id":    projectID,
 		"config":        config,
 	}
@@ -2139,6 +2397,76 @@ func installApp(server *testServer, manifestYAML []byte, projectID string, confi
 		return nil, err
 	}
 	return out, nil
+}
+
+func inlineLocalSkillBodies(raw []byte, appDir string) ([]byte, error) {
+	var manifest map[string]any
+	if err := yaml.Unmarshal(raw, &manifest); err != nil {
+		return nil, err
+	}
+	provides, _ := manifest["provides"].(map[string]any)
+	skills, _ := provides["skills"].([]any)
+	if len(skills) == 0 {
+		return raw, nil
+	}
+	base, err := filepath.Abs(appDir)
+	if err != nil {
+		return nil, err
+	}
+	changed := false
+	for index, value := range skills {
+		skill, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		bodyFile, _ := skill["body_file"].(string)
+		bodyFile = strings.TrimSpace(bodyFile)
+		if bodyFile == "" {
+			continue
+		}
+		clean := filepath.Clean(bodyFile)
+		if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("skill %d body_file must stay inside the app directory: %q", index, bodyFile)
+		}
+		full := filepath.Join(base, clean)
+		rel, err := filepath.Rel(base, full)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("skill %d body_file escapes the app directory: %q", index, bodyFile)
+		}
+		body, err := os.ReadFile(full)
+		if err != nil {
+			return nil, fmt.Errorf("read skill %d body_file %q: %w", index, bodyFile, err)
+		}
+		skill["body"] = string(body)
+		delete(skill, "body_file")
+		changed = true
+	}
+	if !changed {
+		return raw, nil
+	}
+	return yaml.Marshal(manifest)
+}
+
+func manualMountManifest(raw []byte) ([]byte, error) {
+	var manifest map[string]any
+	if err := yaml.Unmarshal(raw, &manifest); err != nil {
+		return nil, err
+	}
+	runtime, _ := manifest["runtime"].(map[string]any)
+	if runtime == nil {
+		runtime = map[string]any{}
+	}
+	runtime["kind"] = "service"
+	delete(runtime, "source")
+	delete(runtime, "binaries")
+	// A service manifest must declare a delivery source. The existing local
+	// server does not deploy images itself, so this sentinel keeps validation
+	// honest while leaving the install pending for setSidecarURL below.
+	runtime["image"] = "apteva-test/manual-mount"
+	delete(runtime, "bundle")
+	delete(runtime, "static_dir")
+	manifest["runtime"] = runtime
+	return yaml.Marshal(manifest)
 }
 
 func uninstallApp(server *testServer, installID int64) {
@@ -2179,7 +2507,91 @@ type instanceResp struct {
 	ID int64 `json:"id"`
 }
 
-func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider string, mcpServers []map[string]any) (*instanceResp, error) {
+type scenarioConversation struct {
+	ID       string
+	ThreadID string
+	stream   io.ReadCloser
+}
+
+func openScenarioConversation(server *testServer, agentID int64, title string) (*scenarioConversation, error) {
+	body, _ := json.Marshal(map[string]any{"agent_id": agentID, "title": title})
+	req, _ := http.NewRequest(http.MethodPost, "http://"+server.addr+"/api/apps/channel-chat/chats", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("create returned HTTP %d: %s", resp.StatusCode, tcTruncate(string(raw), 300))
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(created.ID, "conv-") {
+		return nil, fmt.Errorf("create returned invalid conversation id %q", created.ID)
+	}
+
+	streamReq, _ := http.NewRequest(http.MethodGet,
+		"http://"+server.addr+"/api/apps/channel-chat/stream?chat_id="+url.QueryEscape(created.ID), nil)
+	streamReq.Header.Set("Authorization", "Bearer "+server.apiKey)
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		return nil, err
+	}
+	if streamResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(streamResp.Body)
+		streamResp.Body.Close()
+		return nil, fmt.Errorf("stream returned HTTP %d: %s", streamResp.StatusCode, tcTruncate(string(raw), 300))
+	}
+	return &scenarioConversation{ID: created.ID, ThreadID: "chat-" + created.ID, stream: streamResp.Body}, nil
+}
+
+func (c *scenarioConversation) Close(server *testServer) {
+	if c == nil {
+		return
+	}
+	if c.stream != nil {
+		_ = c.stream.Close()
+	}
+	if server == nil || c.ID == "" {
+		return
+	}
+	req, _ := http.NewRequest(http.MethodDelete,
+		"http://"+server.addr+"/api/apps/channel-chat/conversation?id="+url.QueryEscape(c.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+	}
+}
+
+func postScenarioConversation(server *testServer, conversationID, prompt string) error {
+	body, _ := json.Marshal(map[string]any{
+		"content": prompt,
+		"context": map[string]any{"source": "apteva-test", "title": "Tier 3 scenario"},
+	})
+	req, _ := http.NewRequest(http.MethodPost,
+		"http://"+server.addr+"/api/apps/channel-chat/messages?chat_id="+url.QueryEscape(conversationID), bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("message returned HTTP %d: %s", resp.StatusCode, tcTruncate(string(raw), 300))
+	}
+	return nil
+}
+
+func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool) (*instanceResp, error) {
 	// config_json carries the agent's MCP servers + any other config
 	// the core needs at boot. The platform writes this to the
 	// instance dir's config.json; the core picks it up on start.
@@ -2201,7 +2613,10 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 		"start":                 false, // we start it ourselves so SSE is wired up first
 		"config":                string(configJSON),
 		"include_apteva_server": &includeFalse,
-		"include_channels":      &includeFalse,
+		"include_channels":      &includeChannels,
+	}
+	if len(boundAppInstallIDs) > 0 {
+		body["bound_app_install_ids"] = boundAppInstallIDs
 	}
 	out := &instanceResp{}
 	if err := postJSON("http://"+server.addr+"/api/instances", server.apiKey, body, out); err != nil {
@@ -2219,7 +2634,7 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 // Only effective when bootstrapServer spawned the apteva-server
 // itself (we know dataDir then). When testServer.dataDir is empty
 // (existing-server mode), we no-op — the operator owns disk state.
-func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode string, mcpServers []map[string]any) error {
+func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode string, mcpServers []map[string]any, includeChannels bool) error {
 	if server.dataDir == "" {
 		return nil
 	}
@@ -2228,9 +2643,10 @@ func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mo
 		return err
 	}
 	cfg := map[string]any{
-		"directive":   directive,
-		"mode":        mode,
-		"mcp_servers": mcpServers,
+		"directive":        directive,
+		"mode":             mode,
+		"mcp_servers":      mcpServers,
+		"include_channels": includeChannels,
 	}
 	body, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
