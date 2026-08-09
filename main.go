@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"time"
 
@@ -199,6 +200,16 @@ Flags:`)
 	// ── Phase 1: Ensure server is running ──
 	cliLog("MAIN", fmt.Sprintf("checking server at %s", srvAddr))
 	var serverProc *exec.Cmd
+	var serverLog *serverLogCapture
+	closeServerLog := func() {
+		if serverLog == nil {
+			return
+		}
+		if err := serverLog.Close(); err != nil {
+			cliLog("MAIN", fmt.Sprintf("close server log: %v", err))
+		}
+		serverLog = nil
+	}
 
 	// Kill any stale server from a previous session on our port
 	// so we always start with the current binary
@@ -270,6 +281,11 @@ Flags:`)
 		// terminal so they can watch boot + install diagnostics live.
 		if !(*verbose && !*tui) {
 			serverEnv = append(serverEnv, "QUIET=1")
+		} else {
+			// --logs is the explicit verbose mode. Preserve its existing
+			// diagnostic stream even though routine per-event server logs are
+			// suppressed during normal operation.
+			serverEnv = append(serverEnv, "APTEVA_LOG_LEVEL=debug")
 		}
 		serverProc.Env = append(os.Environ(), serverEnv...)
 		if *verbose && !*tui {
@@ -278,14 +294,14 @@ Flags:`)
 		} else {
 			// TUI can't share stderr without corrupting the alt-screen;
 			// dashboard mode keeps the console clean for the URL banner.
-			srvLog, err := os.OpenFile(
-				filepath.Join(aptevaDir(), "server.log"),
-				os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644,
-			)
+			logPath := filepath.Join(aptevaDir(), "server.log")
+			srvLog, err := newServerLogCapture(logPath, serverLogMaxBytes)
 			if err == nil {
-				serverProc.Stdout = srvLog
-				serverProc.Stderr = srvLog
+				serverLog = srvLog
+				srvLog.Attach(serverProc)
 			} else {
+				cliLog("MAIN", fmt.Sprintf("server log unavailable: %v", err))
+				fmt.Fprintf(os.Stderr, "warning: server log unavailable: %v\n", err)
 				serverProc.Stdout = nil
 				serverProc.Stderr = nil
 			}
@@ -295,16 +311,22 @@ Flags:`)
 		cliLog("MAIN", fmt.Sprintf("server env: PORT=%d DB_PATH=%s CORE_CMD=%s", aptevaCfg.ServerPort, filepath.Join(aptevaDir(), "apteva.db"), findCoreBinary("")))
 
 		if err := serverProc.Start(); err != nil {
+			closeServerLog()
 			cliLog("MAIN", fmt.Sprintf("server start failed: %v", err))
 			fmt.Fprintf(os.Stderr, "failed to start server: %v\n", err)
 			os.Exit(1)
+		}
+		if serverLog != nil {
+			serverLog.ReleaseParentWriter()
 		}
 		cliLog("MAIN", fmt.Sprintf("server process started, pid=%d", serverProc.Process.Pid))
 
 		if err := waitForHealth(client, 15*time.Second); err != nil {
 			cliLog("MAIN", fmt.Sprintf("server health timeout: %v", err))
 			fmt.Fprintf(os.Stderr, "server did not start in time\n")
-			serverProc.Process.Kill()
+			killProcGroup(serverProc, true)
+			_ = serverProc.Wait()
+			closeServerLog()
 			os.Exit(1)
 		}
 	}
@@ -462,38 +484,43 @@ Flags:`)
 	// ── Phase 5: Start dashboard mode or TUI ──
 	cliLog("MAIN", fmt.Sprintf("phase 5: tui=%v", *tui))
 
-	cleanupDone := false
+	var cleanupOnce sync.Once
 	cleanup := func() {
-		if cleanupDone {
-			return
-		}
-		cleanupDone = true
-		cliLog("MAIN", "cleanup: shutting down")
+		cleanupOnce.Do(func() {
+			cliLog("MAIN", "cleanup: shutting down")
 
-		// Gracefully stop only the CLI's own instance
-		if client.apiKey != "" && aptevaCfg.InstanceID > 0 {
-			cliLog("MAIN", fmt.Sprintf("cleanup: stopping instance %d", aptevaCfg.InstanceID))
-			fastClient := &http.Client{Timeout: 3 * time.Second}
-			stopURL := fmt.Sprintf("http://%s/instances/%d/stop", srvAddr, aptevaCfg.InstanceID)
-			req, _ := http.NewRequest("POST", stopURL, nil)
-			req.Header.Set("Authorization", "Bearer "+client.apiKey)
-			fastClient.Do(req)
-			cliLog("MAIN", fmt.Sprintf("cleanup: stopped instance %d", aptevaCfg.InstanceID))
-		}
-
-		if serverProc != nil {
-			cliLog("MAIN", "cleanup: killing server process group")
-			killProcGroup(serverProc, false)
-			done := make(chan error, 1)
-			go func() { done <- serverProc.Wait() }()
-			select {
-			case <-done:
-			case <-time.After(2 * time.Second):
-				killProcGroup(serverProc, true)
-				serverProc.Wait()
+			// Gracefully stop only the CLI's own instance
+			if client.apiKey != "" && aptevaCfg.InstanceID > 0 {
+				cliLog("MAIN", fmt.Sprintf("cleanup: stopping instance %d", aptevaCfg.InstanceID))
+				fastClient := &http.Client{Timeout: 3 * time.Second}
+				stopURL := fmt.Sprintf("http://%s/instances/%d/stop", srvAddr, aptevaCfg.InstanceID)
+				req, _ := http.NewRequest("POST", stopURL, nil)
+				req.Header.Set("Authorization", "Bearer "+client.apiKey)
+				fastClient.Do(req)
+				cliLog("MAIN", fmt.Sprintf("cleanup: stopped instance %d", aptevaCfg.InstanceID))
 			}
-			cliLog("MAIN", "cleanup: done")
-		}
+
+			if serverProc != nil {
+				cliLog("MAIN", "cleanup: killing server process group")
+				killProcGroup(serverProc, false)
+				done := make(chan error, 1)
+				go func() { done <- serverProc.Wait() }()
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					killProcGroup(serverProc, true)
+					select {
+					case <-done:
+					case <-time.After(2 * time.Second):
+						cliLog("MAIN", "cleanup: server wait timed out after SIGKILL")
+					}
+				}
+				closeServerLog()
+				cliLog("MAIN", "cleanup: done")
+			} else {
+				closeServerLog()
+			}
+		})
 	}
 
 	sig := make(chan os.Signal, 1)
