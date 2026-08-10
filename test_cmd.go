@@ -98,12 +98,14 @@ type Scenario struct {
 }
 
 type ScenarioSetup struct {
-	App         AppSetup          `yaml:"app"`
-	Mode        string            `yaml:"mode"`        // autonomous | cautious | learn
-	Interaction string            `yaml:"interaction"` // autonomous (default) | conversation
-	Config      map[string]string `yaml:"config"`
-	Fixtures    []FixtureSpec     `yaml:"fixtures"` // pre-uploaded files / setup data
-	RequiredEnv []string          `yaml:"required_env"`
+	App          AppSetup          `yaml:"app"`
+	Mode         string            `yaml:"mode"`        // autonomous | cautious | learn
+	Interaction  string            `yaml:"interaction"` // autonomous (default) | conversation
+	Config       map[string]string `yaml:"config"`
+	Fixtures     []FixtureSpec     `yaml:"fixtures"` // pre-uploaded files / setup data
+	InitialWake  *InitialWakeSpec  `yaml:"initial_wake"`
+	SeedMCPCalls []SeedMCPCallSpec `yaml:"seed_mcp_calls"`
+	RequiredEnv  []string          `yaml:"required_env"`
 }
 
 type AppSetup struct {
@@ -122,6 +124,24 @@ type FixtureSpec struct {
 	Tool string         `yaml:"tool"` // MCP tool name — e.g. files_upload
 	File string         `yaml:"file"` // relative path to a binary fixture
 	Args map[string]any `yaml:"args"` // extra tool args (folder, content_type, …)
+}
+
+// InitialWakeSpec preloads Core's durable main-thread timer before the agent
+// starts. It is intentionally a relative duration so scenarios remain
+// repeatable and do not depend on the wall-clock minute in which they run.
+type InitialWakeSpec struct {
+	After string `yaml:"after"`
+	Sleep string `yaml:"sleep"`
+}
+
+// SeedMCPCallSpec invokes an app tool as the not-yet-started test agent. This
+// seeds durable app state without spending an LLM iteration on setup and, in
+// combination with InitialWakeSpec, can align an app event with a Core timer.
+type SeedMCPCallSpec struct {
+	App      string         `yaml:"app"`
+	Tool     string         `yaml:"tool"`
+	ThreadID string         `yaml:"thread_id"`
+	Args     map[string]any `yaml:"args"`
 }
 
 type AssertClause struct {
@@ -344,7 +364,15 @@ func runScenarioEvaluation(server *testServer, s Scenario, opts testOpts) Scenar
 		if runs > 1 {
 			fmt.Fprintf(os.Stderr, "  run %d/%d\n", run, runs)
 		}
-		attempt := runScenario(server, s, opts)
+		runScenarioInput, err := cloneScenario(s)
+		if err != nil {
+			attempts = append(attempts, ScenarioResult{
+				Name: s.Name, Run: run, RunCount: runs, BudgetOK: true,
+				Error: fmt.Sprintf("clone scenario for run: %v", err),
+			})
+			continue
+		}
+		attempt := runScenario(server, runScenarioInput, opts)
 		attempt.Run = run
 		attempt.RunCount = runs
 		if !attempt.OK {
@@ -394,6 +422,29 @@ func boolInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func cloneScenario(s Scenario) (Scenario, error) {
+	body, err := yaml.Marshal(s)
+	if err != nil {
+		return Scenario{}, err
+	}
+	var clone Scenario
+	if err := yaml.Unmarshal(body, &clone); err != nil {
+		return Scenario{}, err
+	}
+	clone.SourceDir = s.SourceDir
+	clone.SourcePath = s.SourcePath
+	for i := range clone.Assert {
+		clone.Assert[i].Category = "assert"
+	}
+	for i := range clone.OutcomeAssert {
+		clone.OutcomeAssert[i].Category = "outcome"
+	}
+	for i := range clone.TrajectoryAssert {
+		clone.TrajectoryAssert[i].Category = "trajectory"
+	}
+	return clone, nil
 }
 
 // ─── Scenario loading ──────────────────────────────────────────────
@@ -521,6 +572,15 @@ func expandScenarioRuntime(s *Scenario, values map[string]string) {
 func replaceScenarioValues(s *Scenario, replace func(string) string) {
 	s.Directive = replace(s.Directive)
 	s.Prompt = replace(s.Prompt)
+	for i := range s.Setup.SeedMCPCalls {
+		call := &s.Setup.SeedMCPCalls[i]
+		call.App = replace(call.App)
+		call.Tool = replace(call.Tool)
+		call.ThreadID = replace(call.ThreadID)
+		if call.Args != nil {
+			call.Args = replaceStringValues(call.Args, replace).(map[string]any)
+		}
+	}
 	for _, group := range [][]AssertClause{s.Assert, s.OutcomeAssert, s.TrajectoryAssert} {
 		for i := range group {
 			group[i].HTTP = replace(group[i].HTTP)
@@ -549,6 +609,71 @@ func replaceStringValue(value any, replace func(string) string) any {
 		return replace(text)
 	}
 	return value
+}
+
+func replaceStringValues(value any, replace func(string) string) any {
+	switch typed := value.(type) {
+	case string:
+		return replace(typed)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = replaceStringValues(item, replace)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = replaceStringValues(item, replace)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func scenarioInitialPace(spec *InitialWakeSpec, now time.Time) (map[string]any, time.Time, error) {
+	if spec == nil {
+		return nil, time.Time{}, nil
+	}
+	after, err := time.ParseDuration(strings.TrimSpace(spec.After))
+	if err != nil || after <= 0 {
+		return nil, time.Time{}, fmt.Errorf("after must be a positive duration")
+	}
+	if after > 24*time.Hour {
+		return nil, time.Time{}, fmt.Errorf("after must not exceed 24h")
+	}
+	sleep := strings.TrimSpace(spec.Sleep)
+	if sleep == "" {
+		sleep = after.String()
+	}
+	if parsed, err := time.ParseDuration(sleep); err != nil || parsed <= 0 || parsed > 24*time.Hour {
+		return nil, time.Time{}, fmt.Errorf("sleep must be a positive duration no greater than 24h")
+	}
+	wakeAt := now.UTC().Add(after)
+	return map[string]any{
+		"sleep":        sleep,
+		"next_wake_at": wakeAt.Format(time.RFC3339Nano),
+	}, wakeAt, nil
+}
+
+func seedScenarioMCPCalls(calls []SeedMCPCallSpec, sidecars map[string]string, agentID int64, projectID string) error {
+	for i, call := range calls {
+		appName := strings.TrimSpace(call.App)
+		tool := strings.TrimSpace(call.Tool)
+		threadID := strings.TrimSpace(call.ThreadID)
+		if appName == "" || tool == "" || threadID == "" {
+			return fmt.Errorf("call %d requires app, tool, and thread_id", i+1)
+		}
+		sidecarURL := strings.TrimSpace(sidecars[appName])
+		if sidecarURL == "" {
+			return fmt.Errorf("call %d targets app %q but no local sidecar is available", i+1, appName)
+		}
+		if err := callPeerMCPAs(sidecarURL, tool, call.Args, agentID, threadID, projectID); err != nil {
+			return fmt.Errorf("call %d %s.%s: %w", i+1, appName, tool, err)
+		}
+	}
+	return nil
 }
 
 func scenarioAssertions(s Scenario) []AssertClause {
@@ -950,11 +1075,12 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	}
 
 	var (
-		deps        []depBundle
-		installed   *installResp
-		sidecarURL  string
-		mcpServers  []map[string]any
-		localRelays []*scopedAppMCPRelay
+		deps          []depBundle
+		installed     *installResp
+		sidecarURL    string
+		sidecarsByApp = map[string]string{}
+		mcpServers    []map[string]any
+		localRelays   []*scopedAppMCPRelay
 	)
 	if s.Setup.App.ReuseExisting {
 		if opts.serverAddr == "" || strings.TrimSpace(opts.projectID) == "" {
@@ -1020,7 +1146,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 
 		// Pre-upload fixtures before the agent starts. Fixtures call MCP
 		// tools on the peer apps directly, with file bytes as base64.
-		sidecarsByApp := map[string]string{appName: sidecarURL}
+		sidecarsByApp[appName] = sidecarURL
 		for _, d := range deps {
 			sidecarsByApp[d.name] = d.sidecar.URL
 		}
@@ -1055,13 +1181,22 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// bootstrap so every scenario shares the same one — keeps the
 	// CRM's per-project data isolated by run, not per-scenario.
 	projectID := server.projectID
-	expandScenarioRuntime(&s, map[string]string{
+	initialPace, wakeAt, err := scenarioInitialPace(s.Setup.InitialWake, time.Now().UTC())
+	if err != nil {
+		res.Error = fmt.Sprintf("initial wake: %v", err)
+		return res
+	}
+	runtimeValues := map[string]string{
 		"APTEVA_TEST_APP_URL":    sidecarURL,
 		"APTEVA_TEST_SERVER_URL": "http://" + server.addr,
 		"APTEVA_TEST_PROJECT_ID": projectID,
 		"APTEVA_TEST_APP_NAME":   appName,
 		"APTEVA_TEST_INSTALL_ID": strconv.FormatInt(installed.InstallID, 10),
-	})
+	}
+	if !wakeAt.IsZero() {
+		runtimeValues["APTEVA_TEST_WAKE_AT"] = wakeAt.Format(time.RFC3339Nano)
+	}
+	expandScenarioRuntime(&s, runtimeValues)
 	interaction := strings.ToLower(strings.TrimSpace(s.Setup.Interaction))
 	if interaction == "" {
 		interaction = "autonomous"
@@ -1086,7 +1221,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		mode = "autonomous"
 	}
 	includeChannels := interaction == "conversation"
-	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers, []int64{installed.InstallID}, includeChannels)
+	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers, []int64{installed.InstallID}, includeChannels, initialPace)
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
@@ -1106,8 +1241,12 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// /api/instances only carries server-side flags (include_apteva_
 	// server, etc.), not the agent's tool list. The on-disk
 	// config.json is the single source of truth core consumes.
-	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, mcpServers, includeChannels); err != nil {
+	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, mcpServers, includeChannels, initialPace); err != nil {
 		res.Error = fmt.Sprintf("write instance config.json: %v", err)
+		return res
+	}
+	if err := seedScenarioMCPCalls(s.Setup.SeedMCPCalls, sidecarsByApp, inst.ID, projectID); err != nil {
+		res.Error = fmt.Sprintf("seed MCP calls: %v", err)
 		return res
 	}
 
@@ -2179,11 +2318,33 @@ func loadFixtures(fixtures []FixtureSpec, sourceDir, projectID string, sidecars 
 // and returns when the call finishes. We're already authorised
 // because the sidecar is in dev-mode (APTEVA_APP_TOKEN="").
 func callPeerMCP(sidecarURL, tool string, args map[string]any) error {
+	return callPeerMCPRequest(sidecarURL, tool, args, nil)
+}
+
+func callPeerMCPAs(sidecarURL, tool string, args map[string]any, agentID int64, threadID, projectID string) error {
+	headers := http.Header{}
+	headers.Set("X-Apteva-Caller-Agent", strconv.FormatInt(agentID, 10))
+	headers.Set("X-Apteva-Caller-Thread", threadID)
+	headers.Set("X-Apteva-Project-ID", projectID)
+	return callPeerMCPRequest(sidecarURL, tool, args, headers)
+}
+
+func callPeerMCPRequest(sidecarURL, tool string, args map[string]any, headers http.Header) error {
 	body, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{"name": tool, "arguments": args},
 	})
-	resp, err := http.Post(sidecarURL+"/mcp", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, sidecarURL+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -2591,7 +2752,7 @@ func postScenarioConversation(server *testServer, conversationID, prompt string)
 	return nil
 }
 
-func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool) (*instanceResp, error) {
+func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool, initialPace map[string]any) (*instanceResp, error) {
 	// config_json carries the agent's MCP servers + any other config
 	// the core needs at boot. The platform writes this to the
 	// instance dir's config.json; the core picks it up on start.
@@ -2601,6 +2762,9 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 	}
 	if strings.TrimSpace(provider) != "" {
 		config["default_provider"] = normalizeProviderName(provider)
+	}
+	if initialPace != nil {
+		config["main_pace"] = initialPace
 	}
 	configJSON, _ := json.Marshal(config)
 
@@ -2631,12 +2795,18 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 // before merging in the system MCP entries, so anything we put here
 // flows into the agent's tool surface.
 //
-// Only effective when bootstrapServer spawned the apteva-server
-// itself (we know dataDir then). When testServer.dataDir is empty
-// (existing-server mode), we no-op — the operator owns disk state.
-func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode string, mcpServers []map[string]any, includeChannels bool) error {
+// Spawned-server runs write the known temporary data directory directly.
+// Existing-server runs normally leave operator-owned disk state untouched;
+// when an initial pace is explicitly requested, they persist only that field
+// through the stopped agent's authenticated config endpoint.
+func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode string, mcpServers []map[string]any, includeChannels bool, initialPace map[string]any) error {
 	if server.dataDir == "" {
-		return nil
+		if initialPace == nil {
+			return nil
+		}
+		return requestJSON(http.MethodPut,
+			fmt.Sprintf("http://%s/api/instances/%d/config", server.addr, instanceID),
+			server.apiKey, map[string]any{"main_pace": initialPace}, nil)
 	}
 	dir := filepath.Join(server.dataDir, fmt.Sprintf("instance_%d", instanceID))
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -2647,6 +2817,9 @@ func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mo
 		"mode":             mode,
 		"mcp_servers":      mcpServers,
 		"include_channels": includeChannels,
+	}
+	if initialPace != nil {
+		cfg["main_pace"] = initialPace
 	}
 	body, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -2903,12 +3076,16 @@ func buildLocalSidecarBinary(dir, binPath string, disableWorkspace bool) ([]byte
 // ─── Misc ──────────────────────────────────────────────────────────
 
 func postJSON(url, apiKey string, body, out any) error {
+	return requestJSON(http.MethodPost, url, apiKey, body, out)
+}
+
+func requestJSON(method, url, apiKey string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		raw, _ := json.Marshal(body)
 		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest("POST", url, reader)
+	req, err := http.NewRequest(method, url, reader)
 	if err != nil {
 		return err
 	}

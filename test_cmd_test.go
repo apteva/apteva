@@ -74,6 +74,84 @@ func TestExpandScenarioRuntime(t *testing.T) {
 	}
 }
 
+func TestExpandScenarioRuntimeReplacesNestedSeedMCPArgs(t *testing.T) {
+	scenario := Scenario{Setup: ScenarioSetup{SeedMCPCalls: []SeedMCPCallSpec{{
+		App: "${APTEVA_TEST_APP_NAME}", Tool: "create", ThreadID: "${APTEVA_TEST_DEFAULT_THREAD_ID}",
+		Args: map[string]any{
+			"schedule": map[string]any{"kind": "once", "at": "${APTEVA_TEST_WAKE_AT}"},
+			"labels":   []any{"agent-${APTEVA_TEST_AGENT_ID}"},
+		},
+	}}}}
+	expandScenarioRuntime(&scenario, map[string]string{
+		"APTEVA_TEST_APP_NAME":          "tasks",
+		"APTEVA_TEST_DEFAULT_THREAD_ID": "main",
+		"APTEVA_TEST_WAKE_AT":           "2026-08-10T10:00:00Z",
+		"APTEVA_TEST_AGENT_ID":          "42",
+	})
+	call := scenario.Setup.SeedMCPCalls[0]
+	schedule := call.Args["schedule"].(map[string]any)
+	labels := call.Args["labels"].([]any)
+	if call.App != "tasks" || call.ThreadID != "main" || schedule["at"] != "2026-08-10T10:00:00Z" || labels[0] != "agent-42" {
+		t.Fatalf("seed call was not expanded: %#v", call)
+	}
+}
+
+func TestScenarioInitialPace(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 9, 59, 50, 0, time.UTC)
+	pace, wakeAt, err := scenarioInitialPace(&InitialWakeSpec{After: "10s"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wakeAt != now.Add(10*time.Second) || pace["sleep"] != "10s" || pace["next_wake_at"] != "2026-08-10T10:00:00Z" {
+		t.Fatalf("pace=%#v wake=%s", pace, wakeAt)
+	}
+	if _, _, err := scenarioInitialPace(&InitialWakeSpec{After: "25h"}, now); err == nil {
+		t.Fatal("expected overlong initial wake to fail")
+	}
+}
+
+func TestCloneScenarioIsolatesRepeatedRunRuntimeExpansion(t *testing.T) {
+	original := Scenario{
+		SourceDir: "/tmp/scenarios", SourcePath: "/tmp/scenarios/race.yaml",
+		Setup: ScenarioSetup{SeedMCPCalls: []SeedMCPCallSpec{{
+			App: "tasks", Tool: "create", ThreadID: "main",
+			Args: map[string]any{"schedule": map[string]any{"at": "${APTEVA_TEST_WAKE_AT}"}},
+		}}},
+		Assert: []AssertClause{{HTTP: "GET /tasks", ToolCalledWith: &ToolCallAssertion{
+			Tool: "tasks_create", Args: map[string]any{"title": "${APTEVA_TEST_AGENT_ID}"},
+		}}},
+	}
+	clone, err := cloneScenario(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expandScenarioRuntime(&clone, map[string]string{
+		"APTEVA_TEST_WAKE_AT": "2026-08-10T10:00:00Z", "APTEVA_TEST_AGENT_ID": "42",
+	})
+	originalSchedule := original.Setup.SeedMCPCalls[0].Args["schedule"].(map[string]any)
+	if originalSchedule["at"] != "${APTEVA_TEST_WAKE_AT}" || original.Assert[0].ToolCalledWith.Args["title"] != "${APTEVA_TEST_AGENT_ID}" {
+		t.Fatalf("runtime expansion mutated the reusable scenario: %#v", original)
+	}
+	if clone.SourceDir != original.SourceDir || clone.Assert[0].Category != "assert" {
+		t.Fatalf("clone metadata=%#v", clone)
+	}
+}
+
+func TestCallPeerMCPAsSendsTrustedCallerHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Apteva-Caller-Agent") != "42" ||
+			r.Header.Get("X-Apteva-Caller-Thread") != "main" ||
+			r.Header.Get("X-Apteva-Project-ID") != "project-test" {
+			t.Errorf("caller headers = %#v", r.Header)
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[]}}`))
+	}))
+	defer server.Close()
+	if err := callPeerMCPAs(server.URL, "create", map[string]any{"title": "seeded"}, 42, "main", "project-test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestToolCallAssertionExactNameDoesNotMatchSuffix(t *testing.T) {
 	result := &ScenarioResult{ToolCalls: []ToolCallResult{{Name: "channels_send", ThreadID: "chat-1"}}}
 	assertion := &ToolCallAssertion{Tool: "send", Exact: true, ThreadID: "chat-1"}
@@ -593,7 +671,7 @@ func TestCreateInstanceKeepsPlatformGatewayDisabled(t *testing.T) {
 	defer httpServer.Close()
 
 	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
-	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", nil, nil, false)
+	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
@@ -620,7 +698,7 @@ func TestCreateConversationScenarioEnablesOnlyChannelsGateway(t *testing.T) {
 	defer httpServer.Close()
 
 	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
-	instance, err := tcCreateInstance(server, "project-1", "chat-test", "directive", "autonomous", "openai-codex", nil, []int64{91}, true)
+	instance, err := tcCreateInstance(server, "project-1", "chat-test", "directive", "autonomous", "openai-codex", nil, []int64{91}, true, nil)
 	if err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
