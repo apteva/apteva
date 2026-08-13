@@ -1,7 +1,7 @@
 {
   "schema": "apteva-platform/v1",
   "version": "0.33.0",
-  "released_at": "2026-08-13T14:37:14Z",
+  "released_at": "2026-08-13T14:44:34Z",
   "release_notes_url": "https://github.com/apteva/apteva/releases/tag/v0.33.0",
   "components": {
     "apteva":              "0.33.0",
