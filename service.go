@@ -29,6 +29,7 @@ import (
 )
 
 const serviceUnitName = "apteva"
+const systemdUpdateDropInName = "50-apteva-cli-update.conf"
 const launchdLabel = "ai.apteva"
 
 // serviceScope picks where the unit/plist gets written and which
@@ -399,6 +400,113 @@ func systemctl(scope serviceScope, args ...string) error {
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// systemctlValue runs a read-only systemctl query and returns its trimmed
+// stdout. Unlike systemctl, it keeps stderr out of successful command output
+// while retaining it in failures so update diagnostics remain actionable.
+func systemctlValue(scope serviceScope, args ...string) (string, error) {
+	full := []string{}
+	if scope == scopeUser {
+		full = append(full, "--user")
+	}
+	full = append(full, args...)
+	cmd := exec.Command("systemctl", full...)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if detail := strings.TrimSpace(string(exitErr.Stderr)); detail != "" {
+				return "", fmt.Errorf("%w: %s", err, detail)
+			}
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func systemdUpdateDropInPath(scope serviceScope) (string, error) {
+	unitPath, _, err := systemdUnitPath(scope)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(unitPath), serviceUnitName+".service.d", systemdUpdateDropInName), nil
+}
+
+const systemdUpdateDropIn = `[Service]
+KillMode=process
+`
+
+// ensureSystemdUpdateCompatibility migrates legacy service installations
+// without rewriting the operator's unit or any operator-owned drop-ins. The
+// effective value is queried after daemon-reload because a later-sorting
+// operator drop-in may intentionally override this managed setting.
+func ensureSystemdUpdateCompatibility(scope serviceScope) error {
+	path, err := systemdUpdateDropInPath(scope)
+	if err != nil {
+		return err
+	}
+	return ensureSystemdUpdateCompatibilityAt(
+		path,
+		func() error { return systemctl(scope, "daemon-reload") },
+		func() (string, error) {
+			return systemctlValue(scope, "show", serviceUnitName+".service", "-p", "KillMode", "--value")
+		},
+	)
+}
+
+// ensureSystemdUpdateCompatibilityAt contains the filesystem migration behind
+// small callbacks so it can be regression-tested without invoking systemd or
+// writing under /etc.
+func ensureSystemdUpdateCompatibilityAt(
+	path string,
+	daemonReload func() error,
+	effectiveKillMode func() (string, error),
+) error {
+	if err := writeManagedSystemdDropIn(path, []byte(systemdUpdateDropIn)); err != nil {
+		return fmt.Errorf("write managed systemd drop-in %s: %w", path, err)
+	}
+	if err := daemonReload(); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %w", err)
+	}
+	mode, err := effectiveKillMode()
+	if err != nil {
+		return fmt.Errorf("verify effective KillMode: %w", err)
+	}
+	if mode != "process" {
+		return fmt.Errorf("effective KillMode is %q, want %q (check later-sorting operator drop-ins)", mode, "process")
+	}
+	return nil
+}
+
+func writeManagedSystemdDropIn(path string, body []byte) error {
+	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(body) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".apteva-systemd-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func exec_loginctl(args ...string) error {

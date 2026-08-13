@@ -281,6 +281,20 @@ func cmdUpdate(args []string) int {
 		return 0
 	}
 
+	// Resolve the supervisor before activation. Existing systemd installs may
+	// predate KillMode=process; migrate them with a CLI-owned drop-in and verify
+	// the effective configuration while the old version is still active. A
+	// migration failure must never leave bin/current pointing at the new build.
+	serviceScope, serviceInstalled := detectInstalledScope()
+	if serviceInstalled && runtime.GOOS == "linux" {
+		fmt.Fprintln(os.Stderr, "checking systemd update compatibility…")
+		if err := ensureSystemdUpdateCompatibility(serviceScope); err != nil {
+			fmt.Fprintf(os.Stderr, "systemd migration failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, "(new version not activated — old version still in use)")
+			return 1
+		}
+	}
+
 	// 5. Atomic flip. pointSymlinks writes a temp symlink and
 	//    renames it onto `current` — POSIX-atomic on the same
 	//    filesystem.
@@ -313,16 +327,26 @@ func cmdUpdate(args []string) int {
 	//    c. Nothing running: nothing to restart. Operator next
 	//       runs `apteva` and it picks up the new version
 	//       automatically.
-	if scope, ok := detectInstalledScope(); ok {
+	if serviceInstalled {
 		if err := writeLifecycleIntent("update", *agentPolicy); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to prepare update restart: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "  restarting service…")
-		if err := restartServiceForRollback(scope); err != nil {
+		healthURL := updateHealthURL()
+		if err := restartAndVerifyUpdatedService(
+			serviceScope,
+			healthURL,
+			60*time.Second,
+			restartServiceForRollback,
+			waitForUpdateHealth,
+		); err != nil {
 			clearLifecycleIntent()
-			fmt.Fprintf(os.Stderr, "service restart returned %v — check `apteva service status`\n", err)
+			fmt.Fprintf(os.Stderr, "update activation failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, "check `apteva service status` and `apteva service logs`")
+			return 1
 		}
+		fmt.Fprintf(os.Stderr, "  service healthy: %s\n", healthURL)
 	} else if isStackRunning() {
 		if err := writeLifecycleIntent("update", *agentPolicy); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to prepare update restart: %v\n", err)
@@ -482,6 +506,60 @@ func hasDir(p string) bool {
 func stopRunningStack() {
 	killProcessOnPort(defaultServerPort)
 	time.Sleep(300 * time.Millisecond)
+}
+
+func updateHealthURL() string {
+	port := loadAptevaConfig().ServerPort
+	if port == 0 {
+		port = defaultServerPort
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d/health", port)
+}
+
+func waitForUpdateHealth(url string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	var lastErr error
+	for {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if !time.Now().Before(deadline) {
+			if lastErr == nil {
+				lastErr = fmt.Errorf("no successful response")
+			}
+			return fmt.Errorf("%s did not become healthy within %s: %w", url, timeout, lastErr)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func restartAndVerifyUpdatedService(
+	scope serviceScope,
+	healthURL string,
+	timeout time.Duration,
+	restart func(serviceScope) error,
+	waitHealthy func(string, time.Duration) error,
+) error {
+	if err := restart(scope); err != nil {
+		return fmt.Errorf("service restart: %w", err)
+	}
+	if err := waitHealthy(healthURL, timeout); err != nil {
+		return fmt.Errorf("service health check: %w", err)
+	}
+	return nil
 }
 
 func downloadFile(url, dst string) error {
