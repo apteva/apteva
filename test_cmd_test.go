@@ -587,6 +587,61 @@ func TestScopedAppMCPRelayRoutesOnlySelectedInstall(t *testing.T) {
 	}
 }
 
+func TestScenarioFakeMCPServerExposesSpawnableDomainTool(t *testing.T) {
+	servers, configs, err := startScenarioFakeMCPServers([]FakeMCPServerSpec{{
+		Name: "creator-sandbox",
+		Tools: []FakeMCPToolSpec{{
+			Name: "verify_post", Description: "Verify a simulated creator post.",
+			Required: []string{"title", "body_token"}, Result: "DOMAIN ACTION VERIFIED",
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer servers[0].Close()
+	if len(configs) != 1 || configs[0]["name"] != "creator-sandbox" || configs[0]["no_spawn"] != false {
+		t.Fatalf("fake MCP config = %+v", configs)
+	}
+
+	call := func(body string) map[string]any {
+		t.Helper()
+		response, err := http.Post(servers[0].URL, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	listed := call(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	result := listed["result"].(map[string]any)
+	tools := result["tools"].([]any)
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "verify_post" {
+		t.Fatalf("listed fake tools = %+v", tools)
+	}
+	called := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"verify_post","arguments":{"title":"Freeze Play in Full","body_token":"BODY-END-7Q9"}}}`)
+	callResult := called["result"].(map[string]any)
+	content := callResult["content"].([]any)[0].(map[string]any)
+	if content["text"] != "DOMAIN ACTION VERIFIED" {
+		t.Fatalf("fake tool result = %+v", callResult)
+	}
+}
+
+func TestScenarioAppMCPSpawnabilityIsExplicitAndOptIn(t *testing.T) {
+	locked := scenarioAppMCPConfig("tasks", "http://tasks.test/mcp", false)
+	if locked["no_spawn"] != true {
+		t.Fatalf("default scenario app MCP must remain non-spawnable: %+v", locked)
+	}
+	spawnable := scenarioAppMCPConfig("tasks", "http://tasks.test/mcp", true)
+	if spawnable["no_spawn"] != false || spawnable["name"] != "tasks" {
+		t.Fatalf("opt-in spawnable scenario app MCP = %+v", spawnable)
+	}
+}
+
 func TestManualMountManifestPreservesCapabilitiesWithoutSourceDelivery(t *testing.T) {
 	raw := []byte(`schema: apteva-app/v1
 name: tasks

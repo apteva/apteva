@@ -44,6 +44,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -98,14 +99,33 @@ type Scenario struct {
 }
 
 type ScenarioSetup struct {
-	App          AppSetup          `yaml:"app"`
-	Mode         string            `yaml:"mode"`        // autonomous | cautious | learn
-	Interaction  string            `yaml:"interaction"` // autonomous (default) | conversation
-	Config       map[string]string `yaml:"config"`
-	Fixtures     []FixtureSpec     `yaml:"fixtures"` // pre-uploaded files / setup data
-	InitialWake  *InitialWakeSpec  `yaml:"initial_wake"`
-	SeedMCPCalls []SeedMCPCallSpec `yaml:"seed_mcp_calls"`
-	RequiredEnv  []string          `yaml:"required_env"`
+	App          AppSetup            `yaml:"app"`
+	Mode         string              `yaml:"mode"`        // autonomous | cautious | learn
+	Interaction  string              `yaml:"interaction"` // autonomous (default) | conversation
+	Config       map[string]string   `yaml:"config"`
+	Fixtures     []FixtureSpec       `yaml:"fixtures"` // pre-uploaded files / setup data
+	FakeMCPs     []FakeMCPServerSpec `yaml:"fake_mcp_servers"`
+	InitialWake  *InitialWakeSpec    `yaml:"initial_wake"`
+	SeedMCPCalls []SeedMCPCallSpec   `yaml:"seed_mcp_calls"`
+	RequiredEnv  []string            `yaml:"required_env"`
+}
+
+// FakeMCPServerSpec adds a deterministic, in-process MCP server to a live
+// scenario. It is useful when the app under test coordinates a worker that
+// must combine authoritative app data with a separate domain capability.
+// Fake MCPs are spawnable by default; set no_spawn only for access-control
+// scenarios that explicitly need the opposite behavior.
+type FakeMCPServerSpec struct {
+	Name    string            `yaml:"name"`
+	NoSpawn bool              `yaml:"no_spawn"`
+	Tools   []FakeMCPToolSpec `yaml:"tools"`
+}
+
+type FakeMCPToolSpec struct {
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Required    []string `yaml:"required"`
+	Result      string   `yaml:"result"`
 }
 
 type AppSetup struct {
@@ -113,6 +133,7 @@ type AppSetup struct {
 	Config        map[string]string `yaml:"config"`         // install-time config
 	Env           map[string]string `yaml:"env"`            // sidecar process environment
 	ReuseExisting bool              `yaml:"reuse_existing"` // use the server's installed app and state
+	Spawnable     bool              `yaml:"spawnable"`      // allow agent-created workers to attach this app's MCP
 }
 
 // FixtureSpec — pre-loaded data that has to be in place before the
@@ -1102,10 +1123,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			return res
 		}
 		defer relay.Close()
-		mcpServers = append(mcpServers, map[string]any{
-			"name": appName, "transport": "http", "url": relay.URL,
-			"main_access": true, "no_spawn": true,
-		})
+		mcpServers = append(mcpServers, scenarioAppMCPConfig(appName, relay.URL, s.Setup.App.Spawnable))
 	} else {
 		// Install + spawn dependent apps first. The manifest's
 		// requires.apps lists peer apps the unit under test calls over
@@ -1161,9 +1179,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			return res
 		}
 		localRelays = append(localRelays, appRelay)
-		mcpServers = append(mcpServers, map[string]any{
-			"name": appName, "transport": "http", "url": appRelay.URL, "main_access": true, "no_spawn": true,
-		})
+		mcpServers = append(mcpServers, scenarioAppMCPConfig(appName, appRelay.URL, s.Setup.App.Spawnable))
 		for _, d := range deps {
 			depRelay, relayErr := startScopedAppMCPRelay(server, d.name, d.installID)
 			if relayErr != nil {
@@ -1176,6 +1192,17 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			})
 		}
 	}
+	fakeMCPServers, fakeMCPConfigs, err := startScenarioFakeMCPServers(s.Setup.FakeMCPs)
+	if err != nil {
+		res.Error = fmt.Sprintf("start fake MCP servers: %v", err)
+		return res
+	}
+	defer func() {
+		for _, server := range fakeMCPServers {
+			server.Close()
+		}
+	}()
+	mcpServers = append(mcpServers, fakeMCPConfigs...)
 
 	// Pick the project the agent runs in. testServer fetched it at
 	// bootstrap so every scenario shares the same one — keeps the
@@ -2257,6 +2284,136 @@ func installDeps(server *testServer, appDir string, manifestYAML []byte) ([]depB
 		out = append(out, depBundle{name: name, installID: installed.InstallID, sidecar: sc})
 	}
 	return out, nil
+}
+
+func scenarioAppMCPConfig(name, url string, spawnable bool) map[string]any {
+	return map[string]any{
+		"name": name, "transport": "http", "url": url,
+		"main_access": true, "no_spawn": !spawnable,
+	}
+}
+
+func startScenarioFakeMCPServers(specs []FakeMCPServerSpec) ([]*httptest.Server, []map[string]any, error) {
+	servers := make([]*httptest.Server, 0, len(specs))
+	configs := make([]map[string]any, 0, len(specs))
+	closeAll := func() {
+		for _, server := range servers {
+			server.Close()
+		}
+	}
+	for index, spec := range specs {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			closeAll()
+			return nil, nil, fmt.Errorf("fake MCP %d requires name", index+1)
+		}
+		if len(spec.Tools) == 0 {
+			closeAll()
+			return nil, nil, fmt.Errorf("fake MCP %q requires at least one tool", name)
+		}
+		tools := make(map[string]FakeMCPToolSpec, len(spec.Tools))
+		for _, tool := range spec.Tools {
+			toolName := strings.TrimSpace(tool.Name)
+			if toolName == "" {
+				closeAll()
+				return nil, nil, fmt.Errorf("fake MCP %q has a tool without a name", name)
+			}
+			if _, exists := tools[toolName]; exists {
+				closeAll()
+				return nil, nil, fmt.Errorf("fake MCP %q repeats tool %q", name, toolName)
+			}
+			tool.Name = toolName
+			tools[toolName] = tool
+		}
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "POST only", http.StatusMethodNotAllowed)
+				return
+			}
+			var request struct {
+				ID     any             `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&request); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			if request.ID == nil {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+			var result any
+			switch request.Method {
+			case "initialize":
+				result = map[string]any{
+					"protocolVersion": "2025-03-26",
+					"capabilities":    map[string]any{"tools": map[string]any{}},
+					"serverInfo":      map[string]string{"name": name, "version": "scenario-fixture"},
+				}
+			case "tools/list":
+				listed := make([]map[string]any, 0, len(tools))
+				names := make([]string, 0, len(tools))
+				for toolName := range tools {
+					names = append(names, toolName)
+				}
+				sort.Strings(names)
+				for _, toolName := range names {
+					tool := tools[toolName]
+					properties := make(map[string]any, len(tool.Required))
+					for _, field := range tool.Required {
+						properties[field] = map[string]any{"type": "string"}
+					}
+					listed = append(listed, map[string]any{
+						"name": tool.Name, "description": tool.Description,
+						"inputSchema": map[string]any{
+							"type": "object", "properties": properties,
+							"required": tool.Required, "additionalProperties": false,
+						},
+					})
+				}
+				result = map[string]any{"tools": listed}
+			case "tools/call":
+				var params struct {
+					Name      string         `json:"name"`
+					Arguments map[string]any `json:"arguments"`
+				}
+				_ = json.Unmarshal(request.Params, &params)
+				tool, exists := tools[params.Name]
+				if !exists {
+					result = map[string]any{"isError": true, "content": []map[string]any{{"type": "text", "text": "unknown fake tool"}}}
+					break
+				}
+				missing := make([]string, 0)
+				for _, field := range tool.Required {
+					if strings.TrimSpace(fmt.Sprint(params.Arguments[field])) == "" {
+						missing = append(missing, field)
+					}
+				}
+				if len(missing) > 0 {
+					result = map[string]any{"isError": true, "content": []map[string]any{{"type": "text", "text": "missing required fields: " + strings.Join(missing, ", ")}}}
+					break
+				}
+				response := strings.TrimSpace(tool.Result)
+				if response == "" {
+					response = "FAKE_MCP_OK"
+				}
+				result = map[string]any{"content": []map[string]any{{"type": "text", "text": response}}}
+			default:
+				result = map[string]any{}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+		})
+		server := httptest.NewServer(handler)
+		servers = append(servers, server)
+		configs = append(configs, map[string]any{
+			"name": name, "transport": "http", "url": server.URL,
+			"no_spawn": spec.NoSpawn,
+		})
+	}
+	return servers, configs, nil
 }
 
 // loadFixtures pre-uploads files declared in setup.fixtures. Each

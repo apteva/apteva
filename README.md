@@ -46,6 +46,14 @@ On macOS or Linux with Node.js 18+. The installer downloads the current native r
 
 Apteva runs locally by default. Your agents, credentials, memory, and operational data stay under your control.
 
+Local country lookup is enabled by default using DB-IP Country Lite, downloaded
+anonymously and refreshed monthly. Use `apteva geoip setup --test` for
+development, or provide a MaxMind account ID and license key to use GeoLite2
+Country instead. Server refreshes configured databases in the background and
+keeps serving with the last known-good copy if an update fails. DB-IP Country
+Lite data is provided by [DB-IP](https://db-ip.com) under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
 ## Agents are easy to demo. Hard to operate.
 
 A prototype agent can call a tool. A production agent also needs durable state, memory, permissions, events, schedules, workers, retries, dashboards, integrations, and deployment.

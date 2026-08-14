@@ -58,6 +58,8 @@ func main() {
 			os.Exit(cmdVersions(invocation.args))
 		case cliModeRollback:
 			os.Exit(cmdRollback(invocation.args))
+		case cliModeGeoIP:
+			os.Exit(cmdGeoIP(invocation.args))
 		}
 	}
 
@@ -74,6 +76,7 @@ Commands:
   agents     Manage agent runtime rollouts
   versions   List installed versions
   rollback   Roll back to an installed version
+  geoip      Manage the optional country database
   version    Print the CLI version
 
 Flags:`)

@@ -15,6 +15,7 @@ const (
 	cliModeAgents
 	cliModeVersions
 	cliModeRollback
+	cliModeGeoIP
 	cliModeVersion
 )
 
@@ -47,6 +48,8 @@ func parseCLIInvocation(args []string) (cliInvocation, error) {
 		return cliInvocation{mode: cliModeVersions, args: rest}, nil
 	case "rollback":
 		return cliInvocation{mode: cliModeRollback, args: rest}, nil
+	case "geoip":
+		return cliInvocation{mode: cliModeGeoIP, args: rest}, nil
 	case "version", "--version", "-v":
 		if len(rest) != 0 {
 			return cliInvocation{}, fmt.Errorf("%s does not accept additional arguments", first)
