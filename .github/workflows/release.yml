@@ -391,9 +391,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  publish-docker:
+  build-docker:
     needs: release
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -462,8 +472,61 @@ jobs:
         shell: bash
         run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.REPO_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Build and push native Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apteva/Dockerfile.server
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/apteva/apteva,push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            APTEVA_VERSION=${{ steps.version.outputs.version }}
+            BUILD_TIME=${{ steps.build_time.outputs.value }}
+          cache-from: type=gha,scope=apteva-docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=apteva-docker-${{ matrix.arch }}
+
+      - name: Export image digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${DIGEST#sha256:}"
+          test -n "$digest"
+          touch "$RUNNER_TEMP/digests/$digest"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-docker:
+    needs: build-docker
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download image digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: docker-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -475,16 +538,36 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_TOKEN || secrets.REPO_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apteva/Dockerfile.server
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            APTEVA_VERSION=${{ steps.version.outputs.version }}
-            BUILD_TIME=${{ steps.build_time.outputs.value }}
-          tags: |
-            ghcr.io/apteva/apteva:${{ steps.version.outputs.version }}
-            ghcr.io/apteva/apteva:latest
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and tag multi-platform image
+        shell: bash
+        env:
+          IMAGE: ghcr.io/apteva/apteva
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mapfile -t digest_files < <(find "$RUNNER_TEMP/digests" -type f | sort)
+          if [[ "${#digest_files[@]}" -ne 2 ]]; then
+            echo "Expected 2 image digests, found ${#digest_files[@]}" >&2
+            exit 1
+          fi
+
+          images=()
+          for digest_file in "${digest_files[@]}"; do
+            images+=("$IMAGE@sha256:$(basename "$digest_file")")
+          done
+
+          docker buildx imagetools create \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:latest" \
+            "${images[@]}"
+
+      - name: Inspect published image
+        shell: bash
+        env:
+          IMAGE: ghcr.io/apteva/apteva
+          VERSION: ${{ steps.version.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
