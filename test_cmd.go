@@ -927,17 +927,37 @@ func resolveTestProject(server *testServer, requested string) (string, error) {
 }
 
 func verifyServerProvider(server *testServer, requested string) error {
+	want := normalizeProviderName(requested)
+	found, err := legacyServerHasProvider(server, want)
+	if err != nil {
+		// Servers past the providers→connections migration removed
+		// /api/providers (410, or a redirect onto dashboard HTML).
+		found, err = serverHasLLMConnection(server, want)
+	}
+	if err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if want != "" {
+		return fmt.Errorf("LLM provider %q is not configured for project %s", requested, server.projectID)
+	}
+	return fmt.Errorf("no LLM provider is configured for project %s", server.projectID)
+}
+
+func legacyServerHasProvider(server *testServer, want string) (bool, error) {
 	endpoint := "http://" + server.addr + "/api/providers?project_id=" + url.QueryEscape(server.projectID)
 	req, _ := http.NewRequest(http.MethodGet, endpoint, nil)
 	req.Header.Set("Authorization", "Bearer "+server.apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("list existing-server providers: %w", err)
+		return false, fmt.Errorf("list existing-server providers: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("list existing-server providers: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+		return false, fmt.Errorf("list existing-server providers: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
 	}
 	var providers []struct {
 		Type   string `json:"type"`
@@ -945,20 +965,53 @@ func verifyServerProvider(server *testServer, requested string) error {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
-		return fmt.Errorf("decode existing-server providers: %w", err)
+		return false, fmt.Errorf("decode existing-server providers: %w", err)
 	}
-	want := normalizeProviderName(requested)
 	for _, provider := range providers {
 		name := normalizeProviderName(provider.Name)
 		isLLM := strings.EqualFold(provider.Type, "llm") || knownLLMProvider(name)
 		if isLLM && !strings.EqualFold(provider.Status, "disabled") && (want == "" || name == want) {
-			return nil
+			return true, nil
 		}
 	}
-	if want != "" {
-		return fmt.Errorf("LLM provider %q is not configured for project %s", requested, server.projectID)
+	return false, nil
+}
+
+func serverHasLLMConnection(server *testServer, want string) (bool, error) {
+	endpoint := "http://" + server.addr + "/api/connections/runtime"
+	req, _ := http.NewRequest(http.MethodGet, endpoint, nil)
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("list existing-server connections: %w", err)
 	}
-	return fmt.Errorf("no LLM provider is configured for project %s", server.projectID)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("list existing-server connections: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+	}
+	var connections []struct {
+		Name         string   `json:"name"`
+		AppSlug      string   `json:"app_slug"`
+		Role         string   `json:"role"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&connections); err != nil {
+		return false, fmt.Errorf("decode existing-server connections: %w", err)
+	}
+	for _, connection := range connections {
+		isLLM := strings.EqualFold(connection.Role, "llm")
+		for _, capability := range connection.Capabilities {
+			isLLM = isLLM || strings.EqualFold(capability, "llm")
+		}
+		if !isLLM {
+			continue
+		}
+		if want == "" || normalizeProviderName(connection.AppSlug) == want || normalizeProviderName(connection.Name) == want {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func normalizeProviderName(value string) string {
@@ -1994,6 +2047,13 @@ func assertToolCallMatch(want *ToolCallAssertion, negate bool, res *ScenarioResu
 	if ok && want.Before != "" {
 		other := -1
 		for i, call := range res.ToolCalls {
+			// Ordering assertions pinned to a thread compare against that
+			// thread's matching call. Concurrent workers may interleave, so a
+			// send from worker A must not make worker B's tasks_get-before-send
+			// assertion fail.
+			if strings.TrimSpace(want.ThreadID) != "" && call.ThreadID != want.ThreadID {
+				continue
+			}
 			if toolNameMatches(call.Name, want.Before) {
 				other = i
 				break

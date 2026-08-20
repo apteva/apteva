@@ -312,6 +312,30 @@ func TestToolAssertionsCanPinOpaqueConversationThread(t *testing.T) {
 	}
 }
 
+func TestToolAssertionBeforeIsScopedToPinnedThread(t *testing.T) {
+	result := &ScenarioResult{ToolCalls: []ToolCallResult{
+		{Name: "tasks_tasks_get", ThreadID: "worker-alpha"},
+		{Name: "send", ThreadID: "worker-alpha"},
+		{Name: "tasks_tasks_get", ThreadID: "worker-gamma"},
+		{Name: "send", ThreadID: "worker-gamma"},
+	}}
+	one := 1
+	getBeforeOwnSend := &ToolCallAssertion{
+		Tool: "tasks_get", ThreadID: "worker-gamma", Count: &one, Before: "send",
+	}
+	if got := assertToolCallMatch(getBeforeOwnSend, false, result); !got.OK {
+		t.Fatalf("interleaved worker ordering assertion = %+v", got)
+	}
+
+	result.ToolCalls = []ToolCallResult{
+		{Name: "send", ThreadID: "worker-gamma"},
+		{Name: "tasks_tasks_get", ThreadID: "worker-gamma"},
+	}
+	if got := assertToolCallMatch(getBeforeOwnSend, false, result); got.OK {
+		t.Fatalf("same-worker reversed ordering must fail: %+v", got)
+	}
+}
+
 func TestConversationAssertionsUseVisibleFinalMessages(t *testing.T) {
 	const apiKey = "owner-key"
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
