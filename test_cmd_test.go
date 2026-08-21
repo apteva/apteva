@@ -107,7 +107,27 @@ setup:
         primary: true
         config:
           peer: ${NODE_tenant_APP_URL}
+        apps:
+          - id: control
+            path: ../control
+            global: true
+            env:
+              CONTROL_URL: ${NODE_main_URL}
+            bindings:
+              transport: app
       - id: tenant
+        provision:
+          from: main
+          app: control
+          tool: tenant_create
+          connect_host: 127.0.0.1
+          args:
+            slug: ${TENANT_SLUG}
+          cleanup:
+            tool: tenant_delete
+            args:
+              tenant_id: ${RESULT.tenant_id}
+              confirm: true
         agents:
           - id: worker
             name: Worker
@@ -128,13 +148,27 @@ trajectory_assert:
 	}
 	expandScenarioRuntime(&scenario, map[string]string{
 		"NODE_tenant_APP_URL": "http://127.0.0.1:9001/api/apps/a2a",
+		"NODE_main_URL":       "http://127.0.0.1:9000",
 		"PRIMARY_AGENT_ID":    "42",
+		"TENANT_SLUG":         "test-tenant",
 	})
 	if got := scenario.Setup.Topology.Nodes[0].Config["peer"]; got != "http://127.0.0.1:9001/api/apps/a2a" {
 		t.Fatalf("peer config = %q", got)
 	}
 	if got := scenario.Setup.Topology.Nodes[1].Agents[0].Directive; got != "Reply to 42" {
 		t.Fatalf("agent directive = %q", got)
+	}
+	control := scenario.Setup.Topology.Nodes[0].Apps[0]
+	if control.ID != "control" || control.Env["CONTROL_URL"] != "http://127.0.0.1:9000" || control.Bindings["transport"] != "app" {
+		t.Fatalf("companion app = %+v", control)
+	}
+	provision := scenario.Setup.Topology.Nodes[1].Provision
+	if provision == nil || provision.From != "main" || provision.App != "control" || provision.ConnectHost != "127.0.0.1" || provision.Args["slug"] != "test-tenant" {
+		t.Fatalf("provision = %+v", provision)
+	}
+	cleanup := cloneProvisionCleanup(provision.Cleanup, map[string]any{"tenant_id": "tenant-123"})
+	if cleanup == nil || cleanup.Tool != "tenant_delete" || cleanup.Args["tenant_id"] != "tenant-123" || cleanup.Args["confirm"] != true {
+		t.Fatalf("cleanup = %+v", cleanup)
 	}
 	match := scenario.TrajectoryAssert[0].ToolCalledWith
 	if match.Node != "main" || match.Agent != "primary" || match.ResultContains != "Worker" || match.ResultNotContains != "Hidden" {

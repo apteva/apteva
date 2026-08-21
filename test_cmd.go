@@ -119,11 +119,45 @@ type ScenarioTopology struct {
 }
 
 type ScenarioNodeSetup struct {
-	ID      string               `yaml:"id"`
-	Primary bool                 `yaml:"primary"`
-	Global  bool                 `yaml:"global"`
-	Config  map[string]string    `yaml:"config"`
-	Agents  []ScenarioAgentSetup `yaml:"agents"`
+	ID        string                      `yaml:"id"`
+	Primary   bool                        `yaml:"primary"`
+	Global    bool                        `yaml:"global"`
+	Config    map[string]string           `yaml:"config"`
+	Apps      []ScenarioTopologyAppSetup  `yaml:"apps"`
+	Provision *ScenarioNodeProvisionSetup `yaml:"provision"`
+	Agents    []ScenarioAgentSetup        `yaml:"agents"`
+}
+
+// ScenarioTopologyAppSetup installs a companion app on one topology node.
+// Bindings refer to app names/ids installed earlier on that same node. This
+// keeps orchestration scenarios generic: the runner knows how to install and
+// bind apps, but has no Fleet- or A2A-specific behavior.
+type ScenarioTopologyAppSetup struct {
+	ID       string            `yaml:"id"`
+	Path     string            `yaml:"path"`
+	Global   bool              `yaml:"global"`
+	Config   map[string]string `yaml:"config"`
+	Env      map[string]string `yaml:"env"`
+	Bindings map[string]string `yaml:"bindings"`
+}
+
+// ScenarioNodeProvisionSetup adopts a server returned by a companion app tool
+// as a topology node. The conventional Fleet-shaped result fields are the
+// defaults, while custom provisioners can override them.
+type ScenarioNodeProvisionSetup struct {
+	From         string                    `yaml:"from"`
+	App          string                    `yaml:"app"`
+	Tool         string                    `yaml:"tool"`
+	Args         map[string]any            `yaml:"args"`
+	BaseURLField string                    `yaml:"base_url_field"`
+	APIKeyField  string                    `yaml:"api_key_field"`
+	ConnectHost  string                    `yaml:"connect_host"`
+	Cleanup      *ScenarioProvisionCleanup `yaml:"cleanup"`
+}
+
+type ScenarioProvisionCleanup struct {
+	Tool string         `yaml:"tool"`
+	Args map[string]any `yaml:"args"`
 }
 
 type ScenarioAgentSetup struct {
@@ -631,6 +665,38 @@ func replaceScenarioValues(s *Scenario, replace func(string) string) {
 		node.ID = replace(node.ID)
 		for key, value := range node.Config {
 			node.Config[key] = replace(value)
+		}
+		for j := range node.Apps {
+			app := &node.Apps[j]
+			app.ID = replace(app.ID)
+			app.Path = replace(app.Path)
+			for key, value := range app.Config {
+				app.Config[key] = replace(value)
+			}
+			for key, value := range app.Env {
+				app.Env[key] = replace(value)
+			}
+			for key, value := range app.Bindings {
+				app.Bindings[key] = replace(value)
+			}
+		}
+		if node.Provision != nil {
+			provision := node.Provision
+			provision.From = replace(provision.From)
+			provision.App = replace(provision.App)
+			provision.Tool = replace(provision.Tool)
+			provision.BaseURLField = replace(provision.BaseURLField)
+			provision.APIKeyField = replace(provision.APIKeyField)
+			provision.ConnectHost = replace(provision.ConnectHost)
+			if provision.Args != nil {
+				provision.Args = replaceStringValues(provision.Args, replace).(map[string]any)
+			}
+			if provision.Cleanup != nil {
+				provision.Cleanup.Tool = replace(provision.Cleanup.Tool)
+				if provision.Cleanup.Args != nil {
+					provision.Cleanup.Args = replaceStringValues(provision.Cleanup.Args, replace).(map[string]any)
+				}
+			}
 		}
 		for j := range node.Agents {
 			agent := &node.Agents[j]
@@ -2757,7 +2823,8 @@ func loadFixtures(fixtures []FixtureSpec, sourceDir, projectID string, sidecars 
 // and returns when the call finishes. We're already authorised
 // because the sidecar is in dev-mode (APTEVA_APP_TOKEN="").
 func callPeerMCP(sidecarURL, tool string, args map[string]any) error {
-	return callPeerMCPRequest(sidecarURL, tool, args, nil)
+	_, err := callPeerMCPResult(sidecarURL, tool, args, nil)
+	return err
 }
 
 func callPeerMCPAs(sidecarURL, tool string, args map[string]any, agentID int64, threadID, projectID string) error {
@@ -2769,13 +2836,18 @@ func callPeerMCPAs(sidecarURL, tool string, args map[string]any, agentID int64, 
 }
 
 func callPeerMCPRequest(sidecarURL, tool string, args map[string]any, headers http.Header) error {
+	_, err := callPeerMCPResult(sidecarURL, tool, args, headers)
+	return err
+}
+
+func callPeerMCPResult(sidecarURL, tool string, args map[string]any, headers http.Header) (map[string]any, error) {
 	body, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{"name": tool, "arguments": args},
 	})
 	req, err := http.NewRequest(http.MethodPost, sidecarURL+"/mcp", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for name, values := range headers {
@@ -2785,24 +2857,47 @@ func callPeerMCPRequest(sidecarURL, tool string, args map[string]any, headers ht
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
 	}
 	var parsed struct {
 		Error *struct {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
+		Result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&parsed)
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
 	if parsed.Error != nil {
-		return fmt.Errorf("mcp %d: %s", parsed.Error.Code, parsed.Error.Message)
+		return nil, fmt.Errorf("mcp %d: %s", parsed.Error.Code, parsed.Error.Message)
 	}
-	return nil
+	if parsed.Result.IsError {
+		message := "tool returned an error"
+		if len(parsed.Result.Content) > 0 && parsed.Result.Content[0].Text != "" {
+			message = parsed.Result.Content[0].Text
+		}
+		return nil, errors.New(message)
+	}
+	out := map[string]any{}
+	if len(parsed.Result.Content) == 0 || strings.TrimSpace(parsed.Result.Content[0].Text) == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(parsed.Result.Content[0].Text), &out); err != nil {
+		return nil, fmt.Errorf("decode %s result: %w", tool, err)
+	}
+	return out, nil
 }
 
 // parseRequiresApps grabs the names listed under `requires.apps:`
@@ -2972,6 +3067,10 @@ func (relay *scopedAppMCPRelay) Close() {
 }
 
 func installApp(server *testServer, manifestYAML []byte, appDir, projectID string, config map[string]string) (*installResp, error) {
+	return installAppWithBindings(server, manifestYAML, appDir, projectID, config, nil)
+}
+
+func installAppWithBindings(server *testServer, manifestYAML []byte, appDir, projectID string, config map[string]string, bindings map[string]any) (*installResp, error) {
 	// Scenario installs use inline manifest YAML rather than a public manifest
 	// URL. Resolve repo-local skill bodies before posting so the normal app
 	// install and agent-binding path can register and synchronize the exact skill
@@ -2995,6 +3094,9 @@ func installApp(server *testServer, manifestYAML []byte, appDir, projectID strin
 		"manifest_yaml": string(installManifest),
 		"project_id":    projectID,
 		"config":        config,
+	}
+	if len(bindings) > 0 {
+		body["bindings"] = bindings
 	}
 	out := &installResp{}
 	if err := postJSON("http://"+server.addr+"/api/apps/install", server.apiKey, body, out); err != nil {

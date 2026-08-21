@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,6 +104,20 @@ type topologyNodeRuntime struct {
 	Sidecar        *localSidecar
 	Proxy          *topologyPublicProxy
 	Relays         map[string]*scopedAppMCPRelay
+	Companions     map[string]*topologyAppRuntime
+	Provisioned    bool
+	Provision      *topologyProvisionRuntime
+}
+
+type topologyAppRuntime struct {
+	Name    string
+	Install *installResp
+	Sidecar *localSidecar
+}
+
+type topologyProvisionRuntime struct {
+	Source  *topologyAppRuntime
+	Cleanup *ScenarioProvisionCleanup
 }
 
 type topologyRuntime struct {
@@ -136,6 +152,30 @@ func topologyValues(nodes map[string]*topologyNodeRuntime, appName string) map[s
 		values["NODE_"+id+"_PROJECT_ID"] = node.DefaultProject
 	}
 	return values
+}
+
+func mergedTestEnvironment() []string {
+	env := append([]string(nil), os.Environ()...)
+	for key, value := range loadTestEnvFile() {
+		if os.Getenv(key) == "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
+}
+
+func cloneProvisionCleanup(cleanup *ScenarioProvisionCleanup, result map[string]any) *ScenarioProvisionCleanup {
+	if cleanup == nil {
+		return nil
+	}
+	replace := func(value string) string {
+		for key, replacement := range result {
+			value = strings.ReplaceAll(value, "${RESULT."+key+"}", fmt.Sprint(replacement))
+		}
+		return value
+	}
+	args, _ := replaceStringValues(cleanup.Args, replace).(map[string]any)
+	return &ScenarioProvisionCleanup{Tool: replace(cleanup.Tool), Args: args}
 }
 
 func mergedTopologyConfig(base, override map[string]string, values map[string]string) map[string]string {
@@ -279,11 +319,32 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 			for _, relay := range node.Relays {
 				relay.Close()
 			}
-			if node.Sidecar != nil {
-				node.Sidecar.Stop()
+		}
+		// Provisioner cleanup must run while its companion sidecar and source
+		// server are still alive. Agents are already stopped above.
+		for _, node := range runtime.Nodes {
+			if node.Provision == nil || node.Provision.Cleanup == nil || node.Provision.Source == nil {
+				continue
 			}
-			if node.Install != nil {
-				uninstallApp(node.Server, node.Install.InstallID)
+			_, _ = callPeerMCPResult(node.Provision.Source.Sidecar.URL,
+				node.Provision.Cleanup.Tool, node.Provision.Cleanup.Args, nil)
+		}
+		for _, node := range runtime.Nodes {
+			if !node.Provisioned {
+				for _, companion := range node.Companions {
+					if companion.Sidecar != nil {
+						companion.Sidecar.Stop()
+					}
+					if companion.Install != nil && node.Server != nil {
+						uninstallApp(node.Server, companion.Install.InstallID)
+					}
+				}
+				if node.Sidecar != nil {
+					node.Sidecar.Stop()
+				}
+				if node.Install != nil && node.Server != nil {
+					uninstallApp(node.Server, node.Install.InstallID)
+				}
 			}
 			if node.Proxy != nil {
 				node.Proxy.Close()
@@ -298,15 +359,22 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 	}
 	defer cleanup()
 
-	primaryIndex := 0
 	primaryCount := 0
+	bootstrapIndex := -1
 	for i, setup := range s.Setup.Topology.Nodes {
 		if setup.Primary {
-			primaryIndex, primaryCount = i, primaryCount+1
+			primaryCount++
+		}
+		if bootstrapIndex < 0 && setup.Provision == nil {
+			bootstrapIndex = i
 		}
 	}
 	if primaryCount > 1 {
 		res.Error = "setup.topology may declare only one primary node"
+		return res
+	}
+	if bootstrapIndex < 0 {
+		res.Error = "setup.topology needs at least one directly bootstrapped node"
 		return res
 	}
 
@@ -317,8 +385,10 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 			res.Error = fmt.Sprintf("duplicate topology node %q", setup.ID)
 			return res
 		}
-		nodeServer := primaryServer
-		if i != primaryIndex {
+		var nodeServer *testServer
+		if setup.Provision == nil && i == bootstrapIndex {
+			nodeServer = primaryServer
+		} else if setup.Provision == nil {
 			secondaryOpts := opts
 			secondaryOpts.serverAddr = ""
 			secondaryOpts.serverAPIKey = ""
@@ -331,13 +401,16 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 			secondaryServers = append(secondaryServers, nodeServer)
 		}
 		node := &topologyNodeRuntime{
-			Setup: setup, Server: nodeServer, DefaultProject: nodeServer.projectID,
+			Setup: setup, Server: nodeServer,
 			Projects: map[string]string{}, Proxy: newTopologyPublicProxy(appName),
-			Relays: map[string]*scopedAppMCPRelay{},
+			Relays: map[string]*scopedAppMCPRelay{}, Companions: map[string]*topologyAppRuntime{},
 		}
-		node.Projects["default"] = node.DefaultProject
+		if nodeServer != nil {
+			node.DefaultProject = nodeServer.projectID
+			node.Projects["default"] = node.DefaultProject
+		}
 		runtime.Nodes[setup.ID] = node
-		if i == primaryIndex {
+		if setup.Primary || (primaryCount == 0 && i == bootstrapIndex) {
 			runtime.Primary = node
 		}
 	}
@@ -347,6 +420,9 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 
 	// Create any additional projects requested by responder agents.
 	for _, node := range runtime.Nodes {
+		if node.Server == nil {
+			continue
+		}
 		for _, agent := range node.Setup.Agents {
 			label := strings.TrimSpace(agent.Project)
 			if label == "" || label == "default" {
@@ -371,10 +447,15 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		}
 	}
 
-	// Install and start one isolated app sidecar per node.
+	// Install and start one isolated app-under-test sidecar per directly
+	// bootstrapped node. Provisioned nodes receive that app from their
+	// provisioner and are adopted below.
 	for _, setup := range s.Setup.Topology.Nodes {
 		node := runtime.Nodes[topologyID(setup.ID)]
 		node.Setup = setup
+		if node.Server == nil {
+			continue
+		}
 		config := mergedTopologyConfig(s.Setup.App.Config, node.Setup.Config, values)
 		installProject := node.DefaultProject
 		if node.Setup.Global {
@@ -397,6 +478,184 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		}
 	}
 
+	// Companion apps are installed after the app under test so bindings can
+	// refer to it by manifest name (for example a control plane bound to A2A).
+	for _, setup := range s.Setup.Topology.Nodes {
+		node := runtime.Nodes[topologyID(setup.ID)]
+		if node.Server == nil {
+			continue
+		}
+		installed := map[string]*topologyAppRuntime{
+			appName: {Name: appName, Install: node.Install, Sidecar: node.Sidecar},
+			"app":   {Name: appName, Install: node.Install, Sidecar: node.Sidecar},
+		}
+		for _, spec := range setup.Apps {
+			companionDir := spec.Path
+			if !filepath.IsAbs(companionDir) {
+				companionDir = filepath.Join(absAppDir, companionDir)
+			}
+			companionDir, err = filepath.Abs(companionDir)
+			if err != nil {
+				res.Error = fmt.Sprintf("resolve companion app %s: %v", spec.ID, err)
+				return res
+			}
+			companionManifest, readErr := os.ReadFile(filepath.Join(companionDir, "apteva.yaml"))
+			if readErr != nil {
+				res.Error = fmt.Sprintf("read companion app %s: %v", spec.ID, readErr)
+				return res
+			}
+			companionName := manifestNameFromYAML(companionManifest)
+			alias := strings.TrimSpace(spec.ID)
+			if alias == "" {
+				alias = companionName
+			}
+			bindings := map[string]any{}
+			for role, target := range spec.Bindings {
+				bound := installed[strings.TrimSpace(target)]
+				if bound == nil || bound.Install == nil {
+					res.Error = fmt.Sprintf("companion %s binding %s refers to unknown app %q", alias, role, target)
+					return res
+				}
+				bindings[role] = bound.Install.InstallID
+			}
+			projectID := node.DefaultProject
+			if spec.Global {
+				projectID = ""
+			}
+			config := mergedTopologyConfig(nil, spec.Config, values)
+			install, installErr := installAppWithBindings(node.Server, companionManifest, companionDir, projectID, config, bindings)
+			if installErr != nil {
+				res.Error = fmt.Sprintf("install companion %s on %s: %v", alias, node.Setup.ID, installErr)
+				return res
+			}
+			bin := filepath.Join(buildDir, node.Setup.ID+"-"+alias)
+			output, buildErr := buildLocalSidecarBinary(companionDir, bin, false)
+			if buildErr != nil && strings.Contains(string(output), "not one of the workspace modules listed in go.work") {
+				output, buildErr = buildLocalSidecarBinary(companionDir, bin, true)
+			}
+			if buildErr != nil {
+				res.Error = fmt.Sprintf("build companion %s: %s", alias, output)
+				return res
+			}
+			sidecar, spawnErr := spawnTopologySidecar(bin, companionDir, install.InstallID, projectID, config, spec.Env, "http://"+node.Server.addr)
+			if spawnErr != nil {
+				res.Error = fmt.Sprintf("start companion %s on %s: %v", alias, node.Setup.ID, spawnErr)
+				return res
+			}
+			if mountErr := setSidecarURL(node.Server, install.InstallID, sidecar.URL); mountErr != nil {
+				res.Error = fmt.Sprintf("mount companion %s on %s: %v", alias, node.Setup.ID, mountErr)
+				return res
+			}
+			runtimeApp := &topologyAppRuntime{Name: companionName, Install: install, Sidecar: sidecar}
+			node.Companions[alias] = runtimeApp
+			installed[alias] = runtimeApp
+			installed[companionName] = runtimeApp
+		}
+	}
+
+	// Provision and adopt tool-created nodes after all source-node companion
+	// apps are live. Result fields default to base_url/api_key/tenant_id.
+	for _, setup := range s.Setup.Topology.Nodes {
+		if setup.Provision == nil {
+			continue
+		}
+		node := runtime.Nodes[topologyID(setup.ID)]
+		provision := setup.Provision
+		source := runtime.Nodes[topologyID(provision.From)]
+		if source == nil || source.Server == nil {
+			res.Error = fmt.Sprintf("provision node %s has unknown source %q", setup.ID, provision.From)
+			return res
+		}
+		provisioner := source.Companions[provision.App]
+		if provisioner == nil {
+			res.Error = fmt.Sprintf("provision node %s has unknown source app %q", setup.ID, provision.App)
+			return res
+		}
+		result, callErr := callPeerMCPResult(provisioner.Sidecar.URL, provision.Tool, provision.Args, nil)
+		if callErr != nil {
+			res.Error = fmt.Sprintf("provision node %s via %s.%s: %v", setup.ID, provision.App, provision.Tool, callErr)
+			return res
+		}
+		// Register cleanup as soon as provisioning succeeds so a later
+		// adoption/configuration failure cannot leak the created server.
+		node.Provision = &topologyProvisionRuntime{
+			Source: provisioner, Cleanup: cloneProvisionCleanup(provision.Cleanup, result),
+		}
+		baseField, keyField := provision.BaseURLField, provision.APIKeyField
+		if baseField == "" {
+			baseField = "base_url"
+		}
+		if keyField == "" {
+			keyField = "api_key"
+		}
+		baseURL, _ := result[baseField].(string)
+		apiKey, _ := result[keyField].(string)
+		parsedURL, parseErr := url.Parse(strings.TrimSpace(baseURL))
+		if parseErr != nil || parsedURL.Host == "" || strings.TrimSpace(apiKey) == "" {
+			res.Error = fmt.Sprintf("provision node %s returned invalid %s/%s fields", setup.ID, baseField, keyField)
+			return res
+		}
+		if connectHost := strings.TrimSpace(provision.ConnectHost); connectHost != "" {
+			if port := parsedURL.Port(); port != "" {
+				parsedURL.Host = net.JoinHostPort(connectHost, port)
+			} else {
+				parsedURL.Host = connectHost
+			}
+		}
+		connectBaseURL := strings.TrimRight(parsedURL.String(), "/")
+		node.Server = &testServer{addr: parsedURL.Host, apiKey: apiKey}
+		projectID, projectErr := fetchDefaultProjectID(node.Server)
+		if projectErr != nil {
+			res.Error = fmt.Sprintf("read provisioned node %s project: %v", setup.ID, projectErr)
+			return res
+		}
+		node.Server.projectID = projectID
+		node.DefaultProject = projectID
+		node.Projects["default"] = projectID
+		if providerErr := configureSpawnedTestProvider(node.Server, opts.provider, mergedTestEnvironment()); providerErr != nil {
+			res.Error = fmt.Sprintf("configure provisioned node %s provider: %v", setup.ID, providerErr)
+			return res
+		}
+		install, findErr := findExistingAppInstall(node.Server, appName)
+		if findErr != nil {
+			res.Error = fmt.Sprintf("find %s on provisioned node %s: %v", appName, setup.ID, findErr)
+			return res
+		}
+		node.Install = install
+		node.Sidecar = &localSidecar{}
+		node.Proxy.SetTarget(connectBaseURL + "/api/apps/" + appName)
+		node.Provisioned = true
+	}
+
+	values = topologyValues(runtime.Nodes, appName)
+	expandScenarioRuntime(&s, values)
+
+	// Provisioned nodes only learn their project ids after adoption.
+	for _, node := range runtime.Nodes {
+		if !node.Provisioned {
+			continue
+		}
+		for _, agent := range node.Setup.Agents {
+			label := strings.TrimSpace(agent.Project)
+			if label == "" || label == "default" {
+				continue
+			}
+			if _, exists := node.Projects[label]; exists {
+				continue
+			}
+			if !node.Setup.Global {
+				res.Error = fmt.Sprintf("node %s needs global: true for agent project %q", node.Setup.ID, label)
+				return res
+			}
+			projectID, createErr := createTestProject(node.Server)
+			if createErr != nil {
+				res.Error = fmt.Sprintf("create project %s.%s: %v", node.Setup.ID, label, createErr)
+				return res
+			}
+			node.Projects[label] = projectID
+		}
+	}
+
 	createAgent := func(node *topologyNodeRuntime, id, name, projectID, directive, mode string) (*topologyAgentRuntime, error) {
 		if mode == "" {
 			mode = "autonomous"
@@ -404,11 +663,14 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		if name == "" {
 			name = id
 		}
-		relay, err := topologyRelay(node, appName, projectID, s.Setup.App.Spawnable)
-		if err != nil {
-			return nil, err
+		var mcp []map[string]any
+		if !node.Provisioned {
+			relay, err := topologyRelay(node, appName, projectID, s.Setup.App.Spawnable)
+			if err != nil {
+				return nil, err
+			}
+			mcp = []map[string]any{scenarioAppMCPConfig(appName, relay.URL, s.Setup.App.Spawnable)}
 		}
-		mcp := []map[string]any{scenarioAppMCPConfig(appName, relay.URL, s.Setup.App.Spawnable)}
 		// Topology sidecars are mounted manually and supplied as an explicit,
 		// project-scoped MCP relay. They are not install-picker inventory rows,
 		// so binding the install ID would make agent creation reject an otherwise
@@ -417,9 +679,11 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		if err != nil {
 			return nil, err
 		}
-		if err := writeInstanceDiskConfig(node.Server, instance.ID, directive, mode, mcp, false, nil); err != nil {
-			tcDeleteInstance(node.Server, instance.ID)
-			return nil, err
+		if !node.Provisioned {
+			if err := writeInstanceDiskConfig(node.Server, instance.ID, directive, mode, mcp, false, nil); err != nil {
+				tcDeleteInstance(node.Server, instance.ID)
+				return nil, err
+			}
 		}
 		agent := &topologyAgentRuntime{Node: node.Setup.ID, ID: id, ProjectID: projectID, Server: node.Server, Instance: instance}
 		runtime.Agents = append(runtime.Agents, agent)
@@ -462,10 +726,12 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 	}
 	values["PRIMARY_AGENT_ID"] = strconv.FormatInt(runtime.PrimaryAgent.Instance.ID, 10)
 	expandScenarioRuntime(&s, values)
-	if err := writeInstanceDiskConfig(runtime.Primary.Server, runtime.PrimaryAgent.Instance.ID, s.Directive, mode,
-		[]map[string]any{scenarioAppMCPConfig(appName, runtime.Primary.Relays[runtime.Primary.DefaultProject].URL, s.Setup.App.Spawnable)}, false, nil); err != nil {
-		res.Error = fmt.Sprintf("write primary agent config: %v", err)
-		return res
+	if !runtime.Primary.Provisioned {
+		if err := writeInstanceDiskConfig(runtime.Primary.Server, runtime.PrimaryAgent.Instance.ID, s.Directive, mode,
+			[]map[string]any{scenarioAppMCPConfig(appName, runtime.Primary.Relays[runtime.Primary.DefaultProject].URL, s.Setup.App.Spawnable)}, false, nil); err != nil {
+			res.Error = fmt.Sprintf("write primary agent config: %v", err)
+			return res
+		}
 	}
 
 	// Responders must be listening before the primary begins discovery.
