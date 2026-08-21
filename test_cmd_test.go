@@ -203,6 +203,108 @@ func TestParseRequiredAppRefs(t *testing.T) {
 	}
 }
 
+func TestTopologyScenarioParsingAndRuntimeExpansion(t *testing.T) {
+	var scenario Scenario
+	err := yaml.Unmarshal([]byte(`
+name: federated
+setup:
+  topology:
+    nodes:
+      - id: main
+        primary: true
+        config:
+          peer: ${NODE_tenant_APP_URL}
+      - id: tenant
+        agents:
+          - id: worker
+            name: Worker
+            directive: Reply to ${PRIMARY_AGENT_ID}
+trajectory_assert:
+  - tool_called_with:
+      node: main
+      agent: primary
+      tool: agents_discover
+      result_contains: Worker
+      result_not_contains: Hidden
+`), &scenario)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenario.Setup.Topology.Nodes) != 2 || !scenario.Setup.Topology.Nodes[0].Primary {
+		t.Fatalf("topology did not parse: %+v", scenario.Setup.Topology)
+	}
+	expandScenarioRuntime(&scenario, map[string]string{
+		"NODE_tenant_APP_URL": "http://127.0.0.1:9001/api/apps/a2a",
+		"PRIMARY_AGENT_ID":    "42",
+	})
+	if got := scenario.Setup.Topology.Nodes[0].Config["peer"]; got != "http://127.0.0.1:9001/api/apps/a2a" {
+		t.Fatalf("peer config = %q", got)
+	}
+	if got := scenario.Setup.Topology.Nodes[1].Agents[0].Directive; got != "Reply to 42" {
+		t.Fatalf("agent directive = %q", got)
+	}
+	match := scenario.TrajectoryAssert[0].ToolCalledWith
+	if match.Node != "main" || match.Agent != "primary" || match.ResultContains != "Worker" || match.ResultNotContains != "Hidden" {
+		t.Fatalf("tool assertion = %+v", match)
+	}
+}
+
+func TestLegacyScenarioLeavesTopologyEmpty(t *testing.T) {
+	var scenario Scenario
+	if err := yaml.Unmarshal([]byte(`
+name: legacy
+setup:
+  mode: autonomous
+directive: Do the work.
+`), &scenario); err != nil {
+		t.Fatal(err)
+	}
+	if len(scenario.Setup.Topology.Nodes) != 0 {
+		t.Fatalf("legacy scenario unexpectedly enabled topology: %+v", scenario.Setup.Topology)
+	}
+}
+
+func TestResolveSpawnedTestProviderSupportsLegacyAndTopologyRuns(t *testing.T) {
+	provider, credential, err := resolveSpawnedTestProvider("ollama", map[string]string{
+		"OLLAMA_HOST": "http://127.0.0.1:11434",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Slug != "ollama" || credential != "http://127.0.0.1:11434" {
+		t.Fatalf("provider=%+v credential=%q", provider, credential)
+	}
+	provider, _, err = resolveSpawnedTestProvider("", map[string]string{
+		"FIREWORKS_API_KEY": "secret",
+	})
+	if err != nil || provider.Key != "fireworks" {
+		t.Fatalf("auto provider=%+v err=%v", provider, err)
+	}
+	if _, _, err := resolveSpawnedTestProvider("openai-codex", nil); err == nil {
+		t.Fatal("expected existing-server guidance for openai-codex")
+	}
+}
+
+func TestToolAssertionsCanSelectTopologyAgentAndResult(t *testing.T) {
+	result := &ScenarioResult{ToolCalls: []ToolCallResult{
+		{Node: "main", Agent: "primary", Name: "a2a_agents_discover", Completed: true, OK: true, Result: `{"agents":[{"name":"Worker"}]}`},
+		{Node: "tenant", Agent: "worker", Name: "a2a_agents_discover", Completed: true, OK: true, Result: `{"agents":[{"name":"Hidden"}]}`},
+	}}
+	want := &ToolCallAssertion{
+		Node: "main", Agent: "primary", Tool: "agents_discover", Success: boolPtr(true),
+		ResultContains: "Worker", ResultNotContains: "Hidden",
+	}
+	if got := assertToolCallMatch(want, false, result); !got.OK {
+		t.Fatalf("scoped result assertion should pass: %+v", got)
+	}
+	want.Agent = "worker"
+	if got := assertToolCallMatch(want, false, result); got.OK {
+		t.Fatalf("wrong topology agent should not match: %+v", got)
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
+
 func TestScenarioInitialPace(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 9, 59, 50, 0, time.UTC)
 	pace, wakeAt, err := scenarioInitialPace(&InitialWakeSpec{After: "10s"}, now)
