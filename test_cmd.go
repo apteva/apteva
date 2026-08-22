@@ -1575,6 +1575,14 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	}
 	includeChannels := interaction == "conversation"
 	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers, []int64{installed.InstallID}, includeChannels, initialPace)
+	// Older existing servers do not rebuild their app-MCP inventory when a
+	// manual test sidecar is moved from pending to running. The scoped relay is
+	// already the authoritative tool attachment in scenario config, so retry
+	// without the redundant install picker binding on that specific legacy
+	// error. Spawned/current servers keep the normal binding path above.
+	if err != nil && server.dataDir == "" && strings.Contains(err.Error(), "has no agent tools or skills") {
+		inst, err = tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers, nil, includeChannels, initialPace)
+	}
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
