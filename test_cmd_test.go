@@ -13,6 +13,66 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestParseTestTiers(t *testing.T) {
+	for _, test := range []struct {
+		raw  string
+		want map[int]bool
+	}{
+		{raw: "1", want: map[int]bool{1: true}},
+		{raw: "1,2", want: map[int]bool{1: true, 2: true}},
+		{raw: "all", want: map[int]bool{1: true, 2: true, 3: true}},
+	} {
+		got, err := parseTestTiers(test.raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", test.raw, err)
+		}
+		if len(got) != len(test.want) {
+			t.Fatalf("parse %q = %#v, want %#v", test.raw, got, test.want)
+		}
+		for tier := range test.want {
+			if !got[tier] {
+				t.Fatalf("parse %q = %#v, missing tier %d", test.raw, got, tier)
+			}
+		}
+	}
+	if _, err := parseTestTiers("4"); err == nil {
+		t.Fatal("unsupported tier was accepted")
+	}
+}
+
+func TestResolveNativeAppDirAndCommands(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"apteva.yaml", "go.mod"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolved, err := resolveNativeAppDir(dir, ".")
+	if err != nil || resolved != dir {
+		t.Fatalf("resolved=%q err=%v", resolved, err)
+	}
+	tier1, err := nativeTierCommand(dir, 1, "")
+	if err != nil || strings.Join(tier1, " ") != "go test -short ./..." {
+		t.Fatalf("tier1=%v err=%v", tier1, err)
+	}
+	tier2, err := nativeTierCommand(dir, 2, "")
+	if err != nil || strings.Join(tier2, " ") != "go test -tags=integration ./..." {
+		t.Fatalf("tier2=%v err=%v", tier2, err)
+	}
+	live, err := nativeTierCommand(dir, 2, "live-carrier")
+	if err != nil || strings.Join(live, " ") != "go test -tags=integration,livecarrier -count=1 ./..." {
+		t.Fatalf("live carrier=%v err=%v", live, err)
+	}
+	if _, err := nativeTierCommand(dir, 2, "unknown"); err == nil {
+		t.Fatal("unknown Tier 2 profile was accepted")
+	}
+	scenarios := t.TempDir()
+	resolved, err = resolveNativeAppDir(scenarios, dir)
+	if err != nil || resolved != dir {
+		t.Fatalf("fallback resolved=%q err=%v", resolved, err)
+	}
+}
+
 func TestExpandScenarioEnvironment(t *testing.T) {
 	t.Setenv("COMPUTER_TEST_CONTEXT_ID", "ctx_test")
 	scenario := Scenario{

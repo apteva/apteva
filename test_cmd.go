@@ -1,6 +1,6 @@
 package main
 
-// `apteva test` — Tier 3 live-agent scenario runner.
+// `apteva test` — native app tests plus Tier 3 live-agent scenarios.
 //
 // Spawns a clean apteva-server in a temp data dir, installs the local
 // app from disk, runs every YAML scenario in the target directory:
@@ -8,7 +8,11 @@ package main
 // waits for completion, runs the asserts, records token usage.
 //
 // Usage:
-//   apteva test ./scenarios/                # whole directory
+//   apteva test --tier 1 ./                 # fast in-process app tests
+//   apteva test --tier 2 ./                 # real sidecar integration tests
+//   apteva test --tier 2 --profile live-carrier ./ # opt-in real carrier loop
+//   apteva test --tier 1,2 ./               # both native tiers
+//   apteva test ./scenarios/                # Tier 3 scenarios (default)
 //   apteva test ./scenarios/01-create.yaml  # one scenario
 //   apteva test ./scenarios/ --server addr  # use existing server (skips spawn)
 //   apteva test ./scenarios/ --provider opencode-go
@@ -279,14 +283,25 @@ func cmdTest(args []string) int {
 	artifactsDir := fs.String("artifacts-dir", ".apteva-test-artifacts", "directory for failed-run telemetry and logs")
 	verbose := fs.Bool("v", false, "verbose: stream telemetry events as they arrive")
 	jsonOut := fs.Bool("json", false, "emit machine-readable results to stdout")
+	tierFlag := fs.String("tier", "3", "test tier(s): 1, 2, 3, all, or a comma-separated list (default: 3)")
+	profile := fs.String("profile", "", "Tier 2 profile (for example: live-carrier)")
 	fs.Parse(args)
 
 	if fs.NArg() == 0 {
-		fmt.Fprintln(os.Stderr, "usage: apteva test [flags] <scenarios-dir-or-file>")
+		fmt.Fprintln(os.Stderr, "usage: apteva test [flags] <app-dir-or-scenarios-dir-or-file>")
 		fs.Usage()
 		return 2
 	}
 	target := fs.Arg(0)
+	tiers, err := parseTestTiers(*tierFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "test tiers: %v\n", err)
+		return 2
+	}
+	if strings.TrimSpace(*profile) != "" && !tiers[2] {
+		fmt.Fprintln(os.Stderr, "test profile: --profile requires Tier 2")
+		return 2
+	}
 
 	opts := testOpts{
 		ctx:          ctx,
@@ -301,6 +316,24 @@ func cmdTest(args []string) int {
 		artifactsDir: *artifactsDir,
 		verbose:      *verbose,
 		jsonOutput:   *jsonOut,
+	}
+
+	nativeResults := []NativeTestResult{}
+	nativeOK := true
+	if tiers[1] || tiers[2] {
+		appPath, err := resolveNativeAppDir(target, *appDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "native tests: %v\n", err)
+			return 2
+		}
+		nativeResults, nativeOK = runNativeTests(ctx, appPath, *profile, tiers, *jsonOut, os.Stderr)
+		if !nativeOK || !tiers[3] {
+			printNativeTestOutcome(nativeResults, nativeOK, *jsonOut, os.Stdout, os.Stderr)
+			if nativeOK {
+				return 0
+			}
+			return 1
+		}
 	}
 
 	scenarios, err := loadScenarios(target)
@@ -322,7 +355,7 @@ func cmdTest(args []string) int {
 
 	cumulativeCost := 0.0
 	results := []ScenarioResult{}
-	allOK := true
+	allOK := nativeOK
 	for _, s := range scenarios {
 		fmt.Fprintf(os.Stderr, "▶ %s\n", s.Name)
 		res := runScenarioEvaluation(server, s, opts)
@@ -346,6 +379,7 @@ func cmdTest(args []string) int {
 
 	if opts.jsonOutput {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"native_results":  nativeResults,
 			"results":         results,
 			"cumulative_cost": cumulativeCost,
 			"ok":              allOK,
