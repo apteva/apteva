@@ -116,14 +116,27 @@ func runNativeTests(ctx context.Context, appDir, profile string, tiers map[int]b
 		cmd.Dir = appDir
 		cmd.Env = os.Environ()
 		var output bytes.Buffer
-		if jsonOutput {
-			cmd.Stdout = &output
-			cmd.Stderr = &output
-		} else {
-			cmd.Stdout = io.MultiWriter(progress, &output)
-			cmd.Stderr = io.MultiWriter(progress, &output)
+		attachOutput := func(command *exec.Cmd) {
+			if jsonOutput {
+				command.Stdout = &output
+				command.Stderr = &output
+			} else {
+				command.Stdout = io.MultiWriter(progress, &output)
+				command.Stderr = io.MultiWriter(progress, &output)
+			}
 		}
+		attachOutput(cmd)
 		err = cmd.Run()
+		if err != nil && strings.Contains(output.String(), "not contain modules listed in go.work") {
+			if !jsonOutput {
+				fmt.Fprintln(progress, "↻ retrying native test outside the parent Go workspace")
+			}
+			cmd = exec.CommandContext(ctx, command[0], command[1:]...)
+			cmd.Dir = appDir
+			cmd.Env = append(os.Environ(), "GOWORK=off")
+			attachOutput(cmd)
+			err = cmd.Run()
+		}
 		result := NativeTestResult{
 			Tier: tier, OK: err == nil, ElapsedMS: time.Since(started).Milliseconds(),
 			Command: command, Output: output.String(),

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -258,6 +259,23 @@ func TestApplyTelemetryRetainsToolTrajectory(t *testing.T) {
 	}
 }
 
+func TestApplyTelemetryCapturesDeliveredThreadResponse(t *testing.T) {
+	result := &ScenarioResult{}
+	applyTelemetry(result, telemetryEvent{ThreadID: "request-lookup", Type: "tool.call", Data: map[string]any{
+		"id": "send-1", "name": "send", "args": map[string]any{"id": "parent", "message": "19"},
+	}})
+	applyTelemetry(result, telemetryEvent{ThreadID: "request-lookup", Type: "tool.result", Data: map[string]any{
+		"id": "send-1", "name": "send", "success": true,
+	}})
+
+	if got := result.ThreadResponses["request-lookup"]; !reflect.DeepEqual(got, []string{"19"}) {
+		t.Fatalf("thread responses = %#v", result.ThreadResponses)
+	}
+	if len(result.AssistantResponses) != 0 {
+		t.Fatalf("worker send leaked into unscoped responses: %#v", result.AssistantResponses)
+	}
+}
+
 func TestIterationLimitWaitsForInflightToolResult(t *testing.T) {
 	result := &ScenarioResult{}
 	applyTelemetry(result, telemetryEvent{Type: "tool.call", Data: map[string]any{
@@ -351,24 +369,78 @@ func TestToolArgumentAndNegativeAssertions(t *testing.T) {
 	}
 }
 
-func TestToolAssertionsCanPinOpaqueConversationThread(t *testing.T) {
+func TestToolAssertionsCanPinOpaqueRequestThread(t *testing.T) {
 	result := &ScenarioResult{ToolCalls: []ToolCallResult{
-		{Name: "tasks_tasks_create", ThreadID: "chat-conv-1"},
+		{Name: "tasks_tasks_create", ThreadID: "request-origin"},
 		{Name: "tasks_tasks_update", ThreadID: "main"},
 		{Name: "tasks_tasks_complete", ThreadID: "main"},
 	}}
 	one := 1
-	createdByConversation := &ToolCallAssertion{Tool: "tasks_create", ThreadID: "chat-conv-1", Count: &one}
-	if got := assertToolCallMatch(createdByConversation, false, result); !got.OK {
-		t.Fatalf("conversation create assertion = %+v", got)
+	createdByRequester := &ToolCallAssertion{Tool: "tasks_create", ThreadID: "request-origin", Count: &one}
+	if got := assertToolCallMatch(createdByRequester, false, result); !got.OK {
+		t.Fatalf("request-thread create assertion = %+v", got)
 	}
-	conversationDidNotExecute := &ToolCallAssertion{Tool: "tasks_update | tasks_complete", ThreadID: "chat-conv-1"}
-	if got := assertToolCallMatch(conversationDidNotExecute, true, result); !got.OK {
-		t.Fatalf("conversation execution boundary = %+v", got)
+	requesterDidNotExecute := &ToolCallAssertion{Tool: "tasks_update | tasks_complete", ThreadID: "request-origin"}
+	if got := assertToolCallMatch(requesterDidNotExecute, true, result); !got.OK {
+		t.Fatalf("request-thread execution boundary = %+v", got)
 	}
 	mainCompleted := &ToolCallAssertion{Tool: "tasks_complete", ThreadID: "main", Count: &one}
 	if got := assertToolCallMatch(mainCompleted, false, result); !got.OK {
 		t.Fatalf("main completion assertion = %+v", got)
+	}
+}
+
+func TestStartScenarioThreadQueuesPromptAtomically(t *testing.T) {
+	const apiKey = "owner-key"
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/instances/42/threads/request-origin" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+apiKey {
+			t.Fatal("missing owner authentication")
+		}
+		var payload struct {
+			Directive string   `json:"directive"`
+			Tools     []string `json:"tools"`
+			MCP       []string `json:"mcp"`
+			Events    []struct {
+				ID      string `json:"id"`
+				Message string `json:"message"`
+			} `json:"events"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Directive != "Handle task requests." || !reflect.DeepEqual(payload.Tools, []string{"pace"}) || !reflect.DeepEqual(payload.MCP, []string{"tasks"}) {
+			t.Fatalf("profile = %+v", payload)
+		}
+		if len(payload.Events) != 1 || payload.Events[0].ID != "scenario-prompt" || payload.Events[0].Message != "Create one task." {
+			t.Fatalf("events = %+v", payload.Events)
+		}
+		_, _ = w.Write([]byte(`{"status":"created","id":"request-origin","events":{"accepted":["scenario-prompt"],"duplicates":[]}}`))
+	}))
+	defer httpServer.Close()
+	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: apiKey}
+	err := startScenarioThread(server, 42, ScenarioThreadSpec{
+		ID: "request-origin", Directive: "Handle task requests.", Tools: []string{"pace"}, MCP: []string{"tasks"},
+	}, "Create one task.")
+	if err != nil {
+		t.Fatalf("start scenario thread: %v", err)
+	}
+}
+
+func TestResponseAssertionCanBeScopedToThread(t *testing.T) {
+	result := &ScenarioResult{ThreadResponses: map[string][]string{
+		"main":           {"There are 7 records."},
+		"request-origin": {"There are 19 active contacts."},
+	}}
+	requestAssertion := AssertClause{AgentResponseContains: "19", ThreadID: "request-origin"}
+	if got := assertResponseContains(requestAssertion, result); !got.OK {
+		t.Fatalf("request response assertion = %+v", got)
+	}
+	wrongThread := AssertClause{AgentResponseContains: "19", ThreadID: "main"}
+	if got := assertResponseContains(wrongThread, result); got.OK {
+		t.Fatalf("wrong thread satisfied response assertion: %+v", got)
 	}
 }
 
@@ -445,6 +517,31 @@ func TestAssertHTTPDottedFieldsAndCounts(t *testing.T) {
 	})
 	if !count.OK {
 		t.Fatalf("count assertion = %+v", count)
+	}
+}
+
+func TestAssertHTTPFindsObjectIndependentOfArrayOrder(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tasks":[
+			{"title":"Stress Gamma","result":"GAMMA OK","execution_thread_id":"stress-worker-gamma"},
+			{"title":"Stress Alpha","result":"ALPHA OK","execution_thread_id":"stress-worker-alpha"}
+		]}`))
+	}))
+	defer httpServer.Close()
+
+	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), projectID: "project-1"}
+	result := assertHTTP(server, 9, "", AssertClause{
+		HTTP:         "GET /api/apps/tasks/tasks",
+		ExpectItemAt: "tasks",
+		ExpectItem: map[string]any{
+			"title":               "Stress Alpha",
+			"result":              "ALPHA OK",
+			"execution_thread_id": "stress-worker-alpha",
+		},
+	})
+	if !result.OK {
+		t.Fatalf("order-independent item assertion = %+v", result)
 	}
 }
 

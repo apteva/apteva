@@ -105,13 +105,26 @@ type Scenario struct {
 type ScenarioSetup struct {
 	App          AppSetup            `yaml:"app"`
 	Mode         string              `yaml:"mode"`        // autonomous | cautious | learn
-	Interaction  string              `yaml:"interaction"` // autonomous (default) | conversation
+	Interaction  string              `yaml:"interaction"` // autonomous (default) | thread | conversation (legacy)
+	Thread       *ScenarioThreadSpec `yaml:"thread"`
 	Config       map[string]string   `yaml:"config"`
 	Fixtures     []FixtureSpec       `yaml:"fixtures"` // pre-uploaded files / setup data
 	FakeMCPs     []FakeMCPServerSpec `yaml:"fake_mcp_servers"`
 	InitialWake  *InitialWakeSpec    `yaml:"initial_wake"`
 	SeedMCPCalls []SeedMCPCallSpec   `yaml:"seed_mcp_calls"`
 	RequiredEnv  []string            `yaml:"required_env"`
+}
+
+// ScenarioThreadSpec describes a test-owned Core thread. The runner creates it
+// through Core's authenticated /threads API and queues Scenario.Prompt in the
+// same request, so the first model iteration cannot race ahead of its input or
+// capability profile. This is the preferred interaction mode for app tests;
+// it has no dependency on a user-facing channel implementation.
+type ScenarioThreadSpec struct {
+	ID        string   `yaml:"id"`
+	Directive string   `yaml:"directive"`
+	Tools     []string `yaml:"tools"`
+	MCP       []string `yaml:"mcp"`
 }
 
 // FakeMCPServerSpec adds a deterministic, in-process MCP server to a live
@@ -176,6 +189,8 @@ type AssertClause struct {
 	ExpectCount           *int               `yaml:"expect_count"`    // exact size, including zero
 	ExpectCountMin        int                `yaml:"expect_count_min"`
 	ExpectCountMax        int                `yaml:"expect_count_max"`
+	ExpectItemAt          string             `yaml:"expect_item_at"`  // dotted path to an array containing a matching object
+	ExpectItem            map[string]any     `yaml:"expect_item"`     // object subset to find, independent of array order
 	ExpectFieldAt         string             `yaml:"expect_field_at"` // dotted path
 	ExpectFieldEq         any                `yaml:"expect_field_eq"` // value to match
 	ExpectFieldContains   string             `yaml:"expect_field_contains"`
@@ -191,6 +206,7 @@ type AssertClause struct {
 	ChatResponseContains  string             `yaml:"chat_response_contains"`
 	ChatResponseMatches   string             `yaml:"chat_response_matches"`
 	ChatFinalMessages     *int               `yaml:"chat_final_messages"`
+	ThreadID              string             `yaml:"thread_id"`       // scope response assertions to one Core thread
 	FinishedWithin        string             `yaml:"finished_within"` // duration
 	IterationsAtMost      int                `yaml:"iterations_at_most"`
 	Category              string             `yaml:"-"`
@@ -215,25 +231,26 @@ type Budget struct {
 }
 
 type ScenarioResult struct {
-	Name                  string           `json:"scenario"`
-	OK                    bool             `json:"ok"`
-	ElapsedMs             int64            `json:"elapsed_ms"`
-	Iterations            int              `json:"iterations"`
-	ToolCalls             []ToolCallResult `json:"tool_calls"`
-	Tokens                TokenSummary     `json:"tokens"`
-	CostUSD               float64          `json:"cost_usd"`
-	Asserts               []AssertResult   `json:"asserts"`
-	BudgetOK              bool             `json:"budget_ok"`
-	Run                   int              `json:"run,omitempty"`
-	RunCount              int              `json:"run_count,omitempty"`
-	PassCount             int              `json:"pass_count,omitempty"`
-	PassRate              float64          `json:"pass_rate,omitempty"`
-	RequiredPassRate      float64          `json:"required_pass_rate,omitempty"`
-	Attempts              []ScenarioResult `json:"attempts,omitempty"`
-	AssistantResponses    []string         `json:"assistant_responses,omitempty"`
-	ConversationResponses []string         `json:"conversation_responses,omitempty"`
-	ArtifactsDir          string           `json:"artifacts_dir,omitempty"`
-	Error                 string           `json:"error,omitempty"`
+	Name                  string              `json:"scenario"`
+	OK                    bool                `json:"ok"`
+	ElapsedMs             int64               `json:"elapsed_ms"`
+	Iterations            int                 `json:"iterations"`
+	ToolCalls             []ToolCallResult    `json:"tool_calls"`
+	Tokens                TokenSummary        `json:"tokens"`
+	CostUSD               float64             `json:"cost_usd"`
+	Asserts               []AssertResult      `json:"asserts"`
+	BudgetOK              bool                `json:"budget_ok"`
+	Run                   int                 `json:"run,omitempty"`
+	RunCount              int                 `json:"run_count,omitempty"`
+	PassCount             int                 `json:"pass_count,omitempty"`
+	PassRate              float64             `json:"pass_rate,omitempty"`
+	RequiredPassRate      float64             `json:"required_pass_rate,omitempty"`
+	Attempts              []ScenarioResult    `json:"attempts,omitempty"`
+	AssistantResponses    []string            `json:"assistant_responses,omitempty"`
+	ThreadResponses       map[string][]string `json:"thread_responses,omitempty"`
+	ConversationResponses []string            `json:"conversation_responses,omitempty"`
+	ArtifactsDir          string              `json:"artifacts_dir,omitempty"`
+	Error                 string              `json:"error,omitempty"`
 	telemetry             []telemetryEvent
 }
 
@@ -627,6 +644,16 @@ func expandScenarioRuntime(s *Scenario, values map[string]string) {
 func replaceScenarioValues(s *Scenario, replace func(string) string) {
 	s.Directive = replace(s.Directive)
 	s.Prompt = replace(s.Prompt)
+	if s.Setup.Thread != nil {
+		s.Setup.Thread.ID = replace(s.Setup.Thread.ID)
+		s.Setup.Thread.Directive = replace(s.Setup.Thread.Directive)
+		for i := range s.Setup.Thread.Tools {
+			s.Setup.Thread.Tools[i] = replace(s.Setup.Thread.Tools[i])
+		}
+		for i := range s.Setup.Thread.MCP {
+			s.Setup.Thread.MCP[i] = replace(s.Setup.Thread.MCP[i])
+		}
+	}
 	for i := range s.Setup.SeedMCPCalls {
 		call := &s.Setup.SeedMCPCalls[i]
 		call.App = replace(call.App)
@@ -645,7 +672,11 @@ func replaceScenarioValues(s *Scenario, replace func(string) string) {
 			group[i].AgentResponseMatches = replace(group[i].AgentResponseMatches)
 			group[i].ChatResponseContains = replace(group[i].ChatResponseContains)
 			group[i].ChatResponseMatches = replace(group[i].ChatResponseMatches)
+			group[i].ThreadID = replace(group[i].ThreadID)
 			group[i].ExpectFieldEq = replaceStringValue(group[i].ExpectFieldEq, replace)
+			if group[i].ExpectItem != nil {
+				group[i].ExpectItem = replaceStringValues(group[i].ExpectItem, replace).(map[string]any)
+			}
 			for _, match := range []*ToolCallAssertion{group[i].ToolCalledWith, group[i].ToolNotCalledWith} {
 				if match == nil {
 					continue
@@ -1315,12 +1346,16 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if interaction == "" {
 		interaction = "autonomous"
 	}
-	if interaction != "autonomous" && interaction != "conversation" {
+	if interaction != "autonomous" && interaction != "thread" && interaction != "conversation" {
 		res.Error = fmt.Sprintf("unsupported setup.interaction %q", s.Setup.Interaction)
 		return res
 	}
-	if interaction == "conversation" && strings.TrimSpace(s.Prompt) == "" {
-		res.Error = "setup.interaction=conversation requires prompt"
+	if (interaction == "thread" || interaction == "conversation") && strings.TrimSpace(s.Prompt) == "" {
+		res.Error = fmt.Sprintf("setup.interaction=%s requires prompt", interaction)
+		return res
+	}
+	if interaction == "thread" && s.Setup.Thread == nil {
+		res.Error = "setup.interaction=thread requires setup.thread"
 		return res
 	}
 
@@ -1388,7 +1423,20 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	telemetry, errCh, _ := streamTelemetry(ctx, server, inst.ID)
 
 	conversationID := ""
-	if interaction == "conversation" {
+	if interaction == "thread" {
+		threadID := strings.TrimSpace(s.Setup.Thread.ID)
+		if threadID == "" {
+			threadID = "scenario-request"
+		}
+		expandScenarioRuntime(&s, map[string]string{
+			"APTEVA_TEST_THREAD_ID":         threadID,
+			"APTEVA_TEST_DEFAULT_THREAD_ID": "main",
+		})
+		if err := startScenarioThread(server, inst.ID, *s.Setup.Thread, s.Prompt); err != nil {
+			res.Error = fmt.Sprintf("start scenario thread: %v", err)
+			return res
+		}
+	} else if interaction == "conversation" {
 		conversation, err := openScenarioConversation(server, inst.ID, s.Name)
 		if err != nil {
 			res.Error = fmt.Sprintf("open conversation: %v", err)
@@ -1606,6 +1654,10 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 		res.CostUSD += cost
 		if message, _ := ev.Data["message"].(string); strings.TrimSpace(message) != "" {
 			res.AssistantResponses = append(res.AssistantResponses, message)
+			if res.ThreadResponses == nil {
+				res.ThreadResponses = make(map[string][]string)
+			}
+			res.ThreadResponses[ev.ThreadID] = append(res.ThreadResponses[ev.ThreadID], message)
 		}
 		res.Tokens.Total = res.Tokens.Prompt + res.Tokens.Completion
 	case "tool.call":
@@ -1633,10 +1685,28 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 				res.ToolCalls[i].ResultPreviewBytes = int(numberValue(ev.Data["result_preview_bytes"]))
 				res.ToolCalls[i].ResultImageBytes = int(numberValue(ev.Data["result_image_bytes"]))
 				res.ToolCalls[i].ResultTruncated, _ = ev.Data["result_truncated"].(bool)
+				// Explicit Core request threads commonly return their final
+				// answer to the parent with send instead of populating
+				// llm.done.message. Treat a successfully delivered message as
+				// that originating thread's response without mixing worker
+				// messages into unscoped assistant-response assertions.
+				if ok && name == "send" {
+					appendThreadResponse(res, ev.ThreadID, res.ToolCalls[i].Args["message"])
+				}
 				break
 			}
 		}
 	}
+}
+
+func appendThreadResponse(res *ScenarioResult, threadID, message string) {
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+	if res.ThreadResponses == nil {
+		res.ThreadResponses = make(map[string][]string)
+	}
+	res.ThreadResponses[threadID] = append(res.ThreadResponses[threadID], message)
 }
 
 func scenarioIterationLimitReached(res *ScenarioResult, maxIterations int) bool {
@@ -1969,7 +2039,49 @@ func assertHTTP(server *testServer, installID int64, sidecarURL string, c Assert
 		return AssertResult{Clause: c.HTTP + " field " + c.ExpectFieldAt,
 			OK: valuesEqual(value, c.ExpectFieldEq), Got: value, Want: c.ExpectFieldEq}
 	}
+	if c.ExpectItemAt != "" {
+		var data any
+		if err := json.Unmarshal(body, &data); err != nil {
+			return AssertResult{Clause: c.HTTP, OK: false, Note: "invalid JSON response: " + err.Error()}
+		}
+		value, ok := jsonPathValue(data, c.ExpectItemAt)
+		if !ok {
+			return AssertResult{Clause: c.HTTP + " item " + c.ExpectItemAt, OK: false, Note: "JSON path not found in " + tcTruncate(string(body), 500)}
+		}
+		items, ok := value.([]any)
+		if !ok {
+			return AssertResult{Clause: c.HTTP + " item " + c.ExpectItemAt, OK: false, Got: value, Note: "value is not an array"}
+		}
+		if len(c.ExpectItem) == 0 {
+			return AssertResult{Clause: c.HTTP + " item " + c.ExpectItemAt, OK: false, Note: "expect_item must not be empty"}
+		}
+		for _, item := range items {
+			if jsonSubset(item, c.ExpectItem) {
+				return AssertResult{Clause: c.HTTP + " item " + c.ExpectItemAt, OK: true, Got: item, Want: c.ExpectItem}
+			}
+		}
+		return AssertResult{Clause: c.HTTP + " item " + c.ExpectItemAt, OK: false, Got: len(items), Want: c.ExpectItem,
+			Note: "no matching item in " + tcTruncate(string(body), 500)}
+	}
 	return AssertResult{Clause: c.HTTP, OK: true, Got: resp.StatusCode}
+}
+
+func jsonSubset(actual, expected any) bool {
+	expectedMap, expectedIsMap := expected.(map[string]any)
+	if !expectedIsMap {
+		return valuesEqual(actual, expected)
+	}
+	actualMap, actualIsMap := actual.(map[string]any)
+	if !actualIsMap {
+		return false
+	}
+	for key, expectedValue := range expectedMap {
+		actualValue, ok := actualMap[key]
+		if !ok || !jsonSubset(actualValue, expectedValue) {
+			return false
+		}
+	}
+	return true
 }
 
 func jsonPathValue(data any, path string) (any, bool) {
@@ -2189,7 +2301,7 @@ func assertResponseMatches(c AssertClause, res *ScenarioResult) AssertResult {
 	if err != nil {
 		return AssertResult{Clause: clause, OK: false, Want: pattern, Note: "invalid response regex: " + err.Error()}
 	}
-	joined := strings.Join(res.AssistantResponses, "\n")
+	joined := strings.Join(responseMessages(c, res), "\n")
 	if compiled.MatchString(joined) {
 		return AssertResult{Clause: clause, OK: true, Got: "matched", Want: pattern}
 	}
@@ -2198,7 +2310,7 @@ func assertResponseMatches(c AssertClause, res *ScenarioResult) AssertResult {
 
 func assertResponseContains(c AssertClause, res *ScenarioResult) AssertResult {
 	needle := responseNeedle(c)
-	joined := strings.Join(res.AssistantResponses, "\n")
+	joined := strings.Join(responseMessages(c, res), "\n")
 	for _, alternative := range strings.Split(needle, "|") {
 		alternative = strings.Trim(strings.TrimSpace(alternative), `"'`)
 		if alternative != "" && strings.Contains(strings.ToLower(joined), strings.ToLower(alternative)) {
@@ -2206,6 +2318,16 @@ func assertResponseContains(c AssertClause, res *ScenarioResult) AssertResult {
 		}
 	}
 	return AssertResult{Clause: "response_contains " + needle, OK: false, Got: tcTruncate(joined, 300), Want: needle}
+}
+
+func responseMessages(c AssertClause, res *ScenarioResult) []string {
+	if res == nil {
+		return nil
+	}
+	if threadID := strings.TrimSpace(c.ThreadID); threadID != "" {
+		return res.ThreadResponses[threadID]
+	}
+	return res.AssistantResponses
 }
 
 type scenarioChatMessage struct {
@@ -2923,6 +3045,63 @@ type scenarioConversation struct {
 	ID       string
 	ThreadID string
 	stream   io.ReadCloser
+}
+
+func startScenarioThread(server *testServer, agentID int64, spec ScenarioThreadSpec, prompt string) error {
+	threadID := strings.TrimSpace(spec.ID)
+	if threadID == "" {
+		threadID = "scenario-request"
+	}
+	payload := map[string]any{
+		"events": []map[string]any{{
+			"id":      "scenario-prompt",
+			"message": prompt,
+		}},
+	}
+	if directive := strings.TrimSpace(spec.Directive); directive != "" {
+		payload["directive"] = directive
+	}
+	if spec.Tools != nil {
+		payload["tools"] = spec.Tools
+	}
+	if spec.MCP != nil {
+		payload["mcp"] = spec.MCP
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("http://%s/api/instances/%d/threads/%s", server.addr, agentID, url.PathEscape(threadID)),
+		bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("create thread returned HTTP %d: %s", resp.StatusCode, tcTruncate(string(responseBody), 300))
+	}
+	var result struct {
+		Status string `json:"status"`
+		ID     string `json:"id"`
+		Events struct {
+			Accepted []string `json:"accepted"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return fmt.Errorf("decode thread creation: %w", err)
+	}
+	if result.ID != threadID || (result.Status != "created" && result.Status != "exists") {
+		return fmt.Errorf("unexpected thread creation receipt: %s", tcTruncate(string(responseBody), 300))
+	}
+	if len(result.Events.Accepted) != 1 || result.Events.Accepted[0] != "scenario-prompt" {
+		return fmt.Errorf("scenario prompt was not accepted atomically: %s", tcTruncate(string(responseBody), 300))
+	}
+	return nil
 }
 
 func openScenarioConversation(server *testServer, agentID int64, title string) (*scenarioConversation, error) {
