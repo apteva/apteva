@@ -899,8 +899,73 @@ func bootstrapServer(opts testOpts) (*testServer, error) {
 		return nil, fmt.Errorf("fetch default project: %w", err)
 	}
 	srv.projectID = pid
+	if err := provisionSpawnedTestProvider(srv, opts.provider, baseEnv); err != nil {
+		_ = cmd.Process.Kill()
+		return nil, fmt.Errorf("configure test provider: %w", err)
+	}
 	fmt.Fprintf(os.Stderr, "spawned apteva-server at %s (data: %s, project: %s)\n", addr, dataDir, pid)
 	return srv, nil
+}
+
+// provisionSpawnedTestProvider bridges the test runner's environment-based
+// credential input to Server's connection-backed runtime provider model. It
+// only applies to the clean, disposable Server created by apteva test;
+// existing-server runs always use the operator's already configured
+// connections and never receive credentials from the runner.
+func provisionSpawnedTestProvider(server *testServer, requested string, env []string) error {
+	provider := normalizeProviderName(requested)
+	if provider == "" {
+		return nil
+	}
+
+	var credentials map[string]string
+	switch provider {
+	case "openai-codex":
+		accessToken := envValue(env, "OPENAI_CODEX_ACCESS_TOKEN")
+		if accessToken == "" {
+			return fmt.Errorf("openai-codex requires OPENAI_CODEX_ACCESS_TOKEN in the environment or ~/.apteva/test.env")
+		}
+		credentials = map[string]string{"access_token": accessToken}
+		if accountID := envValue(env, "OPENAI_CODEX_ACCOUNT_ID"); accountID != "" {
+			credentials["account_id"] = accountID
+		}
+	default:
+		// Other providers retain their existing Server bootstrap behavior.
+		// Add a connection-backed adapter here when their runtime catalog is
+		// migrated away from legacy environment discovery.
+		return nil
+	}
+
+	autoMCP := false
+	body, err := json.Marshal(map[string]any{
+		"source":      "local",
+		"app_slug":    provider,
+		"name":        "Tier 3 " + provider,
+		"auth_type":   "bearer",
+		"credentials": credentials,
+		"project_id":  server.projectID,
+		"created_via": "app_install",
+		"auto_mcp":    autoMCP,
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://"+server.addr+"/api/connections", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create %s runtime connection: HTTP %d: %s", provider, resp.StatusCode, tcTruncate(string(raw), 200))
+	}
+	return nil
 }
 
 func createTestProject(server *testServer) (string, error) {
@@ -1390,7 +1455,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// /api/instances only carries server-side flags (include_apteva_
 	// server, etc.), not the agent's tool list. The on-disk
 	// config.json is the single source of truth core consumes.
-	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, mcpServers, includeChannels, initialPace); err != nil {
+	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, opts.provider, mcpServers, includeChannels, initialPace); err != nil {
 		res.Error = fmt.Sprintf("write instance config.json: %v", err)
 		return res
 	}
@@ -3229,7 +3294,7 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 // Existing-server runs normally leave operator-owned disk state untouched;
 // when an initial pace is explicitly requested, they persist only that field
 // through the stopped agent's authenticated config endpoint.
-func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode string, mcpServers []map[string]any, includeChannels bool, initialPace map[string]any) error {
+func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode, provider string, mcpServers []map[string]any, includeChannels bool, initialPace map[string]any) error {
 	if server.dataDir == "" {
 		if initialPace == nil {
 			return nil
@@ -3247,6 +3312,9 @@ func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mo
 		"mode":             mode,
 		"mcp_servers":      mcpServers,
 		"include_channels": includeChannels,
+	}
+	if strings.TrimSpace(provider) != "" {
+		cfg["default_provider"] = normalizeProviderName(provider)
 	}
 	if initialPace != nil {
 		cfg["main_pace"] = initialPace
@@ -3590,7 +3658,8 @@ func loadTestEnvFile() map[string]string {
 func envHasProviderKey(env []string) bool {
 	keys := []string{
 		"OPENCODE_GO_API_KEY", "FIREWORKS_API_KEY", "ANTHROPIC_API_KEY",
-		"GOOGLE_API_KEY", "OPENAI_API_KEY", "NVIDIA_API_KEY", "OLLAMA_HOST",
+		"GOOGLE_API_KEY", "OPENAI_API_KEY", "OPENAI_CODEX_ACCESS_TOKEN",
+		"NVIDIA_API_KEY", "OLLAMA_HOST",
 	}
 	have := map[string]bool{}
 	for _, kv := range env {
@@ -3605,6 +3674,16 @@ func envHasProviderKey(env []string) bool {
 		}
 	}
 	return false
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(env[i], prefix))
+		}
+	}
+	return ""
 }
 
 func pickFreePort() (int, error) {

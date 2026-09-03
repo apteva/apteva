@@ -695,6 +695,65 @@ func TestBootstrapExistingServerUsesTemporaryProjectByDefault(t *testing.T) {
 	}
 }
 
+func TestProvisionSpawnedTestProviderCreatesProjectScopedCodexConnection(t *testing.T) {
+	const apiKey = "test-owner-key"
+	var received map[string]any
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/connections" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+apiKey {
+			t.Fatal("missing owner authentication")
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":1,"status":"active"}`))
+	}))
+	defer httpServer.Close()
+
+	server := &testServer{
+		addr:      strings.TrimPrefix(httpServer.URL, "http://"),
+		apiKey:    apiKey,
+		projectID: "project-1",
+	}
+	err := provisionSpawnedTestProvider(server, "OpenAI Codex", []string{
+		"OPENAI_CODEX_ACCESS_TOKEN=test-access-token",
+		"OPENAI_CODEX_ACCOUNT_ID=account-1",
+	})
+	if err != nil {
+		t.Fatalf("provision provider: %v", err)
+	}
+	if received["app_slug"] != "openai-codex" || received["project_id"] != "project-1" {
+		t.Fatalf("connection scope = %#v", received)
+	}
+	if received["auth_type"] != "bearer" || received["created_via"] != "app_install" || received["auto_mcp"] != false {
+		t.Fatalf("connection policy = %#v", received)
+	}
+	credentials, ok := received["credentials"].(map[string]any)
+	if !ok || credentials["access_token"] != "test-access-token" || credentials["account_id"] != "account-1" {
+		t.Fatalf("credentials = %#v", received["credentials"])
+	}
+}
+
+func TestProvisionSpawnedTestProviderRequiresCodexToken(t *testing.T) {
+	server := &testServer{projectID: "project-1"}
+	err := provisionSpawnedTestProvider(server, "openai-codex", []string{"OPENAI_CODEX_ACCOUNT_ID=account-1"})
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_CODEX_ACCESS_TOKEN") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEnvHasProviderKeyRecognizesCodexAccessToken(t *testing.T) {
+	if !envHasProviderKey([]string{"OPENAI_CODEX_ACCESS_TOKEN=test-token"}) {
+		t.Fatal("Codex access token was not recognized as a provider credential")
+	}
+	if got := envValue([]string{"A=old", "A=new"}, "A"); got != "new" {
+		t.Fatalf("last environment value = %q", got)
+	}
+}
+
 func TestFindExistingAppInstallPrefersProjectInstall(t *testing.T) {
 	const apiKey = "test-owner-key"
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
