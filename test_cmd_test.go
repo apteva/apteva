@@ -136,13 +136,19 @@ func TestExpandScenarioRuntime(t *testing.T) {
 }
 
 func TestExpandScenarioRuntimeReplacesNestedSeedMCPArgs(t *testing.T) {
-	scenario := Scenario{Setup: ScenarioSetup{SeedMCPCalls: []SeedMCPCallSpec{{
-		App: "${APTEVA_TEST_APP_NAME}", Tool: "create", ThreadID: "${APTEVA_TEST_DEFAULT_THREAD_ID}",
-		Args: map[string]any{
-			"schedule": map[string]any{"kind": "once", "at": "${APTEVA_TEST_WAKE_AT}"},
-			"labels":   []any{"agent-${APTEVA_TEST_AGENT_ID}"},
-		},
-	}}}}
+	scenario := Scenario{Setup: ScenarioSetup{
+		SeedMCPCalls: []SeedMCPCallSpec{{
+			App: "${APTEVA_TEST_APP_NAME}", Tool: "create", ThreadID: "${APTEVA_TEST_DEFAULT_THREAD_ID}",
+			Args: map[string]any{
+				"schedule": map[string]any{"kind": "once", "at": "${APTEVA_TEST_WAKE_AT}"},
+				"labels":   []any{"agent-${APTEVA_TEST_AGENT_ID}"},
+			},
+		}},
+		CleanupMCPCalls: []SeedMCPCallSpec{{
+			App: "${APTEVA_TEST_APP_NAME}", Tool: "destroy", ThreadID: "cleanup-${APTEVA_TEST_AGENT_ID}",
+			Args: map[string]any{"id": "resource-${APTEVA_TEST_AGENT_ID}"},
+		}},
+	}}
 	expandScenarioRuntime(&scenario, map[string]string{
 		"APTEVA_TEST_APP_NAME":          "tasks",
 		"APTEVA_TEST_DEFAULT_THREAD_ID": "main",
@@ -154,6 +160,28 @@ func TestExpandScenarioRuntimeReplacesNestedSeedMCPArgs(t *testing.T) {
 	labels := call.Args["labels"].([]any)
 	if call.App != "tasks" || call.ThreadID != "main" || schedule["at"] != "2026-08-10T10:00:00Z" || labels[0] != "agent-42" {
 		t.Fatalf("seed call was not expanded: %#v", call)
+	}
+	cleanup := scenario.Setup.CleanupMCPCalls[0]
+	if cleanup.App != "tasks" || cleanup.ThreadID != "cleanup-42" || cleanup.Args["id"] != "resource-42" {
+		t.Fatalf("cleanup call was not expanded: %#v", cleanup)
+	}
+}
+
+func TestParseRequiredAppRefs(t *testing.T) {
+	refs, err := parseRequiredAppRefs([]byte(`requires:
+  apps:
+    - name: workspaces
+      optional: true
+    - { name: containers, optional: false }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 || refs[0].Name != "workspaces" || !refs[0].Optional || refs[1].Name != "containers" || refs[1].Optional {
+		t.Fatalf("unexpected app refs: %#v", refs)
+	}
+	if _, err := parseRequiredAppRefs([]byte("requires:\n  apps:\n    - optional: true\n")); err == nil {
+		t.Fatal("nameless app dependency was accepted")
 	}
 }
 

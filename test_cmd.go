@@ -103,16 +103,17 @@ type Scenario struct {
 }
 
 type ScenarioSetup struct {
-	App          AppSetup            `yaml:"app"`
-	Mode         string              `yaml:"mode"`        // autonomous | cautious | learn
-	Interaction  string              `yaml:"interaction"` // autonomous (default) | thread | conversation (legacy)
-	Thread       *ScenarioThreadSpec `yaml:"thread"`
-	Config       map[string]string   `yaml:"config"`
-	Fixtures     []FixtureSpec       `yaml:"fixtures"` // pre-uploaded files / setup data
-	FakeMCPs     []FakeMCPServerSpec `yaml:"fake_mcp_servers"`
-	InitialWake  *InitialWakeSpec    `yaml:"initial_wake"`
-	SeedMCPCalls []SeedMCPCallSpec   `yaml:"seed_mcp_calls"`
-	RequiredEnv  []string            `yaml:"required_env"`
+	App             AppSetup            `yaml:"app"`
+	Mode            string              `yaml:"mode"`        // autonomous | cautious | learn
+	Interaction     string              `yaml:"interaction"` // autonomous (default) | thread | conversation (legacy)
+	Thread          *ScenarioThreadSpec `yaml:"thread"`
+	Config          map[string]string   `yaml:"config"`
+	Fixtures        []FixtureSpec       `yaml:"fixtures"` // pre-uploaded files / setup data
+	FakeMCPs        []FakeMCPServerSpec `yaml:"fake_mcp_servers"`
+	InitialWake     *InitialWakeSpec    `yaml:"initial_wake"`
+	SeedMCPCalls    []SeedMCPCallSpec   `yaml:"seed_mcp_calls"`
+	CleanupMCPCalls []SeedMCPCallSpec   `yaml:"cleanup_mcp_calls"`
+	RequiredEnv     []string            `yaml:"required_env"`
 }
 
 // ScenarioThreadSpec describes a test-owned Core thread. The runner creates it
@@ -149,6 +150,7 @@ type AppSetup struct {
 	Path          string            `yaml:"path"`           // local path to the app being tested
 	Config        map[string]string `yaml:"config"`         // install-time config
 	Env           map[string]string `yaml:"env"`            // sidecar process environment
+	Bindings      map[string]string `yaml:"bindings"`       // optional app dependency name -> "app"
 	ReuseExisting bool              `yaml:"reuse_existing"` // use the server's installed app and state
 	Spawnable     bool              `yaml:"spawnable"`      // allow agent-created workers to attach this app's MCP
 }
@@ -654,13 +656,15 @@ func replaceScenarioValues(s *Scenario, replace func(string) string) {
 			s.Setup.Thread.MCP[i] = replace(s.Setup.Thread.MCP[i])
 		}
 	}
-	for i := range s.Setup.SeedMCPCalls {
-		call := &s.Setup.SeedMCPCalls[i]
-		call.App = replace(call.App)
-		call.Tool = replace(call.Tool)
-		call.ThreadID = replace(call.ThreadID)
-		if call.Args != nil {
-			call.Args = replaceStringValues(call.Args, replace).(map[string]any)
+	for _, calls := range [][]SeedMCPCallSpec{s.Setup.SeedMCPCalls, s.Setup.CleanupMCPCalls} {
+		for i := range calls {
+			call := &calls[i]
+			call.App = replace(call.App)
+			call.Tool = replace(call.Tool)
+			call.ThreadID = replace(call.ThreadID)
+			if call.Args != nil {
+				call.Args = replaceStringValues(call.Args, replace).(map[string]any)
+			}
 		}
 	}
 	for _, group := range [][]AssertClause{s.Assert, s.OutcomeAssert, s.TrajectoryAssert} {
@@ -1291,8 +1295,8 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			res.Error = "setup.app.reuse_existing requires --server and an explicit --project-id"
 			return res
 		}
-		if len(s.Setup.App.Config) > 0 || len(s.Setup.App.Env) > 0 || len(s.Setup.Fixtures) > 0 {
-			res.Error = "setup.app.reuse_existing cannot use app config, app env, or fixtures"
+		if len(s.Setup.App.Config) > 0 || len(s.Setup.App.Env) > 0 || len(s.Setup.App.Bindings) > 0 || len(s.Setup.Fixtures) > 0 {
+			res.Error = "setup.app.reuse_existing cannot use app config, app env, app bindings, or fixtures"
 			return res
 		}
 		installed, err = findExistingAppInstall(server, appName)
@@ -1311,7 +1315,8 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		// Install + spawn dependent apps first. The manifest's
 		// requires.apps lists peer apps the unit under test calls over
 		// HTTP. Each local sidecar is removed after the run.
-		deps, err = installDeps(server, appDir, manifestYAML)
+		var appBindings map[string]any
+		deps, appBindings, err = installDeps(server, appDir, manifestYAML, s.Setup.App.Bindings)
 		if err != nil {
 			res.Error = fmt.Sprintf("install deps: %v", err)
 			return res
@@ -1326,7 +1331,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			}
 		}()
 
-		installed, err = installApp(server, manifestYAML, appDir, server.projectID, s.Setup.App.Config)
+		installed, err = installApp(server, manifestYAML, appDir, server.projectID, s.Setup.App.Config, appBindings)
 		if err != nil {
 			res.Error = fmt.Sprintf("install app: %v", err)
 			return res
@@ -1462,6 +1467,18 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if err := seedScenarioMCPCalls(s.Setup.SeedMCPCalls, sidecarsByApp, inst.ID, projectID); err != nil {
 		res.Error = fmt.Sprintf("seed MCP calls: %v", err)
 		return res
+	}
+	if len(s.Setup.CleanupMCPCalls) > 0 && os.Getenv("APTEVA_TEST_KEEP") == "" {
+		defer func() {
+			if cleanupErr := seedScenarioMCPCalls(s.Setup.CleanupMCPCalls, sidecarsByApp, inst.ID, projectID); cleanupErr != nil {
+				res.OK = false
+				if res.Error == "" {
+					res.Error = "cleanup MCP calls: " + cleanupErr.Error()
+				} else {
+					res.Error += "; cleanup MCP calls: " + cleanupErr.Error()
+				}
+			}
+		}()
 	}
 
 	parentCtx := opts.ctx
@@ -2516,55 +2533,109 @@ type depBundle struct {
 	sidecar   *localSidecar
 }
 
-// installDeps walks the manifest's requires.apps and installs +
-// spawns each dep before the unit-under-test. Dep paths follow the
-// monorepo sibling convention: `<appDir>/../<dep_name>/`. Returns
-// the deps in the order they were installed; the caller cleans up
-// in reverse on scenario exit.
-func installDeps(server *testServer, appDir string, manifestYAML []byte) ([]depBundle, error) {
-	depNames := parseRequiresApps(manifestYAML)
-	if len(depNames) == 0 {
-		return nil, nil
-	}
-	parent := filepath.Dir(appDir)
-	if abs, err := filepath.Abs(appDir); err == nil {
-		parent = filepath.Dir(abs)
-	}
+// installDeps recursively installs and spawns required app dependencies before
+// the unit under test. Optional dependencies are included only when the
+// scenario opts in with setup.app.bindings.<name>: app. Dep paths follow the
+// monorepo sibling convention: `<appDir>/../<dep_name>/`.
+//
+// The returned bindings belong on the unit-under-test install. Dependencies
+// are returned in topological order so the caller can tear them down in reverse.
+func installDeps(server *testServer, appDir string, manifestYAML []byte, requested map[string]string) ([]depBundle, map[string]any, error) {
 	rollback := func(out []depBundle) {
 		for i := len(out) - 1; i >= 0; i-- {
 			out[i].sidecar.Stop()
 			uninstallApp(server, out[i].installID)
 		}
 	}
-	out := make([]depBundle, 0, len(depNames))
-	for _, name := range depNames {
-		depDir := filepath.Join(parent, name)
-		manifestPath := filepath.Join(depDir, "apteva.yaml")
-		depYAML, err := os.ReadFile(manifestPath)
+	out := []depBundle{}
+	installedByName := map[string]depBundle{}
+	visiting := map[string]bool{}
+
+	var installManifestDeps func(string, []byte, map[string]string) (map[string]any, error)
+	installManifestDeps = func(ownerDir string, ownerYAML []byte, selections map[string]string) (map[string]any, error) {
+		refs, err := parseRequiredAppRefs(ownerYAML)
 		if err != nil {
-			rollback(out)
-			return nil, fmt.Errorf("dep %q manifest not found at %s — sibling-dir convention expects it next to the app under test", name, manifestPath)
+			return nil, err
 		}
-		installed, err := installApp(server, depYAML, depDir, server.projectID, nil)
-		if err != nil {
-			rollback(out)
-			return nil, fmt.Errorf("install dep %q: %w", name, err)
+		known := make(map[string]bool, len(refs))
+		for _, ref := range refs {
+			known[ref.Name] = true
 		}
-		sc, err := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, nil, "http://"+server.addr)
-		if err != nil {
-			uninstallApp(server, installed.InstallID)
-			rollback(out)
-			return nil, fmt.Errorf("spawn dep %q: %w", name, err)
+		for name, target := range selections {
+			if !known[name] {
+				return nil, fmt.Errorf("app binding %q is not declared in requires.apps", name)
+			}
+			if !strings.EqualFold(strings.TrimSpace(target), "app") {
+				return nil, fmt.Errorf("app binding %q must use target \"app\"", name)
+			}
 		}
-		if err := setSidecarURL(server, installed.InstallID, sc.URL); err != nil {
-			sc.Stop()
-			uninstallApp(server, installed.InstallID)
-			rollback(out)
-			return nil, fmt.Errorf("set dep %q sidecar url: %w", name, err)
+
+		bindings := map[string]any{}
+		for _, ref := range refs {
+			if ref.Optional {
+				target, selected := selections[ref.Name]
+				if !selected || !strings.EqualFold(strings.TrimSpace(target), "app") {
+					continue
+				}
+			}
+			key := strings.ToLower(strings.TrimSpace(ref.Name))
+			if existing, ok := installedByName[key]; ok {
+				bindings[ref.Name] = existing.installID
+				continue
+			}
+			if visiting[key] {
+				return nil, fmt.Errorf("app dependency cycle at %q", ref.Name)
+			}
+			visiting[key] = true
+
+			parent := filepath.Dir(ownerDir)
+			if abs, absErr := filepath.Abs(ownerDir); absErr == nil {
+				parent = filepath.Dir(abs)
+			}
+			depDir := filepath.Join(parent, ref.Name)
+			manifestPath := filepath.Join(depDir, "apteva.yaml")
+			depYAML, readErr := os.ReadFile(manifestPath)
+			if readErr != nil {
+				delete(visiting, key)
+				return nil, fmt.Errorf("dep %q manifest not found at %s — sibling-dir convention expects it next to the app under test", ref.Name, manifestPath)
+			}
+			depBindings, depErr := installManifestDeps(depDir, depYAML, nil)
+			if depErr != nil {
+				delete(visiting, key)
+				return nil, fmt.Errorf("resolve dep %q: %w", ref.Name, depErr)
+			}
+			installed, installErr := installApp(server, depYAML, depDir, server.projectID, nil, depBindings)
+			if installErr != nil {
+				delete(visiting, key)
+				return nil, fmt.Errorf("install dep %q: %w", ref.Name, installErr)
+			}
+			sc, spawnErr := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, nil, "http://"+server.addr)
+			if spawnErr != nil {
+				uninstallApp(server, installed.InstallID)
+				delete(visiting, key)
+				return nil, fmt.Errorf("spawn dep %q: %w", ref.Name, spawnErr)
+			}
+			if bindErr := setSidecarURL(server, installed.InstallID, sc.URL); bindErr != nil {
+				sc.Stop()
+				uninstallApp(server, installed.InstallID)
+				delete(visiting, key)
+				return nil, fmt.Errorf("set dep %q sidecar url: %w", ref.Name, bindErr)
+			}
+			bundle := depBundle{name: ref.Name, installID: installed.InstallID, sidecar: sc}
+			out = append(out, bundle)
+			installedByName[key] = bundle
+			bindings[ref.Name] = installed.InstallID
+			delete(visiting, key)
 		}
-		out = append(out, depBundle{name: name, installID: installed.InstallID, sidecar: sc})
+		return bindings, nil
 	}
-	return out, nil
+
+	bindings, err := installManifestDeps(appDir, manifestYAML, requested)
+	if err != nil {
+		rollback(out)
+		return nil, nil, err
+	}
+	return out, bindings, nil
 }
 
 func scenarioAppMCPConfig(name, url string, spawnable bool) map[string]any {
@@ -2804,52 +2875,27 @@ func callPeerMCPRequest(sidecarURL, tool string, args map[string]any, headers ht
 	return nil
 }
 
-// parseRequiresApps grabs the names listed under `requires.apps:`
-// in a manifest. Tiny line-scan rather than a full YAML parse —
-// the shape is stable and any drift will show up loudly in
-// install failures.
-func parseRequiresApps(manifestYAML []byte) []string {
-	lines := strings.Split(string(manifestYAML), "\n")
-	inRequires, inApps := false, false
-	var names []string
-	for _, raw := range lines {
-		line := strings.TrimRight(raw, " \t")
-		trimmed := strings.TrimSpace(line)
-		if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
-			inRequires = trimmed == "requires:"
-			inApps = false
-			continue
-		}
-		if !inRequires {
-			continue
-		}
-		// Two-space-indented child of requires:
-		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") {
-			inApps = trimmed == "apps:"
-			continue
-		}
-		if !inApps {
-			continue
-		}
-		if !strings.HasPrefix(trimmed, "-") {
-			continue
-		}
-		item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
-		if strings.HasPrefix(item, "name:") {
-			names = append(names, strings.TrimSpace(strings.TrimPrefix(item, "name:")))
-			continue
-		}
-		// Inline `{ name: foo, version: "..." }` form — pick out name.
-		if i := strings.Index(item, "name:"); i >= 0 {
-			rest := item[i+len("name:"):]
-			rest = strings.Trim(strings.TrimSpace(rest), `"',}`)
-			if comma := strings.IndexAny(rest, ",}"); comma >= 0 {
-				rest = rest[:comma]
-			}
-			names = append(names, strings.TrimSpace(rest))
+type requiredAppRef struct {
+	Name     string `yaml:"name"`
+	Optional bool   `yaml:"optional"`
+}
+
+func parseRequiredAppRefs(manifestYAML []byte) ([]requiredAppRef, error) {
+	var manifest struct {
+		Requires struct {
+			Apps []requiredAppRef `yaml:"apps"`
+		} `yaml:"requires"`
+	}
+	if err := yaml.Unmarshal(manifestYAML, &manifest); err != nil {
+		return nil, fmt.Errorf("parse requires.apps: %w", err)
+	}
+	for i := range manifest.Requires.Apps {
+		manifest.Requires.Apps[i].Name = strings.TrimSpace(manifest.Requires.Apps[i].Name)
+		if manifest.Requires.Apps[i].Name == "" {
+			return nil, fmt.Errorf("requires.apps entry %d has no name", i+1)
 		}
 	}
-	return names
+	return manifest.Requires.Apps, nil
 }
 
 type installResp struct {
@@ -2966,7 +3012,7 @@ func (relay *scopedAppMCPRelay) Close() {
 	_ = relay.listener.Close()
 }
 
-func installApp(server *testServer, manifestYAML []byte, appDir, projectID string, config map[string]string) (*installResp, error) {
+func installApp(server *testServer, manifestYAML []byte, appDir, projectID string, config map[string]string, bindings map[string]any) (*installResp, error) {
 	// Scenario installs use inline manifest YAML rather than a public manifest
 	// URL. Resolve repo-local skill bodies before posting so the normal app
 	// install and agent-binding path can register and synchronize the exact skill
@@ -2990,6 +3036,9 @@ func installApp(server *testServer, manifestYAML []byte, appDir, projectID strin
 		"manifest_yaml": string(installManifest),
 		"project_id":    projectID,
 		"config":        config,
+	}
+	if len(bindings) > 0 {
+		body["bindings"] = bindings
 	}
 	out := &installResp{}
 	if err := postJSON("http://"+server.addr+"/api/apps/install", server.apiKey, body, out); err != nil {
