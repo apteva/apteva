@@ -16,6 +16,7 @@ package main
 //   apteva test ./scenarios/01-create.yaml  # one scenario
 //   apteva test ./scenarios/ --server addr  # use existing server (skips spawn)
 //   apteva test ./scenarios/ --provider opencode-go
+//   apteva test ./scenarios/ --provider openai-codex --model gpt-5.6-terra
 //   apteva test ./scenarios/ --max-budget-usd 0.50
 //
 // The scenario format is intentionally tiny so non-engineers can author:
@@ -71,6 +72,7 @@ type testOpts struct {
 	serverAPIKey string // existing-server owner auth; never logged
 	projectID    string
 	provider     string
+	model        string
 	appDir       string
 	timeout      time.Duration
 	maxBudgetUSD float64
@@ -215,14 +217,15 @@ type AssertClause struct {
 }
 
 type ToolCallAssertion struct {
-	Tool     string         `yaml:"tool"`
-	Exact    bool           `yaml:"exact"`
-	ThreadID string         `yaml:"thread_id"`
-	Args     map[string]any `yaml:"args"`
-	Count    *int           `yaml:"count"`
-	MinCount int            `yaml:"min_count"`
-	MaxCount int            `yaml:"max_count"`
-	Before   string         `yaml:"before"`
+	Tool       string         `yaml:"tool"`
+	Exact      bool           `yaml:"exact"`
+	ThreadID   string         `yaml:"thread_id"`
+	Args       map[string]any `yaml:"args"`
+	ArgsAbsent []string       `yaml:"args_absent"`
+	Count      *int           `yaml:"count"`
+	MinCount   int            `yaml:"min_count"`
+	MaxCount   int            `yaml:"max_count"`
+	Before     string         `yaml:"before"`
 }
 
 type Budget struct {
@@ -296,6 +299,7 @@ func cmdTest(args []string) int {
 	serverAddr := fs.String("server", "", "use an existing apteva-server at this address (default: spawn a clean one in a temp dir)")
 	projectID := fs.String("project-id", "", "existing project to use with --server (default: create and remove an isolated test project)")
 	provider := fs.String("provider", "", "LLM provider name (e.g. opencode-go); default: whatever the spawned server picks up from env")
+	model := fs.String("model", "", "exact LLM model id for all tiers in this Tier 3 run (requires --provider)")
 	appDir := fs.String("app-dir", ".", "path to the app under test (used when scenarios omit setup.app.path)")
 	timeoutFlag := fs.Duration("timeout", 90*time.Second, "default per-scenario timeout")
 	maxBudgetUSD := fs.Float64("max-budget-usd", 0, "abort when cumulative cost exceeds this (0 = unbounded)")
@@ -321,6 +325,10 @@ func cmdTest(args []string) int {
 		fmt.Fprintln(os.Stderr, "test profile: --profile requires Tier 2")
 		return 2
 	}
+	if strings.TrimSpace(*model) != "" && strings.TrimSpace(*provider) == "" {
+		fmt.Fprintln(os.Stderr, "test model: --model requires --provider")
+		return 2
+	}
 
 	opts := testOpts{
 		ctx:          ctx,
@@ -329,6 +337,7 @@ func cmdTest(args []string) int {
 		serverAPIKey: resolveTestServerAPIKey(*serverAddr),
 		projectID:    *projectID,
 		provider:     *provider,
+		model:        *model,
 		appDir:       *appDir,
 		timeout:      *timeoutFlag,
 		maxBudgetUSD: *maxBudgetUSD,
@@ -1440,7 +1449,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		mode = "autonomous"
 	}
 	includeChannels := interaction == "conversation"
-	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, mcpServers, []int64{installed.InstallID}, includeChannels, initialPace)
+	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, opts.model, mcpServers, []int64{installed.InstallID}, includeChannels, initialPace)
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
@@ -1460,7 +1469,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// /api/instances only carries server-side flags (include_apteva_
 	// server, etc.), not the agent's tool list. The on-disk
 	// config.json is the single source of truth core consumes.
-	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, opts.provider, mcpServers, includeChannels, initialPace); err != nil {
+	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, opts.provider, opts.model, mcpServers, includeChannels, initialPace); err != nil {
 		res.Error = fmt.Sprintf("write instance config.json: %v", err)
 		return res
 	}
@@ -2256,7 +2265,7 @@ func assertToolCallMatch(want *ToolCallAssertion, negate bool, res *ScenarioResu
 	for i, call := range res.ToolCalls {
 		if toolCallNameMatches(call.Name, want.Tool, want.Exact) &&
 			(strings.TrimSpace(want.ThreadID) == "" || call.ThreadID == want.ThreadID) &&
-			toolCallArgsMatch(call, want.Args) {
+			toolCallArgsMatch(call, want.Args, want.ArgsAbsent) {
 			matches = append(matches, i)
 		}
 	}
@@ -2335,8 +2344,8 @@ func toolArgsMatch(actual map[string]string, wants map[string]any) bool {
 	return true
 }
 
-func toolCallArgsMatch(call ToolCallResult, wants map[string]any) bool {
-	if toolArgsMatch(call.Args, wants) {
+func toolCallArgsMatch(call ToolCallResult, wants map[string]any, absent []string) bool {
+	if toolArgsMatch(call.Args, wants) && toolArgsAbsent(call.Args, absent) {
 		return true
 	}
 	action, ok := compatibilityToolAction(call.Name)
@@ -2348,7 +2357,16 @@ func toolCallArgsMatch(call ToolCallResult, wants map[string]any) bool {
 		effective[key] = value
 	}
 	effective["action"] = action
-	return toolArgsMatch(effective, wants)
+	return toolArgsMatch(effective, wants) && toolArgsAbsent(effective, absent)
+}
+
+func toolArgsAbsent(actual map[string]string, absent []string) bool {
+	for _, key := range absent {
+		if _, ok := actual[strings.TrimSpace(key)]; ok {
+			return false
+		}
+	}
+	return true
 }
 
 func compatibilityToolAction(name string) (string, bool) {
@@ -3296,7 +3314,7 @@ func postScenarioConversation(server *testServer, conversationID, prompt string)
 	return nil
 }
 
-func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool, initialPace map[string]any) (*instanceResp, error) {
+func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider, model string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool, initialPace map[string]any) (*instanceResp, error) {
 	// config_json carries the agent's MCP servers + any other config
 	// the core needs at boot. The platform writes this to the
 	// instance dir's config.json; the core picks it up on start.
@@ -3307,6 +3325,7 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 	if strings.TrimSpace(provider) != "" {
 		config["default_provider"] = normalizeProviderName(provider)
 	}
+	applyTestModelOverride(config, provider, model)
 	if initialPace != nil {
 		config["main_pace"] = initialPace
 	}
@@ -3343,7 +3362,7 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 // Existing-server runs normally leave operator-owned disk state untouched;
 // when an initial pace is explicitly requested, they persist only that field
 // through the stopped agent's authenticated config endpoint.
-func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode, provider string, mcpServers []map[string]any, includeChannels bool, initialPace map[string]any) error {
+func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode, provider, model string, mcpServers []map[string]any, includeChannels bool, initialPace map[string]any) error {
 	if server.dataDir == "" {
 		if initialPace == nil {
 			return nil
@@ -3365,6 +3384,7 @@ func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mo
 	if strings.TrimSpace(provider) != "" {
 		cfg["default_provider"] = normalizeProviderName(provider)
 	}
+	applyTestModelOverride(cfg, provider, model)
 	if initialPace != nil {
 		cfg["main_pace"] = initialPace
 	}
@@ -3373,6 +3393,18 @@ func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mo
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "config.json"), body, 0644)
+}
+
+func applyTestModelOverride(config map[string]any, provider, model string) {
+	provider = normalizeProviderName(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return
+	}
+	config["providers"] = []map[string]any{{
+		"name": provider, "default": true,
+		"models": map[string]string{"large": model, "medium": model, "small": model},
+	}}
 }
 
 // manifestNameFromYAML is a tiny YAML field grab — we already have

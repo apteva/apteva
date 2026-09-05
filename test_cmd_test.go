@@ -41,6 +41,22 @@ func TestParseTestTiers(t *testing.T) {
 	}
 }
 
+func TestApplyTestModelOverridePinsEveryTier(t *testing.T) {
+	config := map[string]any{}
+	applyTestModelOverride(config, "openai_codex", "gpt-5.6-terra")
+	providers, ok := config["providers"].([]map[string]any)
+	if !ok || len(providers) != 1 {
+		t.Fatalf("providers=%#v", config["providers"])
+	}
+	if providers[0]["name"] != "openai-codex" || providers[0]["default"] != true {
+		t.Fatalf("provider override=%#v", providers[0])
+	}
+	models, ok := providers[0]["models"].(map[string]string)
+	if !ok || models["large"] != "gpt-5.6-terra" || models["medium"] != "gpt-5.6-terra" || models["small"] != "gpt-5.6-terra" {
+		t.Fatalf("models=%#v", providers[0]["models"])
+	}
+}
+
 func TestResolveNativeAppDirAndCommands(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"apteva.yaml", "go.mod"} {
@@ -250,6 +266,25 @@ func TestToolCallAssertionExactNameDoesNotMatchSuffix(t *testing.T) {
 	assertion.Exact = false
 	if got := assertToolCallMatch(assertion, true, result); got.OK {
 		t.Fatalf("suffix-compatible assertion did not match channels_send: %+v", got)
+	}
+}
+
+func TestToolCallAssertionRequiresArgumentsToBeAbsent(t *testing.T) {
+	result := &ScenarioResult{ToolCalls: []ToolCallResult{{
+		Name: "computer_browser_session",
+		Args: map[string]string{"action": "open", "context_name": "Saved Login"},
+	}}}
+	minimal := &ToolCallAssertion{
+		Tool:       "browser_session",
+		Args:       map[string]any{"action": "open", "context_name": "Saved Login"},
+		ArgsAbsent: []string{"timeout", "environment", "viewport", "proxy_mode"},
+	}
+	if got := assertToolCallMatch(minimal, false, result); !got.OK {
+		t.Fatalf("minimal call did not match: %+v", got)
+	}
+	result.ToolCalls[0].Args["timeout"] = "60"
+	if got := assertToolCallMatch(minimal, false, result); got.OK {
+		t.Fatalf("call containing forbidden timeout matched: %+v", got)
 	}
 }
 
@@ -994,7 +1029,7 @@ func TestCreateInstanceKeepsPlatformGatewayDisabled(t *testing.T) {
 	defer httpServer.Close()
 
 	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
-	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", nil, nil, false, nil)
+	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", "", nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
@@ -1021,7 +1056,7 @@ func TestCreateConversationScenarioEnablesOnlyChannelsGateway(t *testing.T) {
 	defer httpServer.Close()
 
 	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
-	instance, err := tcCreateInstance(server, "project-1", "chat-test", "directive", "autonomous", "openai-codex", nil, []int64{91}, true, nil)
+	instance, err := tcCreateInstance(server, "project-1", "chat-test", "directive", "autonomous", "openai-codex", "", nil, []int64{91}, true, nil)
 	if err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
