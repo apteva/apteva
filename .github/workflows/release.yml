@@ -220,7 +220,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           TARNAME="apteva-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           cd dist
-          tar -czf "../${TARNAME}" .
+          COPYFILE_DISABLE=1 tar -czf "../${TARNAME}" apteva apteva-server apteva-core apteva-mcp-runner
           cd ..
           ls -lh "${TARNAME}"
 
