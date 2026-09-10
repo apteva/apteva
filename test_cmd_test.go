@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1062,5 +1064,37 @@ func TestCreateConversationScenarioEnablesOnlyChannelsGateway(t *testing.T) {
 	}
 	if instance.ID != 43 {
 		t.Fatalf("instance = %+v", instance)
+	}
+}
+
+func TestPostScenarioEvent(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/instances/42/event" {
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+				if r.Header.Get("Authorization") != "Bearer owner-key" || r.Header.Get("Content-Type") != "application/json" {
+					t.Error("missing authenticated JSON headers")
+				}
+				var payload map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+				}
+				if !reflect.DeepEqual(payload, map[string]string{"message": "[admin] Wait for one hour"}) {
+					t.Errorf("payload = %v", payload)
+				}
+				w.WriteHeader(status)
+			}))
+			defer httpServer.Close()
+			server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
+			err := postScenarioEvent(context.Background(), server, 42, "[admin] Wait for one hour")
+			if status == http.StatusOK && err != nil {
+				t.Fatal(err)
+			}
+			if status != http.StatusOK && (err == nil || !strings.Contains(err.Error(), "HTTP 503")) {
+				t.Fatalf("expected HTTP failure, got %v", err)
+			}
+		})
 	}
 }

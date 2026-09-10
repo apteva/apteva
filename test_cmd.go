@@ -91,7 +91,7 @@ type Scenario struct {
 	RequiredPassRate float64        `yaml:"required_pass_rate"` // default 1.0
 	Setup            ScenarioSetup  `yaml:"setup"`
 	Directive        string         `yaml:"directive"`
-	Prompt           string         `yaml:"prompt"` // user input when setup.interaction=conversation
+	Prompt           string         `yaml:"prompt"` // user input for event, thread, or conversation interactions
 	Assert           []AssertClause `yaml:"assert"`
 	OutcomeAssert    []AssertClause `yaml:"outcome_assert"`
 	TrajectoryAssert []AssertClause `yaml:"trajectory_assert"`
@@ -107,7 +107,7 @@ type Scenario struct {
 type ScenarioSetup struct {
 	App             AppSetup            `yaml:"app"`
 	Mode            string              `yaml:"mode"`        // autonomous | cautious | learn
-	Interaction     string              `yaml:"interaction"` // autonomous (default) | thread | conversation (legacy)
+	Interaction     string              `yaml:"interaction"` // autonomous (default) | event (main) | thread | conversation (legacy)
 	Thread          *ScenarioThreadSpec `yaml:"thread"`
 	Config          map[string]string   `yaml:"config"`
 	Fixtures        []FixtureSpec       `yaml:"fixtures"` // pre-uploaded files / setup data
@@ -1347,7 +1347,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		}
 		defer uninstallApp(server, installed.InstallID)
 
-		sidecar, spawnErr := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config, s.Setup.App.Env, "http://"+server.addr)
+		sidecar, spawnErr := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config, s.Setup.App.Env, "http://"+server.addr, installed.OutboundToken)
 		if spawnErr != nil {
 			res.Error = fmt.Sprintf("spawn local sidecar: %v", spawnErr)
 			return res
@@ -1425,11 +1425,11 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if interaction == "" {
 		interaction = "autonomous"
 	}
-	if interaction != "autonomous" && interaction != "thread" && interaction != "conversation" {
+	if interaction != "autonomous" && interaction != "thread" && interaction != "conversation" && interaction != "event" {
 		res.Error = fmt.Sprintf("unsupported setup.interaction %q", s.Setup.Interaction)
 		return res
 	}
-	if (interaction == "thread" || interaction == "conversation") && strings.TrimSpace(s.Prompt) == "" {
+	if (interaction == "thread" || interaction == "conversation" || interaction == "event") && strings.TrimSpace(s.Prompt) == "" {
 		res.Error = fmt.Sprintf("setup.interaction=%s requires prompt", interaction)
 		return res
 	}
@@ -1514,7 +1514,12 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	telemetry, errCh, _ := streamTelemetry(ctx, server, inst.ID)
 
 	conversationID := ""
-	if interaction == "thread" {
+	if interaction == "event" {
+		if err := postScenarioEvent(ctx, server, inst.ID, s.Prompt); err != nil {
+			res.Error = fmt.Sprintf("post scenario event: %v", err)
+			return res
+		}
+	} else if interaction == "thread" {
 		threadID := strings.TrimSpace(s.Setup.Thread.ID)
 		if threadID == "" {
 			threadID = "scenario-request"
@@ -1656,12 +1661,13 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		res.Error = "scenario cancelled"
 	}
 
-	// Stop the agent so the next scenario starts clean.
-	_ = stopInstanceAPI(server, inst.ID)
-
-	// Run asserts.
+	// Check live runtime state before stopping: shutdown replaces /status with
+	// stopped defaults and would invalidate passing pace/wake assertions.
 	res.ElapsedMs = time.Since(start).Milliseconds()
 	res.Asserts = runAsserts(server, installed.InstallID, sidecarURL, conversationID, assertions, &res)
+
+	// Stop the agent so the next scenario starts clean.
+	_ = stopInstanceAPI(server, inst.ID)
 
 	// Budget check.
 	res.BudgetOK = checkBudget(s.Budget, res.Tokens, res.CostUSD)
@@ -2627,7 +2633,7 @@ func installDeps(server *testServer, appDir string, manifestYAML []byte, request
 				delete(visiting, key)
 				return nil, fmt.Errorf("install dep %q: %w", ref.Name, installErr)
 			}
-			sc, spawnErr := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, nil, "http://"+server.addr)
+			sc, spawnErr := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, nil, "http://"+server.addr, installed.OutboundToken)
 			if spawnErr != nil {
 				uninstallApp(server, installed.InstallID)
 				delete(visiting, key)
@@ -2917,8 +2923,9 @@ func parseRequiredAppRefs(manifestYAML []byte) ([]requiredAppRef, error) {
 }
 
 type installResp struct {
-	InstallID int64 `json:"install_id"`
-	AppID     int64 `json:"app_id"`
+	InstallID     int64  `json:"install_id"`
+	AppID         int64  `json:"app_id"`
+	OutboundToken string `json:"-"`
 }
 
 func findExistingAppInstall(server *testServer, appName string) (*installResp, error) {
@@ -3062,6 +3069,13 @@ func installApp(server *testServer, manifestYAML []byte, appDir, projectID strin
 	if err := postJSON("http://"+server.addr+"/api/apps/install", server.apiKey, body, out); err != nil {
 		return nil, err
 	}
+	if server.dataDir != "" {
+		out.OutboundToken, err = provisionScenarioInstallToken(server.dataDir, out.InstallID)
+		if err != nil {
+			uninstallApp(server, out.InstallID)
+			return nil, fmt.Errorf("provision test app credential: %w", err)
+		}
+	}
 	return out, nil
 }
 
@@ -3177,6 +3191,33 @@ type scenarioConversation struct {
 	ID       string
 	ThreadID string
 	stream   io.ReadCloser
+}
+
+// postScenarioEvent sends a direct console event to the main agent, as the
+// dashboard does. Use initial_wake in event scenarios to avoid a startup turn
+// racing the event under test.
+func postScenarioEvent(ctx context.Context, server *testServer, agentID int64, prompt string) error {
+	body, err := json.Marshal(map[string]string{"message": prompt})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s/api/instances/%d/event", server.addr, agentID), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("post event returned HTTP %d: %s", resp.StatusCode, tcTruncate(string(raw), 300))
+	}
+	return nil
 }
 
 func startScenarioThread(server *testServer, agentID int64, spec ScenarioThreadSpec, prompt string) error {
@@ -3582,7 +3623,7 @@ func (s *localSidecar) Stop() {
 	}
 }
 
-func spawnLocalSidecar(appDir string, installID int64, projectID string, config, extraEnv map[string]string, gatewayURL string) (*localSidecar, error) {
+func spawnLocalSidecar(appDir string, installID int64, projectID string, config, extraEnv map[string]string, gatewayURL, outboundToken string) (*localSidecar, error) {
 	abs, err := filepath.Abs(appDir)
 	if err != nil {
 		return nil, err
@@ -3603,22 +3644,16 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config,
 	dataDir, _ := os.MkdirTemp("", "apteva-scenario-*")
 	cmd := exec.Command(binPath)
 	cmd.Dir = abs
-	// Two tokens, two roles:
-	//
-	//   APTEVA_APP_TOKEN — what the sidecar's withTokenAuth checks
-	//   on inbound requests. Empty in tests because the agent calls
-	//   /mcp directly (no auth header); empty triggers the SDK's
-	//   dev-mode pass-through.
-	//
-	//   APTEVA_OUTBOUND_TOKEN — what the sidecar attaches as Bearer
-	//   on calls it makes to peers via the platform proxy. We use
-	//   the install-token format ("dev-<id>"); the platform's
-	//   authMiddleware accepts those for /api/apps/* and the proxy
-	//   then swaps to the destination install's token.
+	// Inbound MCP stays in SDK dev mode. Outbound platform callbacks use a
+	// random install credential provisioned only in our disposable server DB.
+	// Keep legacy external-server behavior for older development servers.
+	if outboundToken == "" {
+		outboundToken = fmt.Sprintf("dev-%d", installID)
+	}
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("APTEVA_APP_PORT=%d", port),
 		"APTEVA_APP_TOKEN=",
-		"APTEVA_OUTBOUND_TOKEN="+fmt.Sprintf("dev-%d", installID),
+		"APTEVA_OUTBOUND_TOKEN="+outboundToken,
 		"APTEVA_INSTALL_ID="+fmt.Sprintf("%d", installID),
 		"APTEVA_PROJECT_ID="+projectID,
 		"APTEVA_APP_CONFIG="+string(cfgJSON),
