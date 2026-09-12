@@ -43,7 +43,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -919,7 +918,7 @@ func bootstrapServer(opts testOpts) (*testServer, error) {
 			baseEnv = append(baseEnv, k+"="+v)
 		}
 	}
-	if normalizeProviderName(opts.provider) != "openai-codex" && !envHasProviderKey(baseEnv) {
+	if !envHasProviderKey(baseEnv) {
 		fmt.Fprintln(os.Stderr,
 			"⚠ no LLM provider key in env or ~/.apteva/test.env — agent won't iterate.\n"+
 				"  Set one of OPENCODE_GO_API_KEY / FIREWORKS_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY.")
@@ -1032,153 +1031,6 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 		return fmt.Errorf("create %s runtime connection: HTTP %d: %s", provider, resp.StatusCode, tcTruncate(string(raw), 200))
 	}
 	return nil
-}
-
-type spawnedTestProvider struct {
-	Key             string
-	Slug            string
-	Name            string
-	AuthType        string
-	CredentialEnv   string
-	CredentialField string
-}
-
-var spawnedTestProviders = []spawnedTestProvider{
-	{Key: "opencode-go", Slug: "opencode-go", Name: "OpenCode Go", AuthType: "api_key", CredentialEnv: "OPENCODE_GO_API_KEY", CredentialField: "api_key"},
-	{Key: "fireworks", Slug: "fireworks", Name: "Fireworks", AuthType: "bearer", CredentialEnv: "FIREWORKS_API_KEY", CredentialField: "token"},
-	{Key: "anthropic", Slug: "anthropic-api", Name: "Anthropic", AuthType: "api_key", CredentialEnv: "ANTHROPIC_API_KEY", CredentialField: "api_key"},
-	{Key: "google", Slug: "gemini", Name: "Google", AuthType: "api_key", CredentialEnv: "GOOGLE_API_KEY", CredentialField: "api_key"},
-	{Key: "openai", Slug: "openai-api", Name: "OpenAI", AuthType: "bearer", CredentialEnv: "OPENAI_API_KEY", CredentialField: "token"},
-	{Key: "nvidia", Slug: "nvidia-nim", Name: "NVIDIA", AuthType: "bearer", CredentialEnv: "NVIDIA_API_KEY", CredentialField: "token"},
-	{Key: "ollama", Slug: "ollama", Name: "Ollama", AuthType: "none", CredentialEnv: "OLLAMA_HOST", CredentialField: "host"},
-}
-
-func testEnvMap(env []string) map[string]string {
-	out := map[string]string{}
-	for _, entry := range env {
-		if index := strings.IndexByte(entry, '='); index > 0 {
-			out[entry[:index]] = entry[index+1:]
-		}
-	}
-	return out
-}
-
-func resolveSpawnedTestProvider(requested string, env map[string]string) (spawnedTestProvider, string, error) {
-	want := normalizeProviderName(requested)
-	for _, provider := range spawnedTestProviders {
-		credential := strings.TrimSpace(env[provider.CredentialEnv])
-		if want != "" && provider.Key != want {
-			continue
-		}
-		if credential != "" {
-			return provider, credential, nil
-		}
-	}
-	if want == "openai-codex" {
-		return spawnedTestProvider{}, "", errors.New("openai-codex requires an existing server connection; use --server or select another provider")
-	}
-	if want != "" {
-		return spawnedTestProvider{}, "", fmt.Errorf("provider %q has no credential in the environment or ~/.apteva/test.env", want)
-	}
-	return spawnedTestProvider{}, "", errors.New("no LLM provider credential in the environment or ~/.apteva/test.env")
-}
-
-func configureSpawnedTestProvider(server *testServer, requested string, env []string) error {
-	if normalizeProviderName(requested) == "openai-codex" {
-		return configureSpawnedCodexProvider(server)
-	}
-	provider, credential, err := resolveSpawnedTestProvider(requested, testEnvMap(env))
-	if err != nil {
-		return err
-	}
-	body := map[string]any{
-		"source": "local", "app_slug": provider.Slug, "name": "Tier 3 " + provider.Name,
-		"auth_type": provider.AuthType, "credentials": map[string]string{provider.CredentialField: credential},
-		"project_id": "", "auto_mcp": false,
-	}
-	var created struct {
-		ID         int64 `json:"id"`
-		Connection struct {
-			ID int64 `json:"id"`
-		} `json:"connection"`
-	}
-	base := "http://" + server.addr + "/api/connections"
-	if err := postJSON(base, server.apiKey, body, &created); err != nil {
-		return err
-	}
-	connectionID := created.ID
-	if connectionID == 0 {
-		connectionID = created.Connection.ID
-	}
-	if connectionID == 0 {
-		return errors.New("provider connection returned no id")
-	}
-	if provider.Key == "ollama" {
-		model := strings.TrimSpace(testEnvMap(env)["OLLAMA_MODEL"])
-		if model == "" {
-			return errors.New("OLLAMA_MODEL is required with OLLAMA_HOST")
-		}
-		if err := requestJSON(http.MethodPatch, fmt.Sprintf("%s/%d/runtime-config", base, connectionID),
-			server.apiKey, map[string]string{"model": model}, nil); err != nil {
-			return err
-		}
-	}
-	return requestJSON(http.MethodPatch, fmt.Sprintf("%s/%d/primary", base, connectionID), server.apiKey, nil, nil)
-}
-
-func configureSpawnedCodexProvider(server *testServer) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	raw, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if err != nil {
-		return fmt.Errorf("read Codex login: %w", err)
-	}
-	var auth struct {
-		AuthMode string            `json:"auth_mode"`
-		Tokens   map[string]string `json:"tokens"`
-	}
-	if err := json.Unmarshal(raw, &auth); err != nil {
-		return fmt.Errorf("decode Codex login: %w", err)
-	}
-	accessToken := strings.TrimSpace(auth.Tokens["access_token"])
-	accountID := strings.TrimSpace(auth.Tokens["account_id"])
-	if accessToken == "" || accountID == "" {
-		return errors.New("Codex login is missing access_token or account_id; sign in to Codex first")
-	}
-	credentials := map[string]string{
-		"access_token": accessToken, "token": accessToken, "bearer_token": accessToken,
-		"account_id": accountID, "refresh_token": strings.TrimSpace(auth.Tokens["refresh_token"]),
-		"id_token":      strings.TrimSpace(auth.Tokens["id_token"]),
-		"auth_provider": "openai-codex", "auth_type": "oauth_device_code",
-	}
-	body := map[string]any{
-		"source": "local", "app_slug": "openai-codex", "name": "Tier 3 OpenAI Codex",
-		// Supplying a non-interactive auth type imports the already-authorized
-		// local Codex session instead of starting a second device-code flow.
-		"auth_type": "bearer", "credentials": credentials,
-		"project_id": "", "auto_mcp": false,
-	}
-	var created struct {
-		ID int64 `json:"id"`
-	}
-	base := "http://" + server.addr + "/api/connections"
-	if err := postJSON(base, server.apiKey, body, &created); err != nil {
-		return err
-	}
-	if created.ID == 0 {
-		return errors.New("Codex provider connection returned no id")
-	}
-	model := strings.TrimSpace(os.Getenv("APTEVA_TEST_CODEX_MODEL"))
-	if model == "" {
-		model = "gpt-5.6-terra"
-	}
-	models := map[string]string{"model_large": model, "model_medium": model, "model_small": model}
-	if err := requestJSON(http.MethodPatch, fmt.Sprintf("%s/%d/runtime-config", base, created.ID), server.apiKey, models, nil); err != nil {
-		return err
-	}
-	return requestJSON(http.MethodPatch, fmt.Sprintf("%s/%d/primary", base, created.ID), server.apiKey, nil, nil)
 }
 
 func createTestProject(server *testServer) (string, error) {

@@ -86,6 +86,8 @@ func (p *topologyPublicProxy) serveHTTP(w http.ResponseWriter, incoming *http.Re
 }
 
 type topologyAgentRuntime struct {
+	Directive string
+	Mode      string
 	Node      string
 	ID        string
 	ProjectID string
@@ -155,7 +157,7 @@ func mergedTopologyConfig(base, override map[string]string, values map[string]st
 	return out
 }
 
-func spawnTopologySidecar(binPath, appDir string, installID int64, projectID string, config, extraEnv map[string]string, gatewayURL string) (*localSidecar, error) {
+func spawnTopologySidecar(binPath, appDir string, installID int64, projectID string, config, extraEnv map[string]string, gatewayURL, outboundToken string) (*localSidecar, error) {
 	port, err := pickFreePort()
 	if err != nil {
 		return nil, err
@@ -170,7 +172,7 @@ func spawnTopologySidecar(binPath, appDir string, installID int64, projectID str
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("APTEVA_APP_PORT=%d", port),
 		"APTEVA_APP_TOKEN=",
-		"APTEVA_OUTBOUND_TOKEN="+fmt.Sprintf("dev-%d", installID),
+		"APTEVA_OUTBOUND_TOKEN="+outboundToken,
 		"APTEVA_INSTALL_ID="+fmt.Sprintf("%d", installID),
 		"APTEVA_PROJECT_ID="+projectID,
 		"APTEVA_APP_CONFIG="+string(cfgJSON),
@@ -220,8 +222,8 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		res.Error = "setup.topology does not support reuse_existing"
 		return res
 	}
-	if len(s.Setup.Fixtures) > 0 || len(s.Setup.FakeMCPs) > 0 || len(s.Setup.SeedMCPCalls) > 0 || s.Setup.InitialWake != nil {
-		res.Error = "setup.topology does not support fixtures, fake MCP servers, seed MCP calls, or initial_wake"
+	if len(s.Setup.Fixtures) > 0 || len(s.Setup.FakeMCPs) > 0 || len(s.Setup.SeedMCPCalls) > 0 || len(s.Setup.CleanupMCPCalls) > 0 || s.Setup.InitialWake != nil || s.Setup.Thread != nil || len(s.Setup.App.Bindings) > 0 {
+		res.Error = "setup.topology does not support fixtures, fake MCP servers, seed/cleanup MCP calls, initial_wake, thread config, or app bindings"
 		return res
 	}
 	if interaction := strings.TrimSpace(s.Setup.Interaction); interaction != "" && interaction != "autonomous" {
@@ -380,12 +382,12 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		if node.Setup.Global {
 			installProject = ""
 		}
-		node.Install, err = installApp(node.Server, manifestYAML, absAppDir, installProject, config)
+		node.Install, err = installApp(node.Server, manifestYAML, absAppDir, installProject, config, nil)
 		if err != nil {
 			res.Error = fmt.Sprintf("install app on %s: %v", node.Setup.ID, err)
 			return res
 		}
-		node.Sidecar, err = spawnTopologySidecar(binPath, absAppDir, node.Install.InstallID, installProject, config, s.Setup.App.Env, "http://"+node.Server.addr)
+		node.Sidecar, err = spawnTopologySidecar(binPath, absAppDir, node.Install.InstallID, installProject, config, s.Setup.App.Env, "http://"+node.Server.addr, node.Install.OutboundToken)
 		if err != nil {
 			res.Error = fmt.Sprintf("start app on %s: %v", node.Setup.ID, err)
 			return res
@@ -409,19 +411,17 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 			return nil, err
 		}
 		mcp := []map[string]any{scenarioAppMCPConfig(appName, relay.URL, s.Setup.App.Spawnable)}
-		// Topology sidecars are mounted manually and supplied as an explicit,
-		// project-scoped MCP relay. They are not install-picker inventory rows,
-		// so binding the install ID would make agent creation reject an otherwise
-		// valid relay before Core starts.
-		instance, err := tcCreateInstance(node.Server, projectID, name, directive, mode, opts.provider, mcp, nil, false, nil)
+		// Bind the tested install so every agent receives its app skills; the
+		// project-scoped relay preserves caller identity on MCP requests.
+		instance, err := tcCreateInstance(node.Server, projectID, name, directive, mode, opts.provider, opts.model, mcp, []int64{node.Install.InstallID}, false, nil)
 		if err != nil {
 			return nil, err
 		}
-		if err := writeInstanceDiskConfig(node.Server, instance.ID, directive, mode, mcp, false, nil); err != nil {
+		if err := writeInstanceDiskConfig(node.Server, instance.ID, directive, mode, opts.provider, opts.model, mcp, false, nil); err != nil {
 			tcDeleteInstance(node.Server, instance.ID)
 			return nil, err
 		}
-		agent := &topologyAgentRuntime{Node: node.Setup.ID, ID: id, ProjectID: projectID, Server: node.Server, Instance: instance}
+		agent := &topologyAgentRuntime{Directive: directive, Mode: mode, Node: node.Setup.ID, ID: id, ProjectID: projectID, Server: node.Server, Instance: instance}
 		runtime.Agents = append(runtime.Agents, agent)
 		return agent, nil
 	}
@@ -460,12 +460,21 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		res.Error = fmt.Sprintf("create primary agent: %v", err)
 		return res
 	}
-	values["PRIMARY_AGENT_ID"] = strconv.FormatInt(runtime.PrimaryAgent.Instance.ID, 10)
+	for key, value := range topologyAgentValues(runtime.Agents, runtime.PrimaryAgent) {
+		values[key] = value
+	}
 	expandScenarioRuntime(&s, values)
-	if err := writeInstanceDiskConfig(runtime.Primary.Server, runtime.PrimaryAgent.Instance.ID, s.Directive, mode,
-		[]map[string]any{scenarioAppMCPConfig(appName, runtime.Primary.Relays[runtime.Primary.DefaultProject].URL, s.Setup.App.Spawnable)}, false, nil); err != nil {
-		res.Error = fmt.Sprintf("write primary agent config: %v", err)
-		return res
+	for _, agent := range runtime.Agents {
+		directive := agent.Directive
+		for key, value := range values {
+			directive = strings.ReplaceAll(directive, "${"+key+"}", value)
+		}
+		node := runtime.Nodes[agent.Node]
+		mcp := []map[string]any{scenarioAppMCPConfig(appName, node.Relays[agent.ProjectID].URL, s.Setup.App.Spawnable)}
+		if err := writeInstanceDiskConfig(agent.Server, agent.Instance.ID, directive, agent.Mode, opts.provider, opts.model, mcp, false, nil); err != nil {
+			res.Error = fmt.Sprintf("write agent %s config: %v", agent.ID, err)
+			return res
+		}
 	}
 
 	// Responders must be listening before the primary begins discovery.
@@ -512,6 +521,16 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	stopReason := ""
+	var stableSince time.Time
+	var settleFor time.Duration
+	if s.SettleFor != "" {
+		parsed, err := time.ParseDuration(s.SettleFor)
+		if err != nil || parsed < 0 {
+			res.Error = "invalid settle_for"
+			return res
+		}
+		settleFor = parsed
+	}
 	for stopReason == "" {
 		select {
 		case <-ticker.C:
@@ -522,12 +541,22 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 				}
 				for _, event := range events {
 					event.Node, event.Agent = agent.Node, agent.ID
-					acceptTelemetry(&res, event, seen)
+					if acceptTelemetry(&res, event, seen) && event.Type == "tool.call" {
+						fmt.Fprintf(os.Stderr, "    · %s/%s %s\n", event.Node, event.Agent, stringMapValue(event.Data, "name"))
+					}
 				}
 			}
 			if probeTopologyAsserts(runtime, assertions, &res) {
-				stopReason = "asserts passed"
-			} else if scenarioIterationLimitReached(&res, maxIterations) {
+				if stableSince.IsZero() {
+					stableSince = time.Now()
+				}
+				if time.Since(stableSince) >= settleFor {
+					stopReason = "asserts passed"
+				}
+			} else {
+				stableSince = time.Time{}
+			}
+			if stopReason == "" && scenarioIterationLimitReached(&res, maxIterations) {
 				stopReason = fmt.Sprintf("max_iterations (%d) reached", maxIterations)
 			}
 		case <-ctx.Done():
@@ -538,7 +567,7 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 	res.ElapsedMs = time.Since(started).Milliseconds()
 	res.Asserts = runTopologyAsserts(runtime, assertions, &res)
 	res.BudgetOK = checkBudget(s.Budget, res.Tokens, res.CostUSD)
-	res.OK = res.Error == "" && res.BudgetOK
+	res.OK = stopReason == "asserts passed" && res.Error == "" && res.BudgetOK
 	for _, assertion := range res.Asserts {
 		if !assertion.OK {
 			res.OK = false
@@ -621,4 +650,14 @@ func runTopologyAsserts(runtime *topologyRuntime, clauses []AssertClause, result
 		out = append(out, assertions[0])
 	}
 	return out
+}
+
+// Generated IDs let role-binding scenarios refer to real instances without
+// guessing insertion order or requiring extra platform administration tools.
+func topologyAgentValues(agents []*topologyAgentRuntime, primary *topologyAgentRuntime) map[string]string {
+	values := map[string]string{"PRIMARY_AGENT_ID": strconv.FormatInt(primary.Instance.ID, 10)}
+	for _, agent := range agents {
+		values["AGENT_"+agent.ID+"_ID"] = strconv.FormatInt(agent.Instance.ID, 10)
+	}
+	return values
 }

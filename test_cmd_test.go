@@ -264,27 +264,6 @@ directive: Do the work.
 	}
 }
 
-func TestResolveSpawnedTestProviderSupportsLegacyAndTopologyRuns(t *testing.T) {
-	provider, credential, err := resolveSpawnedTestProvider("ollama", map[string]string{
-		"OLLAMA_HOST": "http://127.0.0.1:11434",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if provider.Slug != "ollama" || credential != "http://127.0.0.1:11434" {
-		t.Fatalf("provider=%+v credential=%q", provider, credential)
-	}
-	provider, _, err = resolveSpawnedTestProvider("", map[string]string{
-		"FIREWORKS_API_KEY": "secret",
-	})
-	if err != nil || provider.Key != "fireworks" {
-		t.Fatalf("auto provider=%+v err=%v", provider, err)
-	}
-	if _, _, err := resolveSpawnedTestProvider("openai-codex", nil); err == nil {
-		t.Fatal("expected existing-server guidance for openai-codex")
-	}
-}
-
 func TestToolAssertionsCanSelectTopologyAgentAndResult(t *testing.T) {
 	result := &ScenarioResult{ToolCalls: []ToolCallResult{
 		{Node: "main", Agent: "primary", Name: "a2a_agents_discover", Completed: true, OK: true, Result: `{"agents":[{"name":"Worker"}]}`},
@@ -1196,6 +1175,48 @@ func TestPostScenarioEvent(t *testing.T) {
 			}
 			if status != http.StatusOK && (err == nil || !strings.Contains(err.Error(), "HTTP 503")) {
 				t.Fatalf("expected HTTP failure, got %v", err)
+			}
+		})
+	}
+}
+
+func TestTopologyAgentIDsAreRealInstanceIDs(t *testing.T) {
+	primary := &topologyAgentRuntime{ID: "primary", Instance: &instanceResp{ID: 29}}
+	writer := &topologyAgentRuntime{ID: "writer", Instance: &instanceResp{ID: 11}}
+	reviewer := &topologyAgentRuntime{ID: "reviewer", Instance: &instanceResp{ID: 47}}
+	values := topologyAgentValues([]*topologyAgentRuntime{writer, reviewer, primary}, primary)
+	s := Scenario{Directive: "owner=${PRIMARY_AGENT_ID};writer=${AGENT_writer_ID};reviewer=${AGENT_reviewer_ID}"}
+	expandScenarioRuntime(&s, values)
+	if s.Directive != "owner=29;writer=11;reviewer=47" {
+		t.Fatal(s.Directive)
+	}
+}
+
+func TestTopologyTelemetryKeepsIdenticalToolIDsSeparate(t *testing.T) {
+	result := &ScenarioResult{}
+	seen := map[string]struct{}{}
+	for _, agent := range []string{"writer", "reviewer"} {
+		event := telemetryEvent{Node: "main", Agent: agent, Type: "tool.call", Data: map[string]any{"id": "same-id", "name": "processes_step_update"}}
+		if !acceptTelemetry(result, event, seen) || acceptTelemetry(result, event, seen) {
+			t.Fatal("telemetry was lost across agents or duplicated within one agent")
+		}
+	}
+	applyTelemetry(result, telemetryEvent{Node: "main", Agent: "writer", Type: "tool.result", Data: map[string]any{"id": "same-id", "name": "processes_step_update", "ok": true}})
+	if len(result.ToolCalls) != 2 || !result.ToolCalls[0].Completed || result.ToolCalls[1].Completed {
+		t.Fatalf("result attributed to wrong agent: %+v", result.ToolCalls)
+	}
+}
+
+func TestTopologyRejectsUnsupportedSetupBeforeStarting(t *testing.T) {
+	for name, setup := range map[string]ScenarioSetup{
+		"cleanup":  {CleanupMCPCalls: []SeedMCPCallSpec{{Tool: "cleanup"}}},
+		"thread":   {Thread: &ScenarioThreadSpec{ID: "worker"}},
+		"bindings": {App: AppSetup{Bindings: map[string]string{"tasks": "app"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := runTopologyScenario(nil, Scenario{Name: name, Setup: setup}, testOpts{})
+			if result.OK || !strings.Contains(result.Error, "does not support") {
+				t.Fatalf("unsupported setup accepted: %+v", result)
 			}
 		})
 	}
