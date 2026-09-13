@@ -96,6 +96,8 @@ type topologyAgentRuntime struct {
 }
 
 type topologyNodeRuntime struct {
+	Dependencies   []depBundle
+	DependencyMCP  []map[string]any
 	Setup          ScenarioNodeSetup
 	Server         *testServer
 	DefaultProject string
@@ -222,8 +224,8 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		res.Error = "setup.topology does not support reuse_existing"
 		return res
 	}
-	if len(s.Setup.Fixtures) > 0 || len(s.Setup.FakeMCPs) > 0 || len(s.Setup.SeedMCPCalls) > 0 || len(s.Setup.CleanupMCPCalls) > 0 || s.Setup.InitialWake != nil || s.Setup.Thread != nil || len(s.Setup.App.Bindings) > 0 {
-		res.Error = "setup.topology does not support fixtures, fake MCP servers, seed/cleanup MCP calls, initial_wake, thread config, or app bindings"
+	if len(s.Setup.Fixtures) > 0 || len(s.Setup.FakeMCPs) > 0 || len(s.Setup.SeedMCPCalls) > 0 || len(s.Setup.CleanupMCPCalls) > 0 || s.Setup.InitialWake != nil || s.Setup.Thread != nil {
+		res.Error = "setup.topology does not support fixtures, fake MCP servers, seed/cleanup MCP calls, initial_wake, thread config"
 		return res
 	}
 	if interaction := strings.TrimSpace(s.Setup.Interaction); interaction != "" && interaction != "autonomous" {
@@ -249,6 +251,12 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		return res
 	}
 	appName := manifestNameFromYAML(manifestYAML)
+	for _, node := range s.Setup.Topology.Nodes {
+		if err := validateTopologyDependencies(node.Global, manifestYAML, s.Setup.App.Bindings); err != nil {
+			res.Error = err.Error()
+			return res
+		}
+	}
 
 	buildDir, err := os.MkdirTemp("", "apteva-topology-build-*")
 	if err != nil {
@@ -286,6 +294,11 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 			}
 			if node.Install != nil {
 				uninstallApp(node.Server, node.Install.InstallID)
+			}
+			for i := len(node.Dependencies) - 1; i >= 0; i-- {
+				dep := node.Dependencies[i]
+				dep.sidecar.Stop()
+				uninstallApp(node.Server, dep.installID)
 			}
 			if node.Proxy != nil {
 				node.Proxy.Close()
@@ -382,7 +395,22 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		if node.Setup.Global {
 			installProject = ""
 		}
-		node.Install, err = installApp(node.Server, manifestYAML, absAppDir, installProject, config, nil)
+		var bindings map[string]any
+		node.Dependencies, bindings, err = installDeps(node.Server, absAppDir, manifestYAML, s.Setup.App.Bindings)
+		if err != nil {
+			res.Error = fmt.Sprintf("install node %s dependencies: %v", node.Setup.ID, err)
+			return res
+		}
+		for _, dep := range node.Dependencies {
+			relay, e := startScopedAppMCPRelayForProject(node.Server, dep.name, dep.installID, node.DefaultProject)
+			if e != nil {
+				res.Error = e.Error()
+				return res
+			}
+			node.Relays["dependency/"+dep.name] = relay
+			node.DependencyMCP = append(node.DependencyMCP, scenarioAppMCPConfig(dep.name, relay.URL, false))
+		}
+		node.Install, err = installApp(node.Server, manifestYAML, absAppDir, installProject, config, bindings)
 		if err != nil {
 			res.Error = fmt.Sprintf("install app on %s: %v", node.Setup.ID, err)
 			return res
@@ -410,7 +438,7 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		if err != nil {
 			return nil, err
 		}
-		mcp := []map[string]any{scenarioAppMCPConfig(appName, relay.URL, s.Setup.App.Spawnable)}
+		mcp := topologyMCP(node, appName, relay.URL, s.Setup.App.Spawnable)
 		// Bind the tested install so every agent receives its app skills; the
 		// project-scoped relay preserves caller identity on MCP requests.
 		instance, err := tcCreateInstance(node.Server, projectID, name, directive, mode, opts.provider, opts.model, mcp, []int64{node.Install.InstallID}, false, nil)
@@ -470,7 +498,7 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 			directive = strings.ReplaceAll(directive, "${"+key+"}", value)
 		}
 		node := runtime.Nodes[agent.Node]
-		mcp := []map[string]any{scenarioAppMCPConfig(appName, node.Relays[agent.ProjectID].URL, s.Setup.App.Spawnable)}
+		mcp := topologyMCP(node, appName, node.Relays[agent.ProjectID].URL, s.Setup.App.Spawnable)
 		if err := writeInstanceDiskConfig(agent.Server, agent.Instance.ID, directive, agent.Mode, opts.provider, opts.model, mcp, false, nil); err != nil {
 			res.Error = fmt.Sprintf("write agent %s config: %v", agent.ID, err)
 			return res
@@ -660,4 +688,28 @@ func topologyAgentValues(agents []*topologyAgentRuntime, primary *topologyAgentR
 		values["AGENT_"+agent.ID+"_ID"] = strconv.FormatInt(agent.Instance.ID, 10)
 	}
 	return values
+}
+
+func topologyMCP(node *topologyNodeRuntime, name, url string, spawnable bool) []map[string]any {
+	out := []map[string]any{scenarioAppMCPConfig(name, url, spawnable)}
+	return append(out, node.DependencyMCP...)
+}
+
+func validateTopologyDependencies(global bool, manifest []byte, bindings map[string]string) error {
+	if !global {
+		return nil
+	}
+	refs, err := parseRequiredAppRefs(manifest)
+	if err != nil {
+		return err
+	}
+	if len(bindings) > 0 {
+		return fmt.Errorf("topology app dependencies require project-scoped nodes")
+	}
+	for _, ref := range refs {
+		if !ref.Optional {
+			return fmt.Errorf("topology app dependencies require project-scoped nodes")
+		}
+	}
+	return nil
 }
