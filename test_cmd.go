@@ -105,6 +105,7 @@ type Scenario struct {
 }
 
 type ScenarioSetup struct {
+	Topology        ScenarioTopology    `yaml:"topology"`
 	App             AppSetup            `yaml:"app"`
 	Mode            string              `yaml:"mode"`        // autonomous | cautious | learn
 	Interaction     string              `yaml:"interaction"` // autonomous (default) | event (main) | thread | conversation (legacy)
@@ -128,6 +129,28 @@ type ScenarioThreadSpec struct {
 	Directive string   `yaml:"directive"`
 	Tools     []string `yaml:"tools"`
 	MCP       []string `yaml:"mcp"`
+}
+
+// ScenarioTopology is the opt-in multi-agent/multi-node form. Legacy
+// scenarios leave it empty and continue through the original runner path.
+type ScenarioTopology struct {
+	Nodes []ScenarioNodeSetup `yaml:"nodes"`
+}
+
+type ScenarioNodeSetup struct {
+	ID      string               `yaml:"id"`
+	Primary bool                 `yaml:"primary"`
+	Global  bool                 `yaml:"global"`
+	Config  map[string]string    `yaml:"config"`
+	Agents  []ScenarioAgentSetup `yaml:"agents"`
+}
+
+type ScenarioAgentSetup struct {
+	ID        string `yaml:"id"`
+	Name      string `yaml:"name"`
+	Project   string `yaml:"project"`
+	Mode      string `yaml:"mode"`
+	Directive string `yaml:"directive"`
 }
 
 // FakeMCPServerSpec adds a deterministic, in-process MCP server to a live
@@ -187,6 +210,8 @@ type SeedMCPCallSpec struct {
 }
 
 type AssertClause struct {
+	Node                  string             `yaml:"node"`
+	Project               string             `yaml:"project"`
 	HTTP                  string             `yaml:"http"`            // "GET /path"
 	ExpectStatus          int                `yaml:"expect_status"`   // default 200
 	ExpectCountAt         string             `yaml:"expect_count_at"` // dotted JSON path to count under
@@ -217,15 +242,20 @@ type AssertClause struct {
 }
 
 type ToolCallAssertion struct {
-	Tool       string         `yaml:"tool"`
-	Exact      bool           `yaml:"exact"`
-	ThreadID   string         `yaml:"thread_id"`
-	Args       map[string]any `yaml:"args"`
-	ArgsAbsent []string       `yaml:"args_absent"`
-	Count      *int           `yaml:"count"`
-	MinCount   int            `yaml:"min_count"`
-	MaxCount   int            `yaml:"max_count"`
-	Before     string         `yaml:"before"`
+	Node              string         `yaml:"node"`
+	Agent             string         `yaml:"agent"`
+	Tool              string         `yaml:"tool"`
+	Exact             bool           `yaml:"exact"`
+	ThreadID          string         `yaml:"thread_id"`
+	Args              map[string]any `yaml:"args"`
+	Count             *int           `yaml:"count"`
+	MinCount          int            `yaml:"min_count"`
+	MaxCount          int            `yaml:"max_count"`
+	Before            string         `yaml:"before"`
+	Success           *bool          `yaml:"success"`
+	ResultContains    string         `yaml:"result_contains"`
+	ResultNotContains string         `yaml:"result_not_contains"`
+	ArgsAbsent        []string       `yaml:"args_absent"`
 }
 
 type Budget struct {
@@ -260,6 +290,8 @@ type ScenarioResult struct {
 }
 
 type ToolCallResult struct {
+	Node                string            `json:"node,omitempty"`
+	Agent               string            `json:"agent,omitempty"`
 	ID                  string            `json:"id,omitempty"`
 	Name                string            `json:"name"`
 	ThreadID            string            `json:"thread_id,omitempty"`
@@ -655,6 +687,20 @@ func expandScenarioRuntime(s *Scenario, values map[string]string) {
 func replaceScenarioValues(s *Scenario, replace func(string) string) {
 	s.Directive = replace(s.Directive)
 	s.Prompt = replace(s.Prompt)
+	for i := range s.Setup.Topology.Nodes {
+		node := &s.Setup.Topology.Nodes[i]
+		node.ID = replace(node.ID)
+		for key, value := range node.Config {
+			node.Config[key] = replace(value)
+		}
+		for j := range node.Agents {
+			agent := &node.Agents[j]
+			agent.ID = replace(agent.ID)
+			agent.Name = replace(agent.Name)
+			agent.Project = replace(agent.Project)
+			agent.Directive = replace(agent.Directive)
+		}
+	}
 	if s.Setup.Thread != nil {
 		s.Setup.Thread.ID = replace(s.Setup.Thread.ID)
 		s.Setup.Thread.Directive = replace(s.Setup.Thread.Directive)
@@ -678,6 +724,8 @@ func replaceScenarioValues(s *Scenario, replace func(string) string) {
 	}
 	for _, group := range [][]AssertClause{s.Assert, s.OutcomeAssert, s.TrajectoryAssert} {
 		for i := range group {
+			group[i].Node = replace(group[i].Node)
+			group[i].Project = replace(group[i].Project)
 			group[i].HTTP = replace(group[i].HTTP)
 			group[i].ResponseContains = replace(group[i].ResponseContains)
 			group[i].AgentResponseContains = replace(group[i].AgentResponseContains)
@@ -695,6 +743,10 @@ func replaceScenarioValues(s *Scenario, replace func(string) string) {
 					continue
 				}
 				match.ThreadID = replace(match.ThreadID)
+				match.Node = replace(match.Node)
+				match.Agent = replace(match.Agent)
+				match.ResultContains = replace(match.ResultContains)
+				match.ResultNotContains = replace(match.ResultNotContains)
 				for key, value := range match.Args {
 					match.Args[key] = replaceStringValue(value, replace)
 				}
@@ -1256,6 +1308,9 @@ func registerTestUser(addr string) (string, error) {
 // ─── Scenario execution ────────────────────────────────────────────
 
 func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioResult) {
+	if len(s.Setup.Topology.Nodes) > 0 {
+		return runTopologyScenario(server, s, opts)
+	}
 	res = ScenarioResult{Name: s.Name, BudgetOK: true}
 	start := time.Now()
 	// Named return so the deferred elapsed-time write actually
@@ -1689,6 +1744,8 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 // ─── Telemetry → result aggregation ────────────────────────────────
 
 type telemetryEvent struct {
+	Node     string         `json:"node,omitempty"`
+	Agent    string         `json:"agent,omitempty"`
 	Type     string         `json:"type"`
 	ThreadID string         `json:"thread_id,omitempty"`
 	Data     map[string]any `json:"data"`
@@ -1760,7 +1817,7 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 	case "tool.call":
 		name, _ := ev.Data["name"].(string)
 		res.ToolCalls = append(res.ToolCalls, ToolCallResult{
-			ID: stringMapValue(ev.Data, "id"), Name: name, ThreadID: ev.ThreadID,
+			ID: stringMapValue(ev.Data, "id"), Node: ev.Node, Agent: ev.Agent, Name: name, ThreadID: ev.ThreadID,
 			Args: stringMap(ev.Data["args"]), Reason: stringMapValue(ev.Data, "reason"),
 		})
 	case "tool.result":
@@ -1772,7 +1829,8 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 		}
 		// Mark the most recent matching tool call as done.
 		for i := len(res.ToolCalls) - 1; i >= 0; i-- {
-			if (id != "" && res.ToolCalls[i].ID == id) || (id == "" && res.ToolCalls[i].Name == name) {
+			if res.ToolCalls[i].Node == ev.Node && res.ToolCalls[i].Agent == ev.Agent &&
+				((id != "" && res.ToolCalls[i].ID == id) || (id == "" && res.ToolCalls[i].Name == name)) {
 				res.ToolCalls[i].Completed = true
 				res.ToolCalls[i].OK = ok
 				res.ToolCalls[i].Ms = int64(numberValue(ev.Data["duration_ms"]))
@@ -2270,8 +2328,14 @@ func assertToolCallMatch(want *ToolCallAssertion, negate bool, res *ScenarioResu
 	matches := make([]int, 0)
 	for i, call := range res.ToolCalls {
 		if toolCallNameMatches(call.Name, want.Tool, want.Exact) &&
+			(strings.TrimSpace(want.Node) == "" || call.Node == want.Node) &&
+			(strings.TrimSpace(want.Agent) == "" || call.Agent == want.Agent) &&
 			(strings.TrimSpace(want.ThreadID) == "" || call.ThreadID == want.ThreadID) &&
-			toolCallArgsMatch(call, want.Args, want.ArgsAbsent) {
+			toolCallArgsMatch(call, want.Args, want.ArgsAbsent) &&
+			(want.Success == nil || (call.Completed && call.OK == *want.Success)) &&
+			((want.ResultContains == "" && want.ResultNotContains == "") || call.Completed) &&
+			(want.ResultContains == "" || strings.Contains(call.Result, want.ResultContains)) &&
+			(want.ResultNotContains == "" || !strings.Contains(call.Result, want.ResultNotContains)) {
 			matches = append(matches, i)
 		}
 	}
@@ -2295,6 +2359,12 @@ func assertToolCallMatch(want *ToolCallAssertion, negate bool, res *ScenarioResu
 			// send from worker A must not make worker B's tasks_get-before-send
 			// assertion fail.
 			if strings.TrimSpace(want.ThreadID) != "" && call.ThreadID != want.ThreadID {
+				continue
+			}
+			if strings.TrimSpace(want.Node) != "" && call.Node != want.Node {
+				continue
+			}
+			if strings.TrimSpace(want.Agent) != "" && call.Agent != want.Agent {
 				continue
 			}
 			if toolNameMatches(call.Name, want.Before) {
@@ -2979,6 +3049,10 @@ type scopedAppMCPRelay struct {
 }
 
 func startScopedAppMCPRelay(server *testServer, appName string, installID int64) (*scopedAppMCPRelay, error) {
+	return startScopedAppMCPRelayForProject(server, appName, installID, server.projectID)
+}
+
+func startScopedAppMCPRelayForProject(server *testServer, appName string, installID int64, projectID string) (*scopedAppMCPRelay, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -2995,10 +3069,10 @@ func startScopedAppMCPRelay(server *testServer, appName string, installID int64)
 		request.Header.Del("Cookie")
 		request.Header.Del("X-Apteva-Internal-App-Caller-ID")
 		request.Header.Set("Authorization", "Bearer "+server.apiKey)
-		request.Header.Set("X-Apteva-Project-ID", server.projectID)
+		request.Header.Set("X-Apteva-Project-ID", projectID)
 		query := incoming.URL.Query()
 		query.Set("install_id", strconv.FormatInt(installID, 10))
-		query.Set("project_id", server.projectID)
+		query.Set("project_id", projectID)
 		request.URL.RawQuery = query.Encode()
 
 		response, err := http.DefaultClient.Do(request)

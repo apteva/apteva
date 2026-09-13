@@ -203,6 +203,87 @@ func TestParseRequiredAppRefs(t *testing.T) {
 	}
 }
 
+func TestTopologyScenarioParsingAndRuntimeExpansion(t *testing.T) {
+	var scenario Scenario
+	err := yaml.Unmarshal([]byte(`
+name: federated
+setup:
+  topology:
+    nodes:
+      - id: main
+        primary: true
+        config:
+          peer: ${NODE_tenant_APP_URL}
+      - id: tenant
+        agents:
+          - id: worker
+            name: Worker
+            directive: Reply to ${PRIMARY_AGENT_ID}
+trajectory_assert:
+  - tool_called_with:
+      node: main
+      agent: primary
+      tool: agents_discover
+      result_contains: Worker
+      result_not_contains: Hidden
+`), &scenario)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenario.Setup.Topology.Nodes) != 2 || !scenario.Setup.Topology.Nodes[0].Primary {
+		t.Fatalf("topology did not parse: %+v", scenario.Setup.Topology)
+	}
+	expandScenarioRuntime(&scenario, map[string]string{
+		"NODE_tenant_APP_URL": "http://127.0.0.1:9001/api/apps/a2a",
+		"PRIMARY_AGENT_ID":    "42",
+	})
+	if got := scenario.Setup.Topology.Nodes[0].Config["peer"]; got != "http://127.0.0.1:9001/api/apps/a2a" {
+		t.Fatalf("peer config = %q", got)
+	}
+	if got := scenario.Setup.Topology.Nodes[1].Agents[0].Directive; got != "Reply to 42" {
+		t.Fatalf("agent directive = %q", got)
+	}
+	match := scenario.TrajectoryAssert[0].ToolCalledWith
+	if match.Node != "main" || match.Agent != "primary" || match.ResultContains != "Worker" || match.ResultNotContains != "Hidden" {
+		t.Fatalf("tool assertion = %+v", match)
+	}
+}
+
+func TestLegacyScenarioLeavesTopologyEmpty(t *testing.T) {
+	var scenario Scenario
+	if err := yaml.Unmarshal([]byte(`
+name: legacy
+setup:
+  mode: autonomous
+directive: Do the work.
+`), &scenario); err != nil {
+		t.Fatal(err)
+	}
+	if len(scenario.Setup.Topology.Nodes) != 0 {
+		t.Fatalf("legacy scenario unexpectedly enabled topology: %+v", scenario.Setup.Topology)
+	}
+}
+
+func TestToolAssertionsCanSelectTopologyAgentAndResult(t *testing.T) {
+	result := &ScenarioResult{ToolCalls: []ToolCallResult{
+		{Node: "main", Agent: "primary", Name: "a2a_agents_discover", Completed: true, OK: true, Result: `{"agents":[{"name":"Worker"}]}`},
+		{Node: "tenant", Agent: "worker", Name: "a2a_agents_discover", Completed: true, OK: true, Result: `{"agents":[{"name":"Hidden"}]}`},
+	}}
+	want := &ToolCallAssertion{
+		Node: "main", Agent: "primary", Tool: "agents_discover", Success: boolPtr(true),
+		ResultContains: "Worker", ResultNotContains: "Hidden",
+	}
+	if got := assertToolCallMatch(want, false, result); !got.OK {
+		t.Fatalf("scoped result assertion should pass: %+v", got)
+	}
+	want.Agent = "worker"
+	if got := assertToolCallMatch(want, false, result); got.OK {
+		t.Fatalf("wrong topology agent should not match: %+v", got)
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
+
 func TestScenarioInitialPace(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 9, 59, 50, 0, time.UTC)
 	pace, wakeAt, err := scenarioInitialPace(&InitialWakeSpec{After: "10s"}, now)
@@ -1094,6 +1175,80 @@ func TestPostScenarioEvent(t *testing.T) {
 			}
 			if status != http.StatusOK && (err == nil || !strings.Contains(err.Error(), "HTTP 503")) {
 				t.Fatalf("expected HTTP failure, got %v", err)
+			}
+		})
+	}
+}
+
+func TestTopologyAgentIDsAreRealInstanceIDs(t *testing.T) {
+	primary := &topologyAgentRuntime{ID: "primary", Instance: &instanceResp{ID: 29}}
+	writer := &topologyAgentRuntime{ID: "writer", Instance: &instanceResp{ID: 11}}
+	reviewer := &topologyAgentRuntime{ID: "reviewer", Instance: &instanceResp{ID: 47}}
+	values := topologyAgentValues([]*topologyAgentRuntime{writer, reviewer, primary}, primary)
+	s := Scenario{Directive: "owner=${PRIMARY_AGENT_ID};writer=${AGENT_writer_ID};reviewer=${AGENT_reviewer_ID}"}
+	expandScenarioRuntime(&s, values)
+	if s.Directive != "owner=29;writer=11;reviewer=47" {
+		t.Fatal(s.Directive)
+	}
+}
+
+func TestTopologyTelemetryKeepsIdenticalToolIDsSeparate(t *testing.T) {
+	result := &ScenarioResult{}
+	seen := map[string]struct{}{}
+	for _, agent := range []string{"writer", "reviewer"} {
+		event := telemetryEvent{Node: "main", Agent: agent, Type: "tool.call", Data: map[string]any{"id": "same-id", "name": "processes_step_update"}}
+		if !acceptTelemetry(result, event, seen) || acceptTelemetry(result, event, seen) {
+			t.Fatal("telemetry was lost across agents or duplicated within one agent")
+		}
+	}
+	applyTelemetry(result, telemetryEvent{Node: "main", Agent: "writer", Type: "tool.result", Data: map[string]any{"id": "same-id", "name": "processes_step_update", "ok": true}})
+	if len(result.ToolCalls) != 2 || !result.ToolCalls[0].Completed || result.ToolCalls[1].Completed {
+		t.Fatalf("result attributed to wrong agent: %+v", result.ToolCalls)
+	}
+}
+
+func TestTopologyRejectsUnsupportedSetupBeforeStarting(t *testing.T) {
+	for name, setup := range map[string]ScenarioSetup{
+		"cleanup": {CleanupMCPCalls: []SeedMCPCallSpec{{Tool: "cleanup"}}},
+		"thread":  {Thread: &ScenarioThreadSpec{ID: "worker"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := runTopologyScenario(nil, Scenario{Name: name, Setup: setup}, testOpts{})
+			if result.OK || !strings.Contains(result.Error, "does not support") {
+				t.Fatalf("unsupported setup accepted: %+v", result)
+			}
+		})
+	}
+}
+
+func TestTopologyDependenciesRemainExplicitAndNonspawnable(t *testing.T) {
+	node := &topologyNodeRuntime{DependencyMCP: []map[string]any{scenarioAppMCPConfig("test-signups", "http://localhost/fixture", false)}}
+	out := topologyMCP(node, "processes", "http://localhost/processes", false)
+	if len(out) != 2 || out[0]["name"] != "processes" || out[1]["name"] != "test-signups" || out[1]["no_spawn"] != true {
+		t.Fatal(out)
+	}
+	if len(node.DependencyMCP) != 1 {
+		t.Fatal("mutated dependency configs")
+	}
+}
+
+func TestTopologyGlobalNodesRejectProjectDependencies(t *testing.T) {
+	for _, tc := range []struct {
+		name, manifest string
+		bindings       map[string]string
+		wantError      bool
+	}{
+		{"none", "name: app", nil, false},
+		{"required", "requires:\n  apps:\n    - name: tasks\n", nil, true},
+		{"optional disabled", "requires:\n  apps:\n    - name: tasks\n      optional: true\n", nil, false},
+		{"optional enabled", "requires:\n  apps:\n    - name: tasks\n      optional: true\n", map[string]string{"tasks": "app"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateTopologyDependencies(true, []byte(tc.manifest), tc.bindings); (err != nil) != tc.wantError {
+				t.Fatalf("global validation: %v, wantError %v", err, tc.wantError)
+			}
+			if err := validateTopologyDependencies(false, []byte(tc.manifest), tc.bindings); err != nil {
+				t.Fatalf("project-scoped dependencies rejected: %v", err)
 			}
 		})
 	}
