@@ -53,7 +53,11 @@ The Processes collaboration case needs only one node and three agents.
 
 Topology currently supports autonomous interaction, up to eight nodes, and no
 fixtures, fake MCP servers, seed/cleanup MCP calls, initial wake, thread setup,
-reuse of existing app installations, or app integration bindings. Prefer a
+reuse of existing app installations. Project-scoped nodes support declared app
+dependencies and `setup.app.bindings`, using the same install/cleanup path as
+single-agent scenarios. Global nodes reject required dependencies and explicit
+bindings, so project-scoped dependency tools cannot cross into other projects.
+Dependency MCP tools are explicit and non-spawnable. Prefer a
 disposable server (omit `--server`) for authenticated app callbacks. Fleet node
 provisioning/adoption is outside this implementation.
 

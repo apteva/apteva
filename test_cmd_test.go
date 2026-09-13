@@ -1209,14 +1209,46 @@ func TestTopologyTelemetryKeepsIdenticalToolIDsSeparate(t *testing.T) {
 
 func TestTopologyRejectsUnsupportedSetupBeforeStarting(t *testing.T) {
 	for name, setup := range map[string]ScenarioSetup{
-		"cleanup":  {CleanupMCPCalls: []SeedMCPCallSpec{{Tool: "cleanup"}}},
-		"thread":   {Thread: &ScenarioThreadSpec{ID: "worker"}},
-		"bindings": {App: AppSetup{Bindings: map[string]string{"tasks": "app"}}},
+		"cleanup": {CleanupMCPCalls: []SeedMCPCallSpec{{Tool: "cleanup"}}},
+		"thread":  {Thread: &ScenarioThreadSpec{ID: "worker"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			result := runTopologyScenario(nil, Scenario{Name: name, Setup: setup}, testOpts{})
 			if result.OK || !strings.Contains(result.Error, "does not support") {
 				t.Fatalf("unsupported setup accepted: %+v", result)
+			}
+		})
+	}
+}
+
+func TestTopologyDependenciesRemainExplicitAndNonspawnable(t *testing.T) {
+	node := &topologyNodeRuntime{DependencyMCP: []map[string]any{scenarioAppMCPConfig("test-signups", "http://localhost/fixture", false)}}
+	out := topologyMCP(node, "processes", "http://localhost/processes", false)
+	if len(out) != 2 || out[0]["name"] != "processes" || out[1]["name"] != "test-signups" || out[1]["no_spawn"] != true {
+		t.Fatal(out)
+	}
+	if len(node.DependencyMCP) != 1 {
+		t.Fatal("mutated dependency configs")
+	}
+}
+
+func TestTopologyGlobalNodesRejectProjectDependencies(t *testing.T) {
+	for _, tc := range []struct {
+		name, manifest string
+		bindings       map[string]string
+		wantError      bool
+	}{
+		{"none", "name: app", nil, false},
+		{"required", "requires:\n  apps:\n    - name: tasks\n", nil, true},
+		{"optional disabled", "requires:\n  apps:\n    - name: tasks\n      optional: true\n", nil, false},
+		{"optional enabled", "requires:\n  apps:\n    - name: tasks\n      optional: true\n", map[string]string{"tasks": "app"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateTopologyDependencies(true, []byte(tc.manifest), tc.bindings); (err != nil) != tc.wantError {
+				t.Fatalf("global validation: %v, wantError %v", err, tc.wantError)
+			}
+			if err := validateTopologyDependencies(false, []byte(tc.manifest), tc.bindings); err != nil {
+				t.Fatalf("project-scoped dependencies rejected: %v", err)
 			}
 		})
 	}
