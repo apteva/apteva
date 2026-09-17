@@ -110,47 +110,55 @@ func runNativeTests(ctx context.Context, appDir, profile string, tiers map[int]b
 			allOK = false
 			break
 		}
-		fmt.Fprintf(progress, "▶ Tier %d · %s\n", tier, strings.Join(command, " "))
-		started := time.Now()
-		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
-		cmd.Dir = appDir
-		cmd.Env = os.Environ()
-		var output bytes.Buffer
-		attachOutput := func(command *exec.Cmd) {
-			if jsonOutput {
-				command.Stdout = &output
-				command.Stderr = &output
-			} else {
-				command.Stdout = io.MultiWriter(progress, &output)
-				command.Stderr = io.MultiWriter(progress, &output)
-			}
+		extra, configErr := nativeExtraCommands(appDir, tier)
+		if configErr != nil {
+			results = append(results, NativeTestResult{Tier: tier, Output: configErr.Error()})
+			allOK = false
+			continue
 		}
-		attachOutput(cmd)
-		err = cmd.Run()
-		if err != nil && strings.Contains(output.String(), "not contain modules listed in go.work") {
-			if !jsonOutput {
-				fmt.Fprintln(progress, "↻ retrying native test outside the parent Go workspace")
-			}
-			cmd = exec.CommandContext(ctx, command[0], command[1:]...)
+		for _, command := range append([][]string{command}, extra...) {
+			fmt.Fprintf(progress, "▶ Tier %d · %s\n", tier, strings.Join(command, " "))
+			started := time.Now()
+			cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 			cmd.Dir = appDir
-			cmd.Env = append(os.Environ(), "GOWORK=off")
+			cmd.Env = os.Environ()
+			var output bytes.Buffer
+			attachOutput := func(command *exec.Cmd) {
+				if jsonOutput {
+					command.Stdout = &output
+					command.Stderr = &output
+				} else {
+					command.Stdout = io.MultiWriter(progress, &output)
+					command.Stderr = io.MultiWriter(progress, &output)
+				}
+			}
 			attachOutput(cmd)
 			err = cmd.Run()
-		}
-		result := NativeTestResult{
-			Tier: tier, OK: err == nil, ElapsedMS: time.Since(started).Milliseconds(),
-			Command: command, Output: output.String(),
-		}
-		results = append(results, result)
-		if err != nil {
-			allOK = false
-			if !jsonOutput {
-				fmt.Fprintf(progress, "✗ Tier %d failed: %v\n", tier, err)
+			if err != nil && command[0] == "go" && strings.Contains(output.String(), "not contain modules listed in go.work") {
+				if !jsonOutput {
+					fmt.Fprintln(progress, "↻ retrying native test outside the parent Go workspace")
+				}
+				cmd = exec.CommandContext(ctx, command[0], command[1:]...)
+				cmd.Dir = appDir
+				cmd.Env = append(os.Environ(), "GOWORK=off")
+				attachOutput(cmd)
+				err = cmd.Run()
 			}
-			break
-		}
-		if !jsonOutput {
-			fmt.Fprintf(progress, "✓ Tier %d passed in %s\n", tier, time.Since(started).Round(time.Millisecond))
+			result := NativeTestResult{
+				Tier: tier, OK: err == nil, ElapsedMS: time.Since(started).Milliseconds(),
+				Command: command, Output: output.String(),
+			}
+			results = append(results, result)
+			if err != nil {
+				allOK = false
+				if !jsonOutput {
+					fmt.Fprintf(progress, "✗ Tier %d failed: %v\n", tier, err)
+				}
+				continue
+			}
+			if !jsonOutput {
+				fmt.Fprintf(progress, "✓ Tier %d passed in %s\n", tier, time.Since(started).Round(time.Millisecond))
+			}
 		}
 	}
 	return results, allOK
@@ -167,5 +175,5 @@ func printNativeTestOutcome(results []NativeTestResult, ok, jsonOutput bool, std
 			passed++
 		}
 	}
-	fmt.Fprintf(stderr, "\n=== summary ===\n%d/%d native tiers passed\n", passed, len(results))
+	fmt.Fprintf(stderr, "\n=== summary ===\n%d/%d native checks passed\n", passed, len(results))
 }

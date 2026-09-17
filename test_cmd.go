@@ -91,7 +91,7 @@ type Scenario struct {
 	RequiredPassRate float64        `yaml:"required_pass_rate"` // default 1.0
 	Setup            ScenarioSetup  `yaml:"setup"`
 	Directive        string         `yaml:"directive"`
-	Prompt           string         `yaml:"prompt"` // user input when setup.interaction=conversation
+	Prompt           string         `yaml:"prompt"` // user input for event, thread, or conversation interactions
 	Assert           []AssertClause `yaml:"assert"`
 	OutcomeAssert    []AssertClause `yaml:"outcome_assert"`
 	TrajectoryAssert []AssertClause `yaml:"trajectory_assert"`
@@ -105,9 +105,13 @@ type Scenario struct {
 }
 
 type ScenarioSetup struct {
+	// Driver performs multi-step client interactions; the runner owns all resources.
+	Driver          []string            `yaml:"driver"`
+	Agents          int                 `yaml:"agents"`
+	Apps            []AppSetup          `yaml:"apps"`
 	App             AppSetup            `yaml:"app"`
 	Mode            string              `yaml:"mode"`        // autonomous | cautious | learn
-	Interaction     string              `yaml:"interaction"` // autonomous (default) | thread | conversation (legacy)
+	Interaction     string              `yaml:"interaction"` // autonomous (default) | event (main) | thread | conversation (legacy)
 	Thread          *ScenarioThreadSpec `yaml:"thread"`
 	Config          map[string]string   `yaml:"config"`
 	Fixtures        []FixtureSpec       `yaml:"fixtures"` // pre-uploaded files / setup data
@@ -244,6 +248,7 @@ type ScenarioResult struct {
 	Tokens                TokenSummary        `json:"tokens"`
 	CostUSD               float64             `json:"cost_usd"`
 	Asserts               []AssertResult      `json:"asserts"`
+	DriverOutput          string              `json:"driver_output,omitempty"`
 	BudgetOK              bool                `json:"budget_ok"`
 	Run                   int                 `json:"run,omitempty"`
 	RunCount              int                 `json:"run_count,omitempty"`
@@ -255,6 +260,8 @@ type ScenarioResult struct {
 	ThreadResponses       map[string][]string `json:"thread_responses,omitempty"`
 	ConversationResponses []string            `json:"conversation_responses,omitempty"`
 	ArtifactsDir          string              `json:"artifacts_dir,omitempty"`
+	ObservedProviders     []string            `json:"observed_providers,omitempty"`
+	ObservedModels        []string            `json:"observed_models,omitempty"`
 	Error                 string              `json:"error,omitempty"`
 	telemetry             []telemetryEvent
 }
@@ -355,7 +362,7 @@ func cmdTest(args []string) int {
 			return 2
 		}
 		nativeResults, nativeOK = runNativeTests(ctx, appPath, *profile, tiers, *jsonOut, os.Stderr)
-		if !nativeOK || !tiers[3] {
+		if !tiers[3] {
 			printNativeTestOutcome(nativeResults, nativeOK, *jsonOut, os.Stdout, os.Stderr)
 			if nativeOK {
 				return 0
@@ -374,7 +381,7 @@ func cmdTest(args []string) int {
 		return 2
 	}
 
-	server, err := bootstrapServer(opts)
+	server, err := bootstrapServer(&opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap: %v\n", err)
 		return 1
@@ -610,6 +617,17 @@ func readScenario(path string) (Scenario, error) {
 	for i := range s.TrajectoryAssert {
 		s.TrajectoryAssert[i].Category = "trajectory"
 	}
+	if s.Setup.Agents < 0 || s.Setup.Agents > 8 {
+		return Scenario{}, fmt.Errorf("setup.agents must be between 1 and 8 (or omitted)")
+	}
+	if s.Setup.App.ReuseExisting && len(s.Setup.Apps) > 0 {
+		return Scenario{}, fmt.Errorf("reuse_existing cannot provision setup.apps")
+	}
+	for _, peer := range s.Setup.Apps {
+		if peer.ReuseExisting || strings.TrimSpace(peer.Path) == "" {
+			return Scenario{}, fmt.Errorf("setup.apps requires local paths and does not support reuse_existing")
+		}
+	}
 	if s.RequiredPassRate < 0 || s.RequiredPassRate > 1 {
 		return Scenario{}, fmt.Errorf("required_pass_rate must be between 0 and 1")
 	}
@@ -812,7 +830,11 @@ func (s *testServer) Stop() {
 	}
 }
 
-func bootstrapServer(opts testOpts) (*testServer, error) {
+// bootstrapServer prepares the server the scenarios will run against and
+// canonicalizes opts.provider in place: everything downstream binds by
+// opts.provider, so it must hold the key the server actually matches, not
+// the spelling the user typed.
+func bootstrapServer(opts *testOpts) (*testServer, error) {
 	if opts.serverAddr != "" {
 		if opts.serverAPIKey == "" {
 			return nil, fmt.Errorf("--server requires owner authentication: set APTEVA_TEST_SERVER_API_KEY or use an active Apteva config containing api_key")
@@ -832,13 +854,15 @@ func bootstrapServer(opts testOpts) (*testServer, error) {
 			return nil, fmt.Errorf("prepare existing server: %w", err)
 		}
 		srv.projectID = projectID
-		if err := verifyServerProvider(srv, opts.provider); err != nil {
+		canonicalProvider, err := resolveServerProvider(srv, opts.provider)
+		if err != nil {
 			if srv.teardown != nil {
 				srv.teardown()
 				srv.teardown = nil
 			}
 			return nil, err
 		}
+		opts.provider = canonicalProvider
 		fmt.Fprintf(os.Stderr, "using apteva-server at %s (project: %s; provider credentials stay server-side)\n", opts.serverAddr, projectID)
 		return srv, nil
 	}
@@ -866,10 +890,18 @@ func bootstrapServer(opts testOpts) (*testServer, error) {
 			baseEnv = append(baseEnv, k+"="+v)
 		}
 	}
-	if !envHasProviderKey(baseEnv) {
-		fmt.Fprintln(os.Stderr,
+	if requestedKeys := providerEnvKeys(opts.provider); len(requestedKeys) > 0 {
+		// A specific provider was asked for: check that provider's own
+		// credential, not merely that some unrelated key happens to be set.
+		if !envHasAnyKey(baseEnv, requestedKeys) {
+			fmt.Fprintf(os.Stderr,
+				"⚠ provider %s was requested but none of %s is set in env or ~/.apteva/test.env.\n",
+				normalizeProviderName(opts.provider), strings.Join(requestedKeys, " / "))
+		}
+	} else if !envHasProviderKey(baseEnv) {
+		fmt.Fprintf(os.Stderr,
 			"⚠ no LLM provider key in env or ~/.apteva/test.env — agent won't iterate.\n"+
-				"  Set one of OPENCODE_GO_API_KEY / FIREWORKS_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY.")
+				"  Set one of: %s\n", strings.Join(knownLLMProviders(), ", "))
 	}
 	cmd.Env = append(baseEnv,
 		fmt.Sprintf("PORT=%d", port),
@@ -931,6 +963,11 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 		return nil
 	}
 
+	if !knownLLMProvider(provider) {
+		return fmt.Errorf("unknown LLM provider %q; known providers: %s",
+			requested, strings.Join(knownLLMProviders(), ", "))
+	}
+
 	var credentials map[string]string
 	switch provider {
 	case "openai-codex":
@@ -943,9 +980,24 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 			credentials["account_id"] = accountID
 		}
 	default:
-		// Other providers retain their existing Server bootstrap behavior.
-		// Add a connection-backed adapter here when their runtime catalog is
-		// migrated away from legacy environment discovery.
+		// Other providers retain their existing Server bootstrap behavior:
+		// the server discovers them from the environment rather than from a
+		// connection row. That path is legitimate, but it is only viable if
+		// this provider's own credential is actually present — returning nil
+		// without checking is what reported success and then produced a
+		// server with no usable provider at all.
+		keys := providerEnvKeys(provider)
+		if len(keys) == 0 {
+			return fmt.Errorf("provider %q has no known credential variable for the spawned-server path", requested)
+		}
+		if !envHasAnyKey(env, keys) {
+			return fmt.Errorf(
+				"provider %q needs one of %s in the environment or ~/.apteva/test.env; "+
+					"the spawned server has no connection for it and cannot discover it from the environment",
+				requested, strings.Join(keys, " / "))
+		}
+		fmt.Fprintf(os.Stderr,
+			"provider %s: using environment bootstrap (no connection row created)\n", provider)
 		return nil
 	}
 
@@ -1069,38 +1121,51 @@ func resolveTestProject(server *testServer, requested string) (string, error) {
 	return projects[0].ID, nil
 }
 
-func verifyServerProvider(server *testServer, requested string) error {
+// resolveServerProvider confirms the requested provider exists on an existing
+// server and returns the canonical key to bind with.
+//
+// Verification accepts a display name for convenience, but binding must use
+// the provider's own slug. Accepting a match on name and then binding the
+// string the user typed is how `--provider "OpenCode Go 3"` passed
+// verification and then bound nothing: the server matches default_provider
+// against the provider type, which never contained the display spelling.
+func resolveServerProvider(server *testServer, requested string) (string, error) {
 	want := normalizeProviderName(requested)
-	found, err := legacyServerHasProvider(server, want)
+	canonical, found, err := legacyServerProviderKey(server, want)
 	if err != nil {
 		// Servers past the providers→connections migration removed
 		// /api/providers (410, or a redirect onto dashboard HTML).
-		found, err = serverHasLLMConnection(server, want)
+		canonical, found, err = llmConnectionProviderKey(server, want)
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if found {
-		return nil
+		if want != "" && canonical != want {
+			fmt.Fprintf(os.Stderr, "provider %q resolved to %q (the key the server binds by)\n", requested, canonical)
+		}
+		return canonical, nil
 	}
 	if want != "" {
-		return fmt.Errorf("LLM provider %q is not configured for project %s", requested, server.projectID)
+		return "", fmt.Errorf("LLM provider %q is not configured for project %s", requested, server.projectID)
 	}
-	return fmt.Errorf("no LLM provider is configured for project %s", server.projectID)
+	return "", fmt.Errorf("no LLM provider is configured for project %s", server.projectID)
 }
 
-func legacyServerHasProvider(server *testServer, want string) (bool, error) {
+// legacyServerProviderKey reports the canonical provider key from the
+// pre-migration /api/providers surface, alongside whether it matched.
+func legacyServerProviderKey(server *testServer, want string) (string, bool, error) {
 	endpoint := "http://" + server.addr + "/api/providers?project_id=" + url.QueryEscape(server.projectID)
 	req, _ := http.NewRequest(http.MethodGet, endpoint, nil)
 	req.Header.Set("Authorization", "Bearer "+server.apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("list existing-server providers: %w", err)
+		return "", false, fmt.Errorf("list existing-server providers: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return false, fmt.Errorf("list existing-server providers: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+		return "", false, fmt.Errorf("list existing-server providers: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
 	}
 	var providers []struct {
 		Type   string `json:"type"`
@@ -1108,30 +1173,37 @@ func legacyServerHasProvider(server *testServer, want string) (bool, error) {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
-		return false, fmt.Errorf("decode existing-server providers: %w", err)
+		return "", false, fmt.Errorf("decode existing-server providers: %w", err)
 	}
 	for _, provider := range providers {
 		name := normalizeProviderName(provider.Name)
 		isLLM := strings.EqualFold(provider.Type, "llm") || knownLLMProvider(name)
 		if isLLM && !strings.EqualFold(provider.Status, "disabled") && (want == "" || name == want) {
-			return true, nil
+			return name, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
 }
 
-func serverHasLLMConnection(server *testServer, want string) (bool, error) {
+// llmConnectionProviderKey finds the LLM connection matching want and returns
+// its app slug — the key the server binds default_provider by.
+//
+// A match is still accepted on the display name, because typing the name a
+// user sees in the dashboard is convenient. What changed is what comes back:
+// the slug, never the name that happened to match. Returning the matched
+// spelling is what let verification pass for a provider that could not bind.
+func llmConnectionProviderKey(server *testServer, want string) (string, bool, error) {
 	endpoint := "http://" + server.addr + "/api/connections/runtime"
 	req, _ := http.NewRequest(http.MethodGet, endpoint, nil)
 	req.Header.Set("Authorization", "Bearer "+server.apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("list existing-server connections: %w", err)
+		return "", false, fmt.Errorf("list existing-server connections: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return false, fmt.Errorf("list existing-server connections: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
+		return "", false, fmt.Errorf("list existing-server connections: HTTP %d: %s", resp.StatusCode, tcTruncate(string(body), 200))
 	}
 	var connections []struct {
 		Name         string   `json:"name"`
@@ -1140,7 +1212,7 @@ func serverHasLLMConnection(server *testServer, want string) (bool, error) {
 		Capabilities []string `json:"capabilities"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&connections); err != nil {
-		return false, fmt.Errorf("decode existing-server connections: %w", err)
+		return "", false, fmt.Errorf("decode existing-server connections: %w", err)
 	}
 	for _, connection := range connections {
 		isLLM := strings.EqualFold(connection.Role, "llm")
@@ -1150,11 +1222,18 @@ func serverHasLLMConnection(server *testServer, want string) (bool, error) {
 		if !isLLM {
 			continue
 		}
-		if want == "" || normalizeProviderName(connection.AppSlug) == want || normalizeProviderName(connection.Name) == want {
-			return true, nil
+		slug := normalizeProviderName(connection.AppSlug)
+		if want == "" || slug == want || normalizeProviderName(connection.Name) == want {
+			if slug == "" {
+				// Nothing to bind by: refuse rather than hand back a
+				// display name the server will not match.
+				return "", false, fmt.Errorf(
+					"LLM connection %q has no app_slug to bind as a provider", connection.Name)
+			}
+			return slug, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
 }
 
 func normalizeProviderName(value string) string {
@@ -1164,13 +1243,51 @@ func normalizeProviderName(value string) string {
 	return value
 }
 
+// providerCredentialEnv maps each known LLM provider to the environment
+// variables that can satisfy it. This is the single source of truth for both
+// "is this a provider we know" and "does the caller hold its credential" —
+// previously those were two hand-maintained lists, and they had drifted:
+// venice was a known provider with no credential entry at all.
+var providerCredentialEnv = map[string][]string{
+	"anthropic":    {"ANTHROPIC_API_KEY"},
+	"fireworks":    {"FIREWORKS_API_KEY"},
+	"google":       {"GOOGLE_API_KEY"},
+	"nvidia":       {"NVIDIA_API_KEY"},
+	"ollama":       {"OLLAMA_HOST"},
+	"openai":       {"OPENAI_API_KEY"},
+	"openai-codex": {"OPENAI_CODEX_ACCESS_TOKEN"},
+	"opencode-go":  {"OPENCODE_GO_API_KEY"},
+	"venice":       {"VENICE_API_KEY"},
+}
+
 func knownLLMProvider(value string) bool {
-	switch value {
-	case "fireworks", "openai", "openai-codex", "anthropic", "google", "ollama", "nvidia", "opencode-go", "venice":
-		return true
-	default:
-		return false
+	_, ok := providerCredentialEnv[value]
+	return ok
+}
+
+// knownLLMProviders lists provider keys in a stable order for error messages.
+func knownLLMProviders() []string {
+	names := make([]string, 0, len(providerCredentialEnv))
+	for name := range providerCredentialEnv {
+		names = append(names, name)
 	}
+	sort.Strings(names)
+	return names
+}
+
+// providerEnvKeys returns the credential variables that satisfy provider.
+func providerEnvKeys(provider string) []string {
+	return providerCredentialEnv[normalizeProviderName(provider)]
+}
+
+// envHasAnyKey reports whether env sets any of keys to a non-empty value.
+func envHasAnyKey(env []string, keys []string) bool {
+	for _, key := range keys {
+		if envValue(env, key) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // registerTestUser creates a user, logs in to get a session cookie,
@@ -1325,7 +1442,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		// requires.apps lists peer apps the unit under test calls over
 		// HTTP. Each local sidecar is removed after the run.
 		var appBindings map[string]any
-		deps, appBindings, err = installDeps(server, appDir, manifestYAML, s.Setup.App.Bindings)
+		deps, appBindings, err = installDeps(server, appDir, manifestYAML, s.Setup.App.Bindings, s.Setup.Apps...)
 		if err != nil {
 			res.Error = fmt.Sprintf("install deps: %v", err)
 			return res
@@ -1347,7 +1464,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		}
 		defer uninstallApp(server, installed.InstallID)
 
-		sidecar, spawnErr := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config, s.Setup.App.Env, "http://"+server.addr)
+		sidecar, spawnErr := spawnLocalSidecar(appDir, installed.InstallID, server.projectID, s.Setup.App.Config, s.Setup.App.Env, "http://"+server.addr, installed.OutboundToken)
 		if spawnErr != nil {
 			res.Error = fmt.Sprintf("spawn local sidecar: %v", spawnErr)
 			return res
@@ -1385,7 +1502,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			}
 			localRelays = append(localRelays, depRelay)
 			mcpServers = append(mcpServers, map[string]any{
-				"name": d.name, "transport": "http", "url": depRelay.URL, "main_access": false, "no_spawn": true,
+				"name": d.name, "transport": "http", "url": depRelay.URL, "main_access": d.explicit, "no_spawn": !d.spawnable,
 			})
 		}
 	}
@@ -1425,11 +1542,11 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	if interaction == "" {
 		interaction = "autonomous"
 	}
-	if interaction != "autonomous" && interaction != "thread" && interaction != "conversation" {
+	if interaction != "autonomous" && interaction != "thread" && interaction != "conversation" && interaction != "event" {
 		res.Error = fmt.Sprintf("unsupported setup.interaction %q", s.Setup.Interaction)
 		return res
 	}
-	if (interaction == "thread" || interaction == "conversation") && strings.TrimSpace(s.Prompt) == "" {
+	if (interaction == "thread" || interaction == "conversation" || interaction == "event") && strings.TrimSpace(s.Prompt) == "" {
 		res.Error = fmt.Sprintf("setup.interaction=%s requires prompt", interaction)
 		return res
 	}
@@ -1449,7 +1566,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		mode = "autonomous"
 	}
 	includeChannels := interaction == "conversation"
-	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, opts.model, mcpServers, []int64{installed.InstallID}, includeChannels, initialPace)
+	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace)
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
@@ -1513,8 +1630,41 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// emitted before the SSE connection opens or after a live stream drops.
 	telemetry, errCh, _ := streamTelemetry(ctx, server, inst.ID)
 
+	agentIDs := []int64{inst.ID}
+	for i := 1; i < s.Setup.Agents; i++ {
+		peer, err := tcCreateInstance(server, projectID, fmt.Sprintf("%s-peer-%d", s.Name, i), s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace)
+		if err != nil {
+			res.Error = "create peer: " + err.Error()
+			return res
+		}
+		defer tcDeleteInstance(server, peer.ID)
+		if err := writeInstanceDiskConfig(server, peer.ID, s.Directive, mode, opts.provider, opts.model, mcpServers, includeChannels, initialPace); err != nil {
+			res.Error = err.Error()
+			return res
+		}
+		if err := startInstanceAPI(server, peer.ID); err != nil {
+			res.Error = err.Error()
+			return res
+		}
+		agentIDs = append(agentIDs, peer.ID)
+	}
+	var driver *scenarioDriver
+	if len(s.Setup.Driver) > 0 {
+		var err error
+		driver, err = startScenarioDriver(ctx, s.Setup.Driver, s.SourceDir, server, installed.InstallID, appName, deps, agentIDs)
+		if err != nil {
+			res.Error = "start scenario driver: " + err.Error()
+			return res
+		}
+		defer driver.Stop()
+	}
 	conversationID := ""
-	if interaction == "thread" {
+	if interaction == "event" {
+		if err := postScenarioEvent(ctx, server, inst.ID, s.Prompt); err != nil {
+			res.Error = fmt.Sprintf("post scenario event: %v", err)
+			return res
+		}
+	} else if interaction == "thread" {
 		threadID := strings.TrimSpace(s.Setup.Thread.ID)
 		if threadID == "" {
 			threadID = "scenario-request"
@@ -1578,6 +1728,21 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	var assertsPassingSince time.Time
 	seenTelemetry := map[string]struct{}{}
 	probeNow := func() {
+		if driver != nil {
+			done, err := driver.Result()
+			if !done {
+				return
+			}
+			if err != nil {
+				res.Error = "scenario driver: " + err.Error()
+				stopReason = res.Error
+				return
+			}
+			if len(assertions) == 0 {
+				stopReason = "driver passed"
+				return
+			}
+		}
 		if !probeAsserts(server, installed.InstallID, sidecarURL, conversationID, assertions, &res) {
 			assertsPassingSince = time.Time{}
 			return
@@ -1628,7 +1793,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		case <-assertPoll.C:
 			probeNow()
 		case <-telemetryPoll.C:
-			events, fetchErr := fetchStoredTelemetry(server, inst.ID, start.Add(-time.Second))
+			events, fetchErr := fetchScenarioTelemetry(server, agentIDs, start.Add(-time.Second))
 			if fetchErr != nil {
 				if opts.verbose {
 					fmt.Fprintf(os.Stderr, "  telemetry reconcile err: %v\n", fetchErr)
@@ -1648,6 +1813,22 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 			break
 		}
 	}
+	if driver != nil {
+		done, err := driver.Result()
+		if !done && res.Error == "" {
+			res.Error = "scenario driver did not complete"
+		}
+		if err != nil && res.Error == "" {
+			res.Error = "scenario driver: " + err.Error()
+		}
+		driver.Stop()
+		res.DriverOutput = driver.Output(server.apiKey)
+	}
+	if finalEvents, err := fetchScenarioTelemetry(server, agentIDs, start.Add(-time.Second)); err == nil {
+		for _, ev := range finalEvents {
+			acceptTelemetry(&res, ev, seenTelemetry)
+		}
+	}
 	cancel()
 	if stopReason == "" {
 		stopReason = "timeout"
@@ -1656,15 +1837,21 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		res.Error = "scenario cancelled"
 	}
 
-	// Stop the agent so the next scenario starts clean.
-	_ = stopInstanceAPI(server, inst.ID)
-
-	// Run asserts.
+	// Check live runtime state before stopping: shutdown replaces /status with
+	// stopped defaults and would invalidate passing pace/wake assertions.
 	res.ElapsedMs = time.Since(start).Milliseconds()
 	res.Asserts = runAsserts(server, installed.InstallID, sidecarURL, conversationID, assertions, &res)
 
+	// Stop the agent so the next scenario starts clean.
+	_ = stopInstanceAPI(server, inst.ID)
+
 	// Budget check.
 	res.BudgetOK = checkBudget(s.Budget, res.Tokens, res.CostUSD)
+
+	// Confirm the agent actually ran on what was requested. Without this a
+	// scenario passes on whatever provider the server substituted, and the
+	// result says nothing about which model produced it.
+	res.Asserts = append(res.Asserts, effectiveRuntimeAsserts(opts, &res)...)
 
 	// OK: every assert OK + budget OK + no scenario-level error.
 	res.OK = res.Error == "" && res.BudgetOK
@@ -1678,6 +1865,55 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		fmt.Fprintf(os.Stderr, "  stop_reason: %s\n", stopReason)
 	}
 	return res
+}
+
+// effectiveRuntimeAsserts compares what the run was asked for against what
+// telemetry says actually served it. Only checks what the caller pinned: an
+// unpinned run promises nothing, so it asserts nothing.
+func effectiveRuntimeAsserts(opts testOpts, res *ScenarioResult) []AssertResult {
+	var out []AssertResult
+	if want := normalizeProviderName(opts.provider); want != "" {
+		out = append(out, matchEffectiveRuntime("provider", want, res.ObservedProviders))
+	}
+	if want := strings.TrimSpace(opts.model); want != "" {
+		out = append(out, matchEffectiveRuntime("model", want, res.ObservedModels))
+	}
+	return out
+}
+
+// matchEffectiveRuntime fails when observed is empty (nothing confirms what
+// ran) or when anything in it differs from want. Every observed value must
+// match: a run that silently switched provider partway is still a failure.
+func matchEffectiveRuntime(kind, want string, observed []string) AssertResult {
+	result := AssertResult{
+		Clause:   "effective_" + kind + " matches requested",
+		Category: "runtime",
+		Want:     want,
+	}
+	if len(observed) == 0 {
+		result.Got = "no llm.start telemetry"
+		result.Note = "cannot confirm which " + kind + " ran; treat this scenario's result as unverified"
+		return result
+	}
+	result.Got = strings.Join(observed, ", ")
+	for _, got := range observed {
+		if !strings.EqualFold(got, want) {
+			result.Note = "the agent did not run the requested " + kind +
+				"; this result does not describe " + want
+			return result
+		}
+	}
+	result.OK = true
+	return result
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // ─── Telemetry → result aggregation ────────────────────────────────
@@ -1734,6 +1970,16 @@ func fetchStoredTelemetry(server *testServer, instanceID int64, since time.Time)
 
 func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 	switch ev.Type {
+	case "llm.start":
+		// The only event that reports which provider and model actually
+		// served the turn. llm.done carries tokens and the message but
+		// neither of these, so this case cannot be folded into it.
+		if provider := strings.TrimSpace(stringMapValue(ev.Data, "provider")); provider != "" {
+			res.ObservedProviders = appendUniqueString(res.ObservedProviders, normalizeProviderName(provider))
+		}
+		if model := strings.TrimSpace(stringMapValue(ev.Data, "model")); model != "" {
+			res.ObservedModels = appendUniqueString(res.ObservedModels, model)
+		}
 	case "llm.done":
 		res.Iterations++
 		res.Tokens.Prompt += int(numberValue(ev.Data["tokens_in"]))
@@ -2546,6 +2792,8 @@ func checkBudget(b Budget, tokens TokenSummary, cost float64) bool {
 // the runner can wire it into the agent's MCP list and tear it down
 // in reverse order at the end of the scenario.
 type depBundle struct {
+	spawnable bool
+	explicit  bool
 	name      string
 	installID int64
 	sidecar   *localSidecar
@@ -2558,7 +2806,7 @@ type depBundle struct {
 //
 // The returned bindings belong on the unit-under-test install. Dependencies
 // are returned in topological order so the caller can tear them down in reverse.
-func installDeps(server *testServer, appDir string, manifestYAML []byte, requested map[string]string) ([]depBundle, map[string]any, error) {
+func installDeps(server *testServer, appDir string, manifestYAML []byte, requested map[string]string, extraApps ...AppSetup) ([]depBundle, map[string]any, error) {
 	rollback := func(out []depBundle) {
 		for i := len(out) - 1; i >= 0; i-- {
 			out[i].sidecar.Stop()
@@ -2627,7 +2875,7 @@ func installDeps(server *testServer, appDir string, manifestYAML []byte, request
 				delete(visiting, key)
 				return nil, fmt.Errorf("install dep %q: %w", ref.Name, installErr)
 			}
-			sc, spawnErr := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, nil, "http://"+server.addr)
+			sc, spawnErr := spawnLocalSidecar(depDir, installed.InstallID, server.projectID, nil, nil, "http://"+server.addr, installed.OutboundToken)
 			if spawnErr != nil {
 				uninstallApp(server, installed.InstallID)
 				delete(visiting, key)
@@ -2648,6 +2896,50 @@ func installDeps(server *testServer, appDir string, manifestYAML []byte, request
 		return bindings, nil
 	}
 
+	for _, extra := range extraApps {
+		dir, err := filepath.Abs(extra.Path)
+		if err != nil {
+			rollback(out)
+			return nil, nil, err
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "apteva.yaml"))
+		if err != nil {
+			rollback(out)
+			return nil, nil, err
+		}
+		name := manifestNameFromYAML(raw)
+		if name == "" || name == manifestNameFromYAML(manifestYAML) {
+			rollback(out)
+			return nil, nil, fmt.Errorf("invalid extra app %q", name)
+		}
+		if _, exists := installedByName[name]; exists {
+			rollback(out)
+			return nil, nil, fmt.Errorf("duplicate extra app %q", name)
+		}
+		bindings, err := installManifestDeps(dir, raw, extra.Bindings)
+		if err != nil {
+			rollback(out)
+			return nil, nil, err
+		}
+		install, err := installApp(server, raw, dir, server.projectID, extra.Config, bindings)
+		if err != nil {
+			rollback(out)
+			return nil, nil, err
+		}
+		sc, err := spawnLocalSidecar(dir, install.InstallID, server.projectID, extra.Config, extra.Env, "http://"+server.addr, install.OutboundToken)
+		if err != nil {
+			uninstallApp(server, install.InstallID)
+			rollback(out)
+			return nil, nil, err
+		}
+		bundle := depBundle{name: name, installID: install.InstallID, sidecar: sc, explicit: true, spawnable: extra.Spawnable}
+		out = append(out, bundle)
+		installedByName[name] = bundle
+		if err := setSidecarURL(server, install.InstallID, sc.URL); err != nil {
+			rollback(out)
+			return nil, nil, err
+		}
+	}
 	bindings, err := installManifestDeps(appDir, manifestYAML, requested)
 	if err != nil {
 		rollback(out)
@@ -2917,8 +3209,9 @@ func parseRequiredAppRefs(manifestYAML []byte) ([]requiredAppRef, error) {
 }
 
 type installResp struct {
-	InstallID int64 `json:"install_id"`
-	AppID     int64 `json:"app_id"`
+	InstallID     int64  `json:"install_id"`
+	AppID         int64  `json:"app_id"`
+	OutboundToken string `json:"-"`
 }
 
 func findExistingAppInstall(server *testServer, appName string) (*installResp, error) {
@@ -3050,6 +3343,15 @@ func installApp(server *testServer, manifestYAML []byte, appDir, projectID strin
 			return nil, fmt.Errorf("prepare manual test manifest: %w", err)
 		}
 	}
+	var scope struct {
+		Scopes []string `yaml:"scopes"`
+	}
+	if err := yaml.Unmarshal(installManifest, &scope); err != nil {
+		return nil, err
+	}
+	if len(scope.Scopes) == 1 && scope.Scopes[0] == "global" {
+		projectID = ""
+	}
 	body := map[string]any{
 		"manifest_yaml": string(installManifest),
 		"project_id":    projectID,
@@ -3061,6 +3363,13 @@ func installApp(server *testServer, manifestYAML []byte, appDir, projectID strin
 	out := &installResp{}
 	if err := postJSON("http://"+server.addr+"/api/apps/install", server.apiKey, body, out); err != nil {
 		return nil, err
+	}
+	if server.dataDir != "" {
+		out.OutboundToken, err = provisionScenarioInstallToken(server.dataDir, out.InstallID)
+		if err != nil {
+			uninstallApp(server, out.InstallID)
+			return nil, fmt.Errorf("provision test app credential: %w", err)
+		}
 	}
 	return out, nil
 }
@@ -3177,6 +3486,33 @@ type scenarioConversation struct {
 	ID       string
 	ThreadID string
 	stream   io.ReadCloser
+}
+
+// postScenarioEvent sends a direct console event to the main agent, as the
+// dashboard does. Use initial_wake in event scenarios to avoid a startup turn
+// racing the event under test.
+func postScenarioEvent(ctx context.Context, server *testServer, agentID int64, prompt string) error {
+	body, err := json.Marshal(map[string]string{"message": prompt})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s/api/instances/%d/event", server.addr, agentID), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("post event returned HTTP %d: %s", resp.StatusCode, tcTruncate(string(raw), 300))
+	}
+	return nil
 }
 
 func startScenarioThread(server *testServer, agentID int64, spec ScenarioThreadSpec, prompt string) error {
@@ -3401,6 +3737,15 @@ func applyTestModelOverride(config map[string]any, provider, model string) {
 	if provider == "" || model == "" {
 		return
 	}
+	if !knownLLMProvider(provider) {
+		// The server matches this entry by provider key. An unrecognized
+		// spelling writes an override that matches no provider, pinning
+		// nothing while appearing to have applied — say so instead.
+		fmt.Fprintf(os.Stderr,
+			"⚠ model override skipped: %q is not a known provider key, so the override would target no provider (known: %s)\n",
+			provider, strings.Join(knownLLMProviders(), ", "))
+		return
+	}
 	config["providers"] = []map[string]any{{
 		"name": provider, "default": true,
 		"models": map[string]string{"large": model, "medium": model, "small": model},
@@ -3582,12 +3927,22 @@ func (s *localSidecar) Stop() {
 	}
 }
 
-func spawnLocalSidecar(appDir string, installID int64, projectID string, config, extraEnv map[string]string, gatewayURL string) (*localSidecar, error) {
+func spawnLocalSidecar(appDir string, installID int64, projectID string, config, extraEnv map[string]string, gatewayURL, outboundToken string) (*localSidecar, error) {
 	abs, err := filepath.Abs(appDir)
 	if err != nil {
 		return nil, err
 	}
-	binPath := filepath.Join(abs, "_test_sidecar_bin")
+	dataDir, err := os.MkdirTemp("", "apteva-scenario-*")
+	if err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			_ = os.RemoveAll(dataDir)
+		}
+	}()
+	binPath := filepath.Join(dataDir, "sidecar")
 	buildOutput, buildErr := buildLocalSidecarBinary(abs, binPath, false)
 	if buildErr != nil && strings.Contains(string(buildOutput), "not one of the workspace modules listed in go.work") {
 		buildOutput, buildErr = buildLocalSidecarBinary(abs, binPath, true)
@@ -3600,25 +3955,18 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config,
 		return nil, err
 	}
 	cfgJSON, _ := json.Marshal(config)
-	dataDir, _ := os.MkdirTemp("", "apteva-scenario-*")
 	cmd := exec.Command(binPath)
 	cmd.Dir = abs
-	// Two tokens, two roles:
-	//
-	//   APTEVA_APP_TOKEN — what the sidecar's withTokenAuth checks
-	//   on inbound requests. Empty in tests because the agent calls
-	//   /mcp directly (no auth header); empty triggers the SDK's
-	//   dev-mode pass-through.
-	//
-	//   APTEVA_OUTBOUND_TOKEN — what the sidecar attaches as Bearer
-	//   on calls it makes to peers via the platform proxy. We use
-	//   the install-token format ("dev-<id>"); the platform's
-	//   authMiddleware accepts those for /api/apps/* and the proxy
-	//   then swaps to the destination install's token.
+	// Inbound MCP stays in SDK dev mode. Outbound platform callbacks use a
+	// random install credential provisioned only in our disposable server DB.
+	// Keep legacy external-server behavior for older development servers.
+	if outboundToken == "" {
+		outboundToken = fmt.Sprintf("dev-%d", installID)
+	}
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("APTEVA_APP_PORT=%d", port),
 		"APTEVA_APP_TOKEN=",
-		"APTEVA_OUTBOUND_TOKEN="+fmt.Sprintf("dev-%d", installID),
+		"APTEVA_OUTBOUND_TOKEN="+outboundToken,
 		"APTEVA_INSTALL_ID="+fmt.Sprintf("%d", installID),
 		"APTEVA_PROJECT_ID="+projectID,
 		"APTEVA_APP_CONFIG="+string(cfgJSON),
@@ -3640,6 +3988,7 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config,
 		_ = cmd.Process.Kill()
 		return nil, err
 	}
+	started = true
 	return &localSidecar{URL: url, cmd: cmd, dataDir: dataDir, binPath: binPath}, nil
 }
 
@@ -3736,21 +4085,13 @@ func loadTestEnvFile() map[string]string {
 // envHasProviderKey reports whether at least one LLM provider key is
 // present in the env slice. Mirrors the auto-detect order in the
 // core's provider.go so the warning matches what'd actually be picked.
+// envHasProviderKey reports whether env carries a credential for any known
+// provider. It answers "can this server run an agent at all", which is a
+// weaker question than "can it run the provider that was requested" — see
+// envHasAnyKey(env, providerEnvKeys(provider)) for the latter.
 func envHasProviderKey(env []string) bool {
-	keys := []string{
-		"OPENCODE_GO_API_KEY", "FIREWORKS_API_KEY", "ANTHROPIC_API_KEY",
-		"GOOGLE_API_KEY", "OPENAI_API_KEY", "OPENAI_CODEX_ACCESS_TOKEN",
-		"NVIDIA_API_KEY", "OLLAMA_HOST",
-	}
-	have := map[string]bool{}
-	for _, kv := range env {
-		eq := strings.IndexByte(kv, '=')
-		if eq > 0 {
-			have[kv[:eq]] = true
-		}
-	}
-	for _, k := range keys {
-		if have[k] {
+	for _, keys := range providerCredentialEnv {
+		if envHasAnyKey(env, keys) {
 			return true
 		}
 	}
