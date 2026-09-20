@@ -1021,6 +1021,7 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 	}
 
 	var credentials map[string]string
+	authType := "bearer"
 	switch provider {
 	case "openai-codex":
 		accessToken := envValue(env, "OPENAI_CODEX_ACCESS_TOKEN")
@@ -1031,6 +1032,19 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 		if accountID := envValue(env, "OPENAI_CODEX_ACCOUNT_ID"); accountID != "" {
 			credentials["account_id"] = accountID
 		}
+	case "opencode-go":
+		// OpenCode Go is connection-backed: the server injects
+		// OPENCODE_GO_API_KEY into the core from a connection row's
+		// credentials (see integrations catalog opencode-go.json
+		// runtime.env) and has no path that seeds a provider from its own
+		// process environment. Without a row GetProviderPool is empty and
+		// instance start fails with "no LLM provider configured".
+		apiKey := envValue(env, "OPENCODE_GO_API_KEY")
+		if apiKey == "" {
+			return fmt.Errorf("opencode-go requires OPENCODE_GO_API_KEY in the environment or ~/.apteva/test.env")
+		}
+		credentials = map[string]string{"api_key": apiKey}
+		authType = "api_key"
 	default:
 		// Other providers retain their existing Server bootstrap behavior:
 		// the server discovers them from the environment rather than from a
@@ -1058,7 +1072,7 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 		"source":      "local",
 		"app_slug":    provider,
 		"name":        "Tier 3 " + provider,
-		"auth_type":   "bearer",
+		"auth_type":   authType,
 		"credentials": credentials,
 		"project_id":  server.projectID,
 		"created_via": "app_install",
@@ -3444,8 +3458,32 @@ func installApp(server *testServer, manifestYAML []byte, appDir, projectID strin
 			uninstallApp(server, out.InstallID)
 			return nil, fmt.Errorf("provision test app credential: %w", err)
 		}
+	} else {
+		out.OutboundToken, err = fetchScenarioInstallToken(server, out.InstallID)
+		if err != nil {
+			uninstallApp(server, out.InstallID)
+			return nil, fmt.Errorf("request test app credential: %w", err)
+		}
 	}
 	return out, nil
+}
+
+func fetchScenarioInstallToken(server *testServer, installID int64) (string, error) {
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := postJSON(
+		fmt.Sprintf("http://%s/api/apps/installs/%d/runtime-token", server.addr, installID),
+		server.apiKey,
+		map[string]any{},
+		&out,
+	); err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(out.Token, "app_") {
+		return "", fmt.Errorf("server returned an invalid app credential")
+	}
+	return out.Token, nil
 }
 
 func inlineLocalSkillBodies(raw []byte, appDir string) ([]byte, error) {
@@ -3824,6 +3862,13 @@ func applyTestModelOverride(config map[string]any, provider, model string) {
 		"name": provider, "default": true,
 		"models": map[string]string{"large": model, "medium": model, "small": model},
 	}}
+	// The server rebuilds config["providers"] from the live pool at instance
+	// start (buildAgentCoreProviderConfigs), so the array above is discarded.
+	// The pin it actually honors is config["model_override"] — see
+	// server/instances.go configuredAgentModelOverride, which expects
+	// {"provider": ..., "model": ...}. Write that shape too or the override
+	// silently does nothing and the agent runs the pool's default model.
+	config["model_override"] = map[string]any{"provider": provider, "model": model}
 }
 
 // manifestNameFromYAML is a tiny YAML field grab — we already have
@@ -4031,11 +4076,11 @@ func spawnLocalSidecar(appDir string, installID int64, projectID string, config,
 	cfgJSON, _ := json.Marshal(config)
 	cmd := exec.Command(binPath)
 	cmd.Dir = abs
-	// Inbound MCP stays in SDK dev mode. Outbound platform callbacks use a
-	// random install credential provisioned only in our disposable server DB.
-	// Keep legacy external-server behavior for older development servers.
+	// Inbound MCP stays in SDK dev mode. Outbound platform callbacks use the
+	// random install credential provisioned in the disposable server DB or
+	// issued by an explicitly selected external server.
 	if outboundToken == "" {
-		outboundToken = fmt.Sprintf("dev-%d", installID)
+		return nil, fmt.Errorf("missing outbound app credential for install %d", installID)
 	}
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("APTEVA_APP_PORT=%d", port),
