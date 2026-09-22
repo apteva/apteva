@@ -99,7 +99,7 @@ func TestProvisionSpawnedTestProviderRejectsUnknownProvider(t *testing.T) {
 // Env-bootstrapped providers stay supported when their own key is present.
 func TestProvisionSpawnedTestProviderAllowsEnvBootstrap(t *testing.T) {
 	server := &testServer{addr: "127.0.0.1:1", apiKey: "k", projectID: "p1"}
-	if err := provisionSpawnedTestProvider(server, "opencode-go", []string{"OPENCODE_GO_API_KEY=key"}); err != nil {
+	if err := provisionSpawnedTestProvider(server, "anthropic", []string{"ANTHROPIC_API_KEY=key"}); err != nil {
 		t.Fatalf("env bootstrap should succeed: %v", err)
 	}
 }
