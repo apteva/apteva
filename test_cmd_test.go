@@ -1062,6 +1062,53 @@ runtime:
 	}
 }
 
+func TestExternalServerInstallObtainsRuntimeToken(t *testing.T) {
+	var installed, tokenIssued bool
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/apps/install":
+			installed = true
+			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer owner-key" {
+				t.Fatalf("install request = %s auth=%q", r.Method, r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"install_id":7,"app_id":3}`))
+		case "/api/apps/installs/7/runtime-token":
+			tokenIssued = true
+			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer owner-key" {
+				t.Fatalf("token request = %s auth=%q", r.Method, r.Header.Get("Authorization"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"app_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer httpServer.Close()
+
+	server := &testServer{
+		addr:      strings.TrimPrefix(httpServer.URL, "http://"),
+		apiKey:    "owner-key",
+		projectID: "project-1",
+	}
+	manifest := []byte(`schema: apteva-app/v1
+name: test-app
+version: 1.0.0
+runtime:
+  kind: source
+  source: {repo: github.com/apteva/test-app, ref: main, entry: .}
+`)
+	got, err := installApp(server, manifest, t.TempDir(), server.projectID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !installed || !tokenIssued {
+		t.Fatalf("installed=%v token_issued=%v", installed, tokenIssued)
+	}
+	if got.OutboundToken != "app_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+		t.Fatal("external install did not retain the issued runtime token")
+	}
+}
+
 func TestInlineLocalSkillBodiesUsesAppCheckout(t *testing.T) {
 	appDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(appDir, "skills"), 0755); err != nil {
