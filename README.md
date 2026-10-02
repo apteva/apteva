@@ -133,6 +133,21 @@ Then open [http://localhost:5280](http://localhost:5280). Pin a numbered image t
 
 [Apteva Cloud](https://apteva.ai/cloud) runs the same platform without managing the server yourself.
 
+### Your domain and HTTPS
+
+Use **Settings → Server → Domain & HTTPS** or `apteva https setup` for a guided
+setup. Choose native automatic certificates, Cloudflare DNS validation, an
+existing proxy/tunnel, or an imported certificate. No Domains app is required.
+
+```bash
+apteva https setup agents.example.com --accept-terms
+apteva https status
+apteva https doctor
+```
+
+Use `apteva https setup --help` for Cloudflare, certificate import, listener ports
+and instance selection. A new public URL activates only after HTTPS verification.
+
 ## Bring your models
 
 Use hosted or local models, choose different providers per project, and switch models without rebuilding your agents. Apteva supports OpenAI, Anthropic, Google, Fireworks, Ollama, NVIDIA, Venice, xAI, and other compatible providers.

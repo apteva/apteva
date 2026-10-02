@@ -17,6 +17,7 @@ const (
 	cliModeRollback
 	cliModeGeoIP
 	cliModeVersion
+	cliModeHTTPS
 )
 
 type cliInvocation struct {
@@ -50,6 +51,8 @@ func parseCLIInvocation(args []string) (cliInvocation, error) {
 		return cliInvocation{mode: cliModeRollback, args: rest}, nil
 	case "geoip":
 		return cliInvocation{mode: cliModeGeoIP, args: rest}, nil
+	case "https":
+		return cliInvocation{mode: cliModeHTTPS, args: rest}, nil
 	case "version", "--version", "-v":
 		if len(rest) != 0 {
 			return cliInvocation{}, fmt.Errorf("%s does not accept additional arguments", first)

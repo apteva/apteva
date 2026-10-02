@@ -25,6 +25,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -78,6 +79,20 @@ const (
 )
 
 func cmdUpdate(args []string) int {
+	lock, err := acquireUpdateLock()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer lock.Close()
+	if job, err := readUpdateJob(); err == nil && (!updateJobTerminal(job.State) || job.State == "recovery_required") {
+		fmt.Fprintln(os.Stderr, "a dashboard update is pending or needs recovery; inspect platform-update.json")
+		return 1
+	}
+	return runUpdate(args, nil)
+}
+
+func runUpdate(args []string, job *dashboardUpdateJob) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	check := fs.Bool("check", false, "show what would update without applying")
@@ -112,6 +127,10 @@ func cmdUpdate(args []string) int {
 	}
 	if m.Version == "" {
 		fmt.Fprintln(os.Stderr, "manifest missing version field")
+		return 1
+	}
+	if job != nil && m.Version != job.Target {
+		fmt.Fprintln(os.Stderr, "published release changed; review the new version before updating")
 		return 1
 	}
 
@@ -186,6 +205,10 @@ func cmdUpdate(args []string) int {
 		}
 		return 1
 	}
+	if job != nil && len(art.SHA256) != 64 {
+		fmt.Fprintln(os.Stderr, "dashboard updates require a release checksum")
+		return 1
+	}
 
 	if !*yes {
 		fmt.Fprint(os.Stderr, "proceed? [y/N] ")
@@ -203,6 +226,7 @@ func cmdUpdate(args []string) int {
 	}
 
 	// 1. Download into ~/.apteva/releases/. Cached so a flake mid-
+	job.phase("downloading", "Downloading the release bundle")
 	//    update can resume without re-downloading.
 	tarballName := fmt.Sprintf("apteva-%s-%s-%s.tar.gz", m.Version, runtime.GOOS, runtime.GOARCH)
 	tarball := filepath.Join(releasesDir(), tarballName)
@@ -221,6 +245,7 @@ func cmdUpdate(args []string) int {
 			return 1
 		}
 		if art.SHA256 != "" {
+			job.phase("verifying", "Verifying the release checksum")
 			fmt.Fprintln(os.Stderr, "verifying sha256…")
 			if err := verifySHA256(tarball, art.SHA256); err != nil {
 				fmt.Fprintf(os.Stderr, "checksum mismatch: %v\n", err)
@@ -262,18 +287,47 @@ func cmdUpdate(args []string) int {
 	}
 
 	// 4. Preflight — run apteva-server --preflight against the new
+	job.phase("preflight", "Checking the new version and database migrations")
 	//    binary. Loads config, runs DB migrations dry, opens an
 	//    ephemeral port, exits 0. Catches the "new binary won't
 	//    even boot" class of failure BEFORE we flip the symlink.
 	fmt.Fprintln(os.Stderr, "preflight…")
-	preflight := osexec.Command(filepath.Join(target, "apteva-server"), "--preflight")
+	preflightCtx, cancelPreflight := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancelPreflight()
+	preflight := osexec.CommandContext(preflightCtx, filepath.Join(target, "apteva-server"), "--preflight")
 	preflight.Env = append(os.Environ(), "APTEVA_HOME="+aptevaDir())
+	if job != nil {
+		job.mu.Lock()
+		job.Backup = filepath.Join(aptevaDir(), "update-backups", job.ID, "apteva.db")
+		job.mu.Unlock()
+		preflight.Env = append(preflight.Env, "APTEVA_UPDATE_PREFLIGHT="+job.Backup)
+	}
 	preflight.Stdout = os.Stderr
 	preflight.Stderr = os.Stderr
 	if err := preflight.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "preflight failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "(new version not activated — old version still in use)")
 		return 1
+	}
+	if job != nil {
+		raw, err := os.ReadFile(job.Backup + ".json")
+		var report struct {
+			Version       string `json:"version"`
+			SchemaChanged bool   `json:"schema_changed"`
+			RollbackSafe  bool   `json:"rollback_safe"`
+		}
+		if err != nil || json.Unmarshal(raw, &report) != nil || report.Version != job.Target {
+			fmt.Fprintln(os.Stderr, "new release did not produce a matching database preflight report")
+			return 1
+		}
+		job.mu.Lock()
+		job.SchemaChanged = report.SchemaChanged
+		job.RollbackSafe = report.RollbackSafe
+		job.mu.Unlock()
+		if err := validateUpdateService(job.Request); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 
 	if *dryRun {
@@ -286,6 +340,10 @@ func cmdUpdate(args []string) int {
 	// the effective configuration while the old version is still active. A
 	// migration failure must never leave bin/current pointing at the new build.
 	serviceScope, serviceInstalled := detectInstalledScope()
+	if job != nil {
+		serviceScope, _ = updateScope(job.Request.Method)
+		serviceInstalled = true
+	}
 	if serviceInstalled && runtime.GOOS == "linux" {
 		fmt.Fprintln(os.Stderr, "checking systemd update compatibility…")
 		if err := ensureSystemdUpdateCompatibility(serviceScope); err != nil {
@@ -299,9 +357,20 @@ func cmdUpdate(args []string) int {
 	//    renames it onto `current` — POSIX-atomic on the same
 	//    filesystem.
 	prior := activeVersion()
+	if err := job.phase("activating", "Activating the new version"); err != nil {
+		fmt.Fprintln(os.Stderr, "cannot persist update state before activation:", err)
+		return 1
+	}
 	fmt.Fprintf(os.Stderr, "activating v%s…\n", m.Version)
 	if err := pointSymlinks(m.Version); err != nil {
 		fmt.Fprintf(os.Stderr, "activate failed: %v\n", err)
+		if job != nil {
+			// The current symlink may have changed before refreshing the other
+			// entry points failed. No new process has started yet.
+			if restoreErr := pointSymlinks(prior); restoreErr != nil {
+				job.phase("recovery_required", "Activation and restoring the previous symlinks failed: "+restoreErr.Error())
+			}
+		}
 		return 1
 	}
 
@@ -330,20 +399,34 @@ func cmdUpdate(args []string) int {
 	if serviceInstalled {
 		if err := writeLifecycleIntent("update", *agentPolicy); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to prepare update restart: %v\n", err)
+			if job != nil {
+				_ = job.recoverActivation(serviceScope, err)
+			}
 			return 1
 		}
+		job.phase("restarting", "Restarting the service and reconnecting")
 		fmt.Fprintln(os.Stderr, "  restarting service…")
 		healthURL := updateHealthURL()
+		waitHealthy := waitForUpdateHealth
+		if job != nil {
+			healthURL = fmt.Sprintf("http://127.0.0.1:%d/health", job.Request.Port)
+			waitHealthy = func(_ string, timeout time.Duration) error {
+				return waitForUpdateVersion(job.Request.Port, job.Target, timeout)
+			}
+		}
 		if err := restartAndVerifyUpdatedService(
 			serviceScope,
 			healthURL,
 			60*time.Second,
 			restartServiceForRollback,
-			waitForUpdateHealth,
+			waitHealthy,
 		); err != nil {
 			clearLifecycleIntent()
 			fmt.Fprintf(os.Stderr, "update activation failed: %v\n", err)
 			fmt.Fprintln(os.Stderr, "check `apteva service status` and `apteva service logs`")
+			if job != nil {
+				_ = job.recoverActivation(serviceScope, err)
+			}
 			return 1
 		}
 		fmt.Fprintf(os.Stderr, "  service healthy: %s\n", healthURL)

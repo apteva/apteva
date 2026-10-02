@@ -45,6 +45,16 @@ func cmdVersions(args []string) int {
 }
 
 func cmdRollback(args []string) int {
+	lock, err := acquireUpdateLock()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer lock.Close()
+	if job, err := readUpdateJob(); err == nil && !updateJobTerminal(job.State) {
+		fmt.Fprintln(os.Stderr, "a dashboard update is pending; wait for it to finish before rolling back")
+		return 1
+	}
 	all, err := installedVersions()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "apteva rollback: %v\n", err)

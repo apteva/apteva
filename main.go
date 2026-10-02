@@ -42,6 +42,9 @@ func main() {
 		return
 	}
 	if invocation.mode != cliModeRun {
+		if invocation.mode == cliModeUpdate && len(invocation.args) > 0 && strings.HasPrefix(invocation.args[0], "--dashboard-") {
+			os.Exit(cmdDashboardUpdate(invocation.args))
+		}
 		// Known subcommands retain the legacy layout migration, but unknown
 		// commands have already exited without touching local state.
 		_ = migrateLegacyLayout()
@@ -60,6 +63,8 @@ func main() {
 			os.Exit(cmdRollback(invocation.args))
 		case cliModeGeoIP:
 			os.Exit(cmdGeoIP(invocation.args))
+		case cliModeHTTPS:
+			os.Exit(cmdHTTPS(invocation.args))
 		}
 	}
 
@@ -72,6 +77,7 @@ func main() {
 Commands:
   test       Run agent/provider scenarios
   update     Update Apteva
+  https      Set up a domain and HTTPS, or diagnose its connection
   service    Manage the system service
   agents     Manage agent runtime rollouts
   versions   List installed versions
