@@ -1,27 +1,19 @@
 <p align="center">
-  <a href="https://apteva.ai">
-    <img src="https://apteva.ai/icon.png" width="96" alt="Apteva logo" />
-  </a>
+  <a href="https://apteva.ai"><img src="https://apteva.ai/icon.png" width="80" alt="Apteva logo" /></a>
 </p>
 
 <h1 align="center">Apteva</h1>
 
-<p align="center">
-  <strong>AI agents, batteries included.</strong>
-</p>
+<p align="center"><strong>The open-source AI operating system.</strong></p>
 
 <p align="center">
-  The open-source, self-hosted platform for agents that keep working after the chat ends.
-</p>
-
-<p align="center">
-  Give agents goals. They remember context, react to events, schedule and resume work,<br />
-  delegate to workers, and operate through apps and 590+ integrations.
+  Run persistent agents, install apps, and connect your tools in one workspace.<br />
+  Agents remember, schedule work, and act—with permissions and activity you can inspect.
 </p>
 
 <p align="center">
   <a href="https://apteva.ai">Website</a> ·
-  <a href="https://docs.apteva.ai/get-started">Docs</a> ·
+  <a href="https://docs.apteva.ai/">Documentation</a> ·
   <a href="https://apteva.ai/apps">Apps</a> ·
   <a href="https://apteva.ai/cloud">Cloud</a> ·
   <a href="https://discord.gg/apteva">Discord</a>
@@ -30,94 +22,62 @@
 <p align="center">
   <a href="https://github.com/apteva/apteva/releases/latest"><img src="https://img.shields.io/github/v/release/apteva/apteva?style=flat-square" alt="Latest release" /></a>
   <a href="https://www.npmjs.com/package/apteva"><img src="https://img.shields.io/npm/v/apteva?style=flat-square" alt="npm version" /></a>
-  <a href="https://github.com/apteva/apteva/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/apteva/apteva/release.yml?style=flat-square&label=release" alt="Release status" /></a>
-  <a href="https://github.com/apteva/apteva"><img src="https://img.shields.io/github/stars/apteva/apteva?style=flat-square" alt="GitHub stars" /></a>
+  <a href="https://github.com/apteva/apteva/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/apteva/apteva/ci.yml?style=flat-square&label=tests" alt="CLI checks" /></a>
 </p>
 
----
-
-## Start in 30 seconds
+## Get started
 
 ```bash
 npx apteva
 ```
 
-On macOS or Linux with Node.js 18+. The installer downloads the current native release. Connect a model provider, create an agent, and Apteva opens the local dashboard.
+On macOS or Linux with Node.js 18+. Apteva downloads the native release and opens your local dashboard. Connect a model provider, create an agent, and give it a responsibility.
 
-Apteva runs locally by default. Your agents, credentials, memory, and operational data stay under your control.
+Self-host free on your own machine or infrastructure, or use [Apteva Cloud](https://apteva.ai/cloud) for a managed workspace. [Read the setup guide →](https://docs.apteva.ai/#quickstart)
 
-Local country lookup is enabled by default using DB-IP Country Lite, downloaded
-anonymously and refreshed monthly. Use `apteva geoip setup --test` for
-development, or provide a MaxMind account ID and license key to use GeoLite2
-Country instead. Server refreshes configured databases in the background and
-keeps serving with the last known-good copy if an update fails. DB-IP Country
-Lite data is provided by [DB-IP](https://db-ip.com) under
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+## An operating system around your agents
 
-## Agents are easy to demo. Hard to operate.
+Apteva combines a persistent agent runtime, an app system, and a workspace that grows around what you install. Give agents ongoing responsibilities, connect the systems they need, and keep their work in view.
 
-A prototype agent can call a tool. A production agent also needs durable state, memory, permissions, events, schedules, workers, retries, dashboards, integrations, and deployment.
+<table>
+  <tr>
+    <td width="33%"><img src="https://apteva.ai/product-concepts/persistent-agent.png" alt="Persistent agent concept: remembered context, a prepared reply, and a scheduled follow-up" /></td>
+    <td width="33%"><img src="https://apteva.ai/product-concepts/dashboard.png" alt="Dashboard concept: agent activity, tool usage, and decisions awaiting review" /></td>
+    <td width="33%"><img src="https://apteva.ai/product-concepts/apps.png" alt="App library concept: CRM, storage, code, tasks, and other installable apps" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Persistent agents</strong></td>
+    <td align="center"><strong>One workspace</strong></td>
+    <td align="center"><strong>Installable apps</strong></td>
+  </tr>
+</table>
 
-Apteva packages that operating layer into one workspace. Instead of rebuilding the same infrastructure for every agent, you get a complete system for ongoing operations.
+<p align="center"><sub>Product concept illustrations from <a href="https://apteva.ai">apteva.ai</a>.</sub></p>
 
-| | What Apteva provides |
+| | What you get |
 |---|---|
-| **Keeps working** | Agents react to events, follow up on unresolved work, and continue across hours or days. |
-| **Durable by default** | Tasks, schedules, history, memory, and progress survive restarts and closed chats. |
-| **A complete operating layer** | Runtime, server, dashboard, channels, apps, integrations, files, logs, and deployment work together. |
-| **Apps, not just tool wrappers** | One app can add tools, UI panels, routes, workers, channels, memory, and domain workflows. |
-| **Multi-agent operations** | Agents delegate bounded work to dedicated workers while retaining durable ownership and visibility. |
-| **Control where it runs** | Use Apteva locally, self-host it on a VPS or Docker, or run it on Apteva Cloud. |
+| **Agents that keep working** | Memory across conversations, events, scheduled follow-ups, and durable tasks that survive restarts. |
+| **A workspace shaped by your apps** | Install CRM, storage, tasks, code, or other apps. Each can bring tools, its own UI, routes, channels, and workers. |
+| **Connections to your tools** | Hundreds of integrations, including GitHub, Slack, Stripe, Shopify, HubSpot, Google Workspace, and databases. |
+| **Control you can inspect** | Set goals and permissions, follow activity and tool calls, and review actions that need human judgment. |
+| **Multi-agent work** | Delegate bounded tasks to workers while keeping progress and ownership visible. |
+| **Your models and infrastructure** | Choose hosted or local models. Run locally, self-host, or use Cloud. |
 
-## What agents can operate
+## Give an agent a responsibility
 
-| Operation | Examples |
-|---|---|
-| **Customer support** | Triage tickets, search knowledge bases, draft replies, and escalate when human judgment is needed. |
-| **Sales and CRM** | Enrich leads, schedule follow-ups, update pipelines, and surface deals that need attention. |
-| **Content and growth** | Research, create assets, publish across channels, and monitor performance. |
-| **Engineering and DevOps** | Watch deployments, investigate alerts, run tests, prepare patches, and coordinate incidents. |
-| **Back-office work** | Process invoices, reconcile data, manage inventory, and coordinate vendors. |
-| **Devices and edge systems** | Run the Go-based agent core close to browsers, machines, robots, and local infrastructure. |
+- **Support:** triage incoming tickets, find answers, prepare replies, and escalate decisions.
+- **Sales:** enrich leads, update your CRM, and follow up when a deal needs attention.
+- **Content:** research topics, create assets, publish through connected tools, and track results.
+- **Engineering:** monitor deployments, investigate alerts, run tests, and prepare fixes.
+- **Operations:** process invoices, reconcile records, and coordinate recurring work.
 
-## Apps turn agents into operators
-
-Apteva apps extend the platform with any combination of:
-
-- MCP tools and integrations
-- Dashboard and chat UI
-- HTTP routes and webhooks
-- Background workers and scheduled jobs
-- Channels, memory, and shared operational data
-
-The current catalog contains **590+ integrations**, including GitHub, Slack, Stripe, Shopify, Airtable, Twilio, HubSpot, Google Workspace, cloud providers, databases, media tools, and model APIs.
-
-[Browse apps](https://apteva.ai/apps) · [Explore the integrations repository](https://github.com/apteva/integrations) · [Build with the App SDK](https://github.com/apteva/app-sdk)
-
-## How it works
-
-```mermaid
-flowchart LR
-    U["Dashboard, CLI, and channels"] --> S["Apteva server"]
-    E["Events, webhooks, and schedules"] --> S
-    S --> A["Persistent agent runtimes"]
-    A --> W["Durable tasks and workers"]
-    S --> P["Apps"]
-    P --> C["Tools, UI, routes, channels, and memory"]
-    P --> I["590+ integrations"]
-```
-
-The CLI installs and starts the platform. The server manages authentication, projects, agent runtimes, apps, connections, events, and the dashboard. Each agent core owns its thinking loop, threads, tools, memory, and persistent history.
+[Explore use cases →](https://apteva.ai/use-cases)
 
 ## Run it your way
 
-### Local
+**Local:** run `npx apteva`. Your workspace data stays on your machine; hosted model providers and connected services receive the requests you send to them.
 
-```bash
-npx apteva
-```
-
-### Docker
+**Docker:** run the published image with persistent storage:
 
 ```bash
 docker run -d \
@@ -127,53 +87,34 @@ docker run -d \
   ghcr.io/apteva/apteva:latest
 ```
 
-Then open [http://localhost:5280](http://localhost:5280). Pin a numbered image tag instead of `latest` for production deployments.
+Open [http://localhost:5280](http://localhost:5280). Pin a numbered image tag for production. See [deployment and HTTPS setup](docs/deployment.md) for your own domain.
 
-### Cloud
+**Cloud:** [Apteva Cloud](https://apteva.ai/cloud) runs the same platform without managing the server yourself.
 
-[Apteva Cloud](https://apteva.ai/cloud) runs the same platform without managing the server yourself.
+Use OpenAI, Anthropic, Google, Fireworks, Ollama, NVIDIA, Venice, xAI, or other compatible model providers. Choose different providers per project and switch models without rebuilding your agents.
 
-### Your domain and HTTPS
+## Build on Apteva
 
-Use **Settings → Server → Domain & HTTPS** or `apteva https setup` for a guided
-setup. Choose native automatic certificates, Cloudflare DNS validation, an
-existing proxy/tunnel, or an imported certificate. No Domains app is required.
+Write an app with the [App SDK](https://github.com/apteva/app-sdk) to add tools, UI panels, HTTP routes, workers, channels, and operational data. Your app sits alongside the first-party apps in the same workspace.
 
-```bash
-apteva https setup agents.example.com --accept-terms
-apteva https status
-apteva https doctor
-```
+[Browse apps](https://apteva.ai/apps) · [Build an app](https://apteva.ai/developers/apps) · [Platform API](https://apteva.ai/developers/api)
 
-Use `apteva https setup --help` for Cloudflare, certificate import, listener ports
-and instance selection. A new public URL activates only after HTTPS verification.
-
-## Bring your models
-
-Use hosted or local models, choose different providers per project, and switch models without rebuilding your agents. Apteva supports OpenAI, Anthropic, Google, Fireworks, Ollama, NVIDIA, Venice, xAI, and other compatible providers.
-
-## Repositories
+This repository contains the **CLI, npm installer, local lifecycle, and platform release pipeline**. The rest of the operating system lives in companion repositories:
 
 | Repository | Role |
 |---|---|
-| [`apteva/apteva`](https://github.com/apteva/apteva) | CLI, installer, local lifecycle, and releases |
-| [`apteva/core`](https://github.com/apteva/core) | Persistent agent runtime and thinking loop |
-| [`apteva/server`](https://github.com/apteva/server) | Management API, agent orchestration, apps, and embedded dashboard |
-| [`apteva/dashboard`](https://github.com/apteva/dashboard) | React administration and operations UI |
-| [`apteva/integrations`](https://github.com/apteva/integrations) | Integration catalog, OAuth, webhooks, and MCP generation |
-| [`apteva/apps`](https://github.com/apteva/apps) | First-party operational apps |
-| [`apteva/app-sdk`](https://github.com/apteva/app-sdk) | Go SDK for building Apteva apps |
-| [`apteva/computer`](https://github.com/apteva/computer) | Browser and computer-use backends |
+| [core](https://github.com/apteva/core) | Persistent agent runtime and thinking loop |
+| [server](https://github.com/apteva/server) | Management API, orchestration, apps, and embedded dashboard |
+| [dashboard](https://github.com/apteva/dashboard) | Administration and operations UI |
+| [apps](https://github.com/apteva/apps) | First-party operational apps |
+| [integrations](https://github.com/apteva/integrations) | Integration catalog, OAuth, webhooks, and MCP generation |
+| [app-sdk](https://github.com/apteva/app-sdk) | Go SDK for building apps |
+| [computer](https://github.com/apteva/computer) | Browser and computer-use backends |
+
+For source builds and the repository layout, start with the [development guide](docs/development.md). See also [app testing scenarios](docs/testing-scenarios.md) and [multi-agent topology tests](docs/test-topology.md).
 
 ## Community
 
-Read the [documentation](https://docs.apteva.ai/get-started), join the [Discord community](https://discord.gg/apteva), or open an [issue](https://github.com/apteva/apteva/issues) for bugs and feature requests.
+Read the [documentation](https://docs.apteva.ai/), join [Discord](https://discord.gg/apteva), or open an [issue](https://github.com/apteva/apteva/issues) for bugs and feature requests.
 
-If Apteva helps you build agents that do real work, [star the repository](https://github.com/apteva/apteva) so more builders can find it.
-
----
-
-<p align="center">
-  <strong>Build agents that operate, not just respond.</strong><br />
-  <a href="https://apteva.ai">apteva.ai</a>
-</p>
+Open source. Yours to run.

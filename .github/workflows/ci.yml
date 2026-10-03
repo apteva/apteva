@@ -1,0 +1,25 @@
+name: CLI checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Test CLI
+        run: go test ./...
+      - name: Verify root build and release version
+        run: |
+          go build -ldflags="-X main.Version=ci" -o "$RUNNER_TEMP/apteva" .
+          test "$("$RUNNER_TEMP/apteva" version)" = "apteva ci"
+          "$RUNNER_TEMP/apteva" --help

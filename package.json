@@ -1,7 +1,7 @@
 {
   "name": "apteva",
   "version": "0.80.0",
-  "description": "AI agent platform with multi-thread orchestration, MCP integrations, and dashboard",
+  "description": "The open-source AI operating system for persistent agents, apps, and integrations",
   "bin": {
     "apteva": "./cli.js"
   },
@@ -10,9 +10,11 @@
   },
   "keywords": [
     "ai",
-    "agent",
+    "ai-agents",
+    "ai-operating-system",
+    "self-hosted",
     "mcp",
-    "orchestration",
+    "automation",
     "llm"
   ],
   "license": "MIT",
@@ -26,5 +28,6 @@
   "files": [
     "cli.js",
     "install.js"
-  ]
+  ],
+  "homepage": "https://apteva.ai"
 }
