@@ -441,11 +441,11 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		mcp := topologyMCP(node, appName, relay.URL, s.Setup.App.Spawnable)
 		// Bind the tested install so every agent receives its app skills; the
 		// project-scoped relay preserves caller identity on MCP requests.
-		instance, err := tcCreateInstance(node.Server, projectID, name, directive, mode, opts.provider, opts.model, mcp, []int64{node.Install.InstallID}, false, nil)
+		instance, err := tcCreateInstance(node.Server, projectID, name, directive, mode, opts.provider, opts.model, mcp, []int64{node.Install.InstallID}, false, nil, nil)
 		if err != nil {
 			return nil, err
 		}
-		if err := writeInstanceDiskConfig(node.Server, instance.ID, directive, mode, opts.provider, opts.model, mcp, false, nil); err != nil {
+		if err := writeInstanceDiskConfig(node.Server, instance.ID, directive, mode, opts.provider, opts.model, mcp, nil, false, nil, nil); err != nil {
 			tcDeleteInstance(node.Server, instance.ID)
 			return nil, err
 		}
@@ -499,7 +499,7 @@ func runTopologyScenario(primaryServer *testServer, s Scenario, opts testOpts) (
 		}
 		node := runtime.Nodes[agent.Node]
 		mcp := topologyMCP(node, appName, node.Relays[agent.ProjectID].URL, s.Setup.App.Spawnable)
-		if err := writeInstanceDiskConfig(agent.Server, agent.Instance.ID, directive, agent.Mode, opts.provider, opts.model, mcp, false, nil); err != nil {
+		if err := writeInstanceDiskConfig(agent.Server, agent.Instance.ID, directive, agent.Mode, opts.provider, opts.model, mcp, nil, false, nil, nil); err != nil {
 			res.Error = fmt.Sprintf("write agent %s config: %v", agent.ID, err)
 			return res
 		}

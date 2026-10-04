@@ -107,14 +107,18 @@ type Scenario struct {
 type ScenarioSetup struct {
 	Topology ScenarioTopology `yaml:"topology"`
 	// Driver performs multi-step client interactions; the runner owns all resources.
-	Driver          []string            `yaml:"driver"`
-	Agents          int                 `yaml:"agents"`
-	Apps            []AppSetup          `yaml:"apps"`
-	App             AppSetup            `yaml:"app"`
-	Mode            string              `yaml:"mode"`        // autonomous | cautious | learn
-	Interaction     string              `yaml:"interaction"` // autonomous (default) | event (main) | thread | conversation (legacy)
-	Thread          *ScenarioThreadSpec `yaml:"thread"`
-	Config          map[string]string   `yaml:"config"`
+	Driver      []string            `yaml:"driver"`
+	Agents      int                 `yaml:"agents"`
+	Apps        []AppSetup          `yaml:"apps"`
+	App         AppSetup            `yaml:"app"`
+	Mode        string              `yaml:"mode"`        // autonomous | cautious | learn
+	Interaction string              `yaml:"interaction"` // autonomous (default) | event (main) | thread | conversation (legacy)
+	Thread      *ScenarioThreadSpec `yaml:"thread"`
+	Config      map[string]string   `yaml:"config"`
+	// AgentConfig is merged into each runner-created Core instance config.
+	// It is intentionally opt-in so scenarios can exercise provider features
+	// (for example native image generation) without changing normal agents.
+	AgentConfig     map[string]any      `yaml:"agent_config"`
 	Fixtures        []FixtureSpec       `yaml:"fixtures"` // pre-uploaded files / setup data
 	FakeMCPs        []FakeMCPServerSpec `yaml:"fake_mcp_servers"`
 	InitialWake     *InitialWakeSpec    `yaml:"initial_wake"`
@@ -728,6 +732,9 @@ func replaceScenarioValues(s *Scenario, replace func(string) string) {
 		for i := range s.Setup.Thread.MCP {
 			s.Setup.Thread.MCP[i] = replace(s.Setup.Thread.MCP[i])
 		}
+	}
+	if s.Setup.AgentConfig != nil {
+		s.Setup.AgentConfig = replaceStringValues(s.Setup.AgentConfig, replace).(map[string]any)
 	}
 	for _, calls := range [][]SeedMCPCallSpec{s.Setup.SeedMCPCalls, s.Setup.CleanupMCPCalls} {
 		for i := range calls {
@@ -1635,7 +1642,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 		mode = "autonomous"
 	}
 	includeChannels := interaction == "conversation"
-	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace)
+	inst, err := tcCreateInstance(server, projectID, s.Name, s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace, s.Setup.AgentConfig)
 	if err != nil {
 		res.Error = fmt.Sprintf("create instance: %v", err)
 		return res
@@ -1655,7 +1662,7 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 	// /api/instances only carries server-side flags (include_apteva_
 	// server, etc.), not the agent's tool list. The on-disk
 	// config.json is the single source of truth core consumes.
-	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, opts.provider, opts.model, mcpServers, includeChannels, initialPace); err != nil {
+	if err := writeInstanceDiskConfig(server, inst.ID, s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace, s.Setup.AgentConfig); err != nil {
 		res.Error = fmt.Sprintf("write instance config.json: %v", err)
 		return res
 	}
@@ -1701,13 +1708,13 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 
 	agentIDs := []int64{inst.ID}
 	for i := 1; i < s.Setup.Agents; i++ {
-		peer, err := tcCreateInstance(server, projectID, fmt.Sprintf("%s-peer-%d", s.Name, i), s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace)
+		peer, err := tcCreateInstance(server, projectID, fmt.Sprintf("%s-peer-%d", s.Name, i), s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace, s.Setup.AgentConfig)
 		if err != nil {
 			res.Error = "create peer: " + err.Error()
 			return res
 		}
 		defer tcDeleteInstance(server, peer.ID)
-		if err := writeInstanceDiskConfig(server, peer.ID, s.Directive, mode, opts.provider, opts.model, mcpServers, includeChannels, initialPace); err != nil {
+		if err := writeInstanceDiskConfig(server, peer.ID, s.Directive, mode, opts.provider, opts.model, mcpServers, scenarioInstallIDs(installed.InstallID, deps), includeChannels, initialPace, s.Setup.AgentConfig); err != nil {
 			res.Error = err.Error()
 			return res
 		}
@@ -3762,11 +3769,14 @@ func postScenarioConversation(server *testServer, conversationID, prompt string)
 	return nil
 }
 
-func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider, model string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool, initialPace map[string]any) (*instanceResp, error) {
+func tcCreateInstance(server *testServer, projectID, name, directive, mode, provider, model string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool, initialPace map[string]any, agentConfig map[string]any) (*instanceResp, error) {
 	// config_json carries the agent's MCP servers + any other config
 	// the core needs at boot. The platform writes this to the
 	// instance dir's config.json; the core picks it up on start.
 	config := map[string]any{}
+	for key, value := range agentConfig {
+		config[key] = value
+	}
 	if len(mcpServers) > 0 {
 		config["mcp_servers"] = mcpServers
 	}
@@ -3810,14 +3820,21 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 // Existing-server runs normally leave operator-owned disk state untouched;
 // when an initial pace is explicitly requested, they persist only that field
 // through the stopped agent's authenticated config endpoint.
-func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode, provider, model string, mcpServers []map[string]any, includeChannels bool, initialPace map[string]any) error {
+func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode, provider, model string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool, initialPace map[string]any, agentConfig map[string]any) error {
 	if server.dataDir == "" {
-		if initialPace == nil {
+		body := map[string]any{}
+		if initialPace != nil {
+			body["main_pace"] = initialPace
+		}
+		if len(mcpServers) > 0 {
+			body["mcp_servers"] = mcpServersWithInstallIDs(mcpServers, boundAppInstallIDs)
+		}
+		if len(body) == 0 {
 			return nil
 		}
 		return requestJSON(http.MethodPut,
 			fmt.Sprintf("http://%s/api/instances/%d/config", server.addr, instanceID),
-			server.apiKey, map[string]any{"main_pace": initialPace}, nil)
+			server.apiKey, body, nil)
 	}
 	dir := filepath.Join(server.dataDir, fmt.Sprintf("instance_%d", instanceID))
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -3828,6 +3845,9 @@ func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mo
 		"mode":             mode,
 		"mcp_servers":      mcpServers,
 		"include_channels": includeChannels,
+	}
+	for key, value := range agentConfig {
+		cfg[key] = value
 	}
 	if strings.TrimSpace(provider) != "" {
 		cfg["default_provider"] = normalizeProviderName(provider)
@@ -3840,7 +3860,50 @@ func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mo
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "config.json"), body, 0644)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), body, 0644); err != nil {
+		return err
+	}
+	// The raw disk write avoids a Core restart race, but it bypasses the
+	// server's derived app-agent binding reconciliation. Sync MCP bindings
+	// before Core starts so blob-backed capabilities remain authorized.
+	if len(mcpServers) > 0 {
+		if err := requestJSON(http.MethodPut,
+			fmt.Sprintf("http://%s/api/instances/%d/config", server.addr, instanceID),
+			server.apiKey, map[string]any{"mcp_servers": mcpServersWithInstallIDs(mcpServers, boundAppInstallIDs)}, nil); err != nil {
+			return err
+		}
+		// The local relay ignores the extra install_id query parameter, while
+		// keeping it in Core's config lets later server reconciliations retain
+		// the derived binding.
+		return nil
+	}
+	return nil
+}
+
+// mcpServersWithInstallIDs is only used for the stopped-agent binding sync.
+// Scenario sidecar relays intentionally omit platform install metadata from
+// their Core URL, while the server's derived binding index needs that trusted
+// identifier. The raw relay configuration is restored immediately afterward.
+func mcpServersWithInstallIDs(servers []map[string]any, installIDs []int64) []map[string]any {
+	out := make([]map[string]any, 0, len(servers))
+	for i, server := range servers {
+		copy := map[string]any{}
+		for key, value := range server {
+			copy[key] = value
+		}
+		if i < len(installIDs) {
+			if rawURL, ok := copy["url"].(string); ok {
+				if parsed, err := url.Parse(rawURL); err == nil && parsed.Query().Get("install_id") == "" {
+					query := parsed.Query()
+					query.Set("install_id", strconv.FormatInt(installIDs[i], 10))
+					parsed.RawQuery = query.Encode()
+					copy["url"] = parsed.String()
+				}
+			}
+		}
+		out = append(out, copy)
+	}
+	return out
 }
 
 func applyTestModelOverride(config map[string]any, provider, model string) {
@@ -3858,10 +3921,38 @@ func applyTestModelOverride(config map[string]any, provider, model string) {
 			provider, strings.Join(knownLLMProviders(), ", "))
 		return
 	}
-	config["providers"] = []map[string]any{{
-		"name": provider, "default": true,
-		"models": map[string]string{"large": model, "medium": model, "small": model},
-	}}
+	// Preserve provider capability overrides supplied by the scenario (for
+	// example builtins.image_generation) while pinning the requested model.
+	// Replacing the whole providers array here silently dropped those fields.
+	providers := []map[string]any{}
+	switch raw := config["providers"].(type) {
+	case []map[string]any:
+		providers = append(providers, raw...)
+	case []any:
+		for _, item := range raw {
+			if providerConfig, ok := item.(map[string]any); ok {
+				providers = append(providers, providerConfig)
+			}
+		}
+	}
+	found := false
+	for _, providerConfig := range providers {
+		name, _ := providerConfig["name"].(string)
+		if normalizeProviderName(name) != provider {
+			continue
+		}
+		providerConfig["name"] = provider
+		providerConfig["default"] = true
+		providerConfig["models"] = map[string]string{"large": model, "medium": model, "small": model}
+		found = true
+	}
+	if !found {
+		providers = append(providers, map[string]any{
+			"name": provider, "default": true,
+			"models": map[string]string{"large": model, "medium": model, "small": model},
+		})
+	}
+	config["providers"] = providers
 	// The server rebuilds config["providers"] from the live pool at instance
 	// start (buildAgentCoreProviderConfigs), so the array above is discarded.
 	// The pin it actually honors is config["model_override"] — see

@@ -1159,7 +1159,7 @@ func TestCreateInstanceKeepsPlatformGatewayDisabled(t *testing.T) {
 	defer httpServer.Close()
 
 	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
-	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", "", nil, nil, false, nil)
+	instance, err := tcCreateInstance(server, "project-1", "test", "directive", "autonomous", "openai-codex", "", nil, nil, false, nil, nil)
 	if err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
@@ -1186,12 +1186,64 @@ func TestCreateConversationScenarioEnablesOnlyChannelsGateway(t *testing.T) {
 	defer httpServer.Close()
 
 	server := &testServer{addr: strings.TrimPrefix(httpServer.URL, "http://"), apiKey: "owner-key"}
-	instance, err := tcCreateInstance(server, "project-1", "chat-test", "directive", "autonomous", "openai-codex", "", nil, []int64{91}, true, nil)
+	instance, err := tcCreateInstance(server, "project-1", "chat-test", "directive", "autonomous", "openai-codex", "", nil, []int64{91}, true, nil, nil)
 	if err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
 	if instance.ID != 43 {
 		t.Fatalf("instance = %+v", instance)
+	}
+}
+
+func TestScenarioAgentConfigParsesNativeImageProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image.yaml")
+	content := []byte(`name: native-image
+setup:
+  agent_config:
+    providers:
+      - name: openai-codex
+        image_generation:
+          enabled: true
+          model: gpt-image-2.5-flare
+`)
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	scenario, err := readScenario(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, ok := scenario.Setup.AgentConfig["providers"].([]any)
+	if !ok || len(providers) != 1 {
+		t.Fatalf("agent_config providers = %#v", scenario.Setup.AgentConfig["providers"])
+	}
+	provider, ok := providers[0].(map[string]any)
+	if !ok || provider["name"] != "openai-codex" {
+		t.Fatalf("provider = %#v", providers[0])
+	}
+	image, ok := provider["image_generation"].(map[string]any)
+	if !ok || image["enabled"] != true || image["model"] != "gpt-image-2.5-flare" {
+		t.Fatalf("image_generation = %#v", provider["image_generation"])
+	}
+}
+
+func TestApplyTestModelOverridePreservesProviderCapabilities(t *testing.T) {
+	config := map[string]any{
+		"providers": []any{map[string]any{
+			"name":     "openai-codex",
+			"builtins": map[string]any{"image_generation": map[string]any{"enabled": true}},
+		}},
+	}
+	applyTestModelOverride(config, "openai-codex", "gpt-6.1-sol")
+	providers, ok := config["providers"].([]map[string]any)
+	if !ok || len(providers) != 1 {
+		t.Fatalf("providers = %#v", config["providers"])
+	}
+	if providers[0]["models"].(map[string]string)["large"] != "gpt-6.1-sol" {
+		t.Fatalf("model override = %#v", providers[0]["models"])
+	}
+	if providers[0]["builtins"] == nil {
+		t.Fatal("model override dropped provider capabilities")
 	}
 }
 
