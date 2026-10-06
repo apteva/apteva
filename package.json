@@ -1,6 +1,6 @@
 {
   "name": "apteva",
-  "version": "0.82.0",
+  "version": "0.82.1",
   "description": "The open-source AI operating system for persistent agents, apps, and integrations",
   "bin": {
     "apteva": "./cli.js"
