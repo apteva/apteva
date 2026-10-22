@@ -175,6 +175,12 @@ func validateUpdateService(r dashboardUpdateRequest) error {
 		return err
 	}
 	wantExecutable := resolveBin("apteva-server")
+	if hosted, err := hostedServiceIdentity(r); hosted {
+		if err != nil {
+			return err
+		}
+		wantExecutable = resolveBin("apteva-host")
+	}
 	if runtime.GOOS == "linux" && strings.HasPrefix(r.Method, "systemd-") {
 		if _, err := exec.LookPath("systemd-run"); err != nil {
 			return fmt.Errorf("systemd-run is required")

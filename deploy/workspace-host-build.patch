@@ -1,0 +1,46 @@
+--- a/scripts/build-local.sh
++++ b/scripts/build-local.sh
+@@ -113,0 +114,3 @@
++if [[ -d "$SERVER/cmd/apteva-host" ]]; then
++  (cd "$SERVER" && go build -ldflags "$LDFLAGS" -o "$STAGE/apteva-host" ./cmd/apteva-host)
++fi
+@@ -124,0 +128 @@
++if [[ -f "$STAGE/apteva-host" ]]; then mv -f "$STAGE/apteva-host" "$SERVER/apteva-host"; fi
+@@ -132 +136,3 @@
+-  for binary in apteva-server apteva-mcp-runner apteva-core apteva; do
++  local_binaries=(apteva-server apteva-mcp-runner apteva-core apteva)
++  if [[ -f "$INSTALL_STAGE/apteva-host" ]]; then local_binaries+=(apteva-host); fi
++  for binary in "${local_binaries[@]}"; do
+--- a/scripts/release.sh
++++ b/scripts/release.sh
+@@ -194,0 +195,6 @@
++  local binaries=(apteva apteva-server apteva-core apteva-mcp-runner)
++  if [[ -d "$SERVER/cmd/apteva-host" ]]; then
++    ( cd "$SERVER" && CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=false -ldflags "$LDFLAGS" -o "$stage/apteva-host" ./cmd/apteva-host )
++    binaries+=(apteva-host)
++  fi
++
+@@ -198 +204 @@
+-  ( cd "$stage" && COPYFILE_DISABLE=1 tar -czf "$tarball" apteva apteva-server apteva-core apteva-mcp-runner )
++  ( cd "$stage" && COPYFILE_DISABLE=1 tar -czf "$tarball" "${binaries[@]}" )
+@@ -202 +208 @@
+-  expected="$(printf '%s\n' apteva apteva-core apteva-mcp-runner apteva-server | sort)"
++  expected="$(printf '%s\n' "${binaries[@]}" | sort)"
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -90,0 +91,3 @@
++RUN mkdir -p /optional-host && \
++    if [ -d ./cmd/apteva-host ]; then CGO_ENABLED=0 go build -trimpath -o /optional-host/apteva-host ./cmd/apteva-host; fi
++
+@@ -93,0 +97,2 @@
++
++COPY --from=go-builder /optional-host/ /usr/local/bin/
+--- a/Dockerfile.combined
++++ b/Dockerfile.combined
+@@ -50,0 +51,3 @@
++RUN mkdir -p /optional-host && \
++    if [ -d ./cmd/apteva-host ]; then CGO_ENABLED=0 go build -trimpath -o /optional-host/apteva-host ./cmd/apteva-host; fi
++
+@@ -54,0 +58,2 @@
++
++COPY --from=server-builder /optional-host/ /usr/local/bin/

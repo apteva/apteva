@@ -85,12 +85,15 @@ RUN . /tmp/versions.env && \
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" \
       -o /apteva-mcp-runner ./cmd/apteva-mcp-runner
 
+RUN CGO_ENABLED=0 go build -trimpath -o /apteva-host ./cmd/apteva-host
+
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates
 
 COPY --from=go-builder /apteva-core /usr/local/bin/apteva-core
 COPY --from=go-builder /apteva-server /usr/local/bin/apteva-server
+COPY --from=go-builder /apteva-host /usr/local/bin/apteva-host
 COPY --from=go-builder /apteva-mcp-runner /usr/local/bin/apteva-mcp-runner
 
 ENV PORT=5280

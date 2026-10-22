@@ -293,6 +293,9 @@ func installSystemd(scope serviceScope, start, enable bool, bindAddr string) int
 	}
 
 	exec := resolveBin("apteva-server")
+	if candidate := optionalHostBinary(exec); candidate != "" {
+		exec = candidate
+	}
 	home := aptevaDir()
 	body := fmt.Sprintf(systemdUnitTemplate,
 		exec,     // ExecStart
@@ -586,6 +589,9 @@ func installLaunchd(scope serviceScope, start, enable bool, bindAddr string) int
 	}
 
 	exec := resolveBin("apteva-server")
+	if candidate := optionalHostBinary(exec); candidate != "" {
+		exec = candidate
+	}
 	home := aptevaDir()
 	logDir := filepath.Join(home, "logs")
 	_ = os.MkdirAll(logDir, 0o755)
