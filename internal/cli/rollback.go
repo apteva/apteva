@@ -65,6 +65,13 @@ func cmdRollback(args []string) int {
 		return 1
 	}
 	active := activeVersion()
+	if state, present, err := probeHost(); present {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		active = state.Version
+	}
 
 	var target string
 	switch len(args) {
@@ -115,6 +122,24 @@ func cmdRollback(args []string) int {
 		return 0
 	}
 
+	if _, hosted, err := probeHost(); hosted {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err = deployThroughHost(versionDir(target), target, nil, "preserve"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err = pointSymlinks(target); err != nil {
+			fmt.Fprintln(os.Stderr, "server rolled back but CLI links need repair:", err)
+			return 1
+		}
+		_ = writeBootAttempts(0)
+		_ = writeLastGoodVersion(target)
+		fmt.Fprintf(os.Stderr, "Apteva v%s is serving; current database and runtime data retained.\n", target)
+		return 0
+	}
 	if err := pointSymlinks(target); err != nil {
 		fmt.Fprintf(os.Stderr, "apteva rollback: %v\n", err)
 		return 1
