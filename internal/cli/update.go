@@ -262,6 +262,30 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	//    thing on disk we need to worry about is half-extracted
 	//    files.
 	target := versionDir(m.Version)
+	if state, hosted, err := probeHost(); hosted {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if state.Job != nil && (!updateJobTerminal(state.Job.Phase) || state.Job.Phase == "recovery_required") {
+			fmt.Fprintln(os.Stderr, "the stable host has an active deployment or needs recovery; release files were retained")
+			return 1
+		}
+		if state.Version == m.Version {
+			if *dryRun {
+				return 0
+			}
+			if err := pointSymlinks(m.Version); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			return 0
+		}
+		if target == filepath.Dir(state.Binary) || target == filepath.Dir(state.HostBinary) {
+			fmt.Fprintln(os.Stderr, "refusing to replace binaries in use by the stable host")
+			return 1
+		}
+	}
 	_ = os.RemoveAll(target)
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "mkdir %s: %v\n", target, err)
@@ -284,6 +308,40 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		}
 		// Tar's permission bits sometimes lose the +x; force it.
 		_ = os.Chmod(p, 0o755)
+	}
+
+	if _, hosted, err := probeHost(); hosted {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if job != nil {
+			if err := validateUpdateService(job.Request); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		if *dryRun {
+			if err := validateThroughHost(target, m.Version); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, "dry run: hosted preflight passed; current version retained")
+			return 0
+		}
+		if err := deployThroughHost(target, m.Version, job, *agentPolicy); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		// Commit the CLI pointer only after the host has durably committed a
+		// healthy server. A pointer failure never restores an older database.
+		if err := pointSymlinks(m.Version); err != nil {
+			_ = job.phase("recovery_required", "Server is updated, but CLI links need repair: "+err.Error())
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "Apteva v%s is serving through the stable host.\n", m.Version)
+		return 0
 	}
 
 	// 4. Preflight — run apteva-server --preflight against the new

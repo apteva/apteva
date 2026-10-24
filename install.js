@@ -46,6 +46,7 @@ const VERSION_DIR = path.join(VERSIONS_DIR, VERSION);
 const CURRENT_LINK = path.join(BIN_DIR, "current");
 
 const BIN_NAMES = ["apteva", "apteva-server", "apteva-core", "apteva-mcp-runner"];
+const availableBins = () => [...BIN_NAMES, ...(fs.existsSync(path.join(VERSION_DIR, "apteva-host")) ? ["apteva-host"] : [])];
 
 function download(url) {
   return new Promise((resolve, reject) => {
@@ -91,7 +92,7 @@ function pointSymlinks() {
   // Per-binary shims: bin/<name> → current/<name>. Replace if
   // already present — old shims pointing at a since-deleted version
   // dir would fail to resolve.
-  for (const name of BIN_NAMES) {
+  for (const name of availableBins()) {
     const dst = path.join(BIN_DIR, name);
     try { fs.unlinkSync(dst); } catch {}
     fs.symlinkSync(path.join("current", name), dst);
@@ -115,7 +116,7 @@ async function main() {
     if (platform !== "windows") {
       try { pointSymlinks(); } catch (e) { /* non-fatal */ }
     }
-    for (const name of BIN_NAMES) {
+    for (const name of availableBins()) {
       const src = path.join(VERSION_DIR, `${name}${ext}`);
       const dst = path.join(DIR, `${name}${ext}`);
       if (fs.existsSync(src)) {
@@ -146,7 +147,7 @@ async function main() {
     execSync(`tar -xzf "${releasePath}" -C "${VERSION_DIR}"`, { stdio: "pipe" });
 
     if (platform !== "windows") {
-      for (const name of BIN_NAMES) {
+      for (const name of availableBins()) {
         const bin = path.join(VERSION_DIR, name);
         if (fs.existsSync(bin)) fs.chmodSync(bin, 0o755);
       }
@@ -164,7 +165,7 @@ async function main() {
 
     // Defensive copy into the npm package install dir so cli.js's
     // fallback path works when ~/.apteva isn't usable.
-    for (const name of BIN_NAMES) {
+    for (const name of availableBins()) {
       const src = path.join(VERSION_DIR, `${name}${ext}`);
       const dst = path.join(DIR, `${name}${ext}`);
       if (fs.existsSync(src)) {

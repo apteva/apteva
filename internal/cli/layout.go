@@ -179,7 +179,11 @@ func pointSymlinks(version string) error {
 	// Per-binary shims point at current/<name>. Replace them every
 	// time so a missing one (e.g. v0.12.0 install that ships a new
 	// binary v0.13.0 doesn't) is fixed up by the next pointSymlinks.
-	for _, name := range binNames {
+	names := append([]string(nil), binNames...)
+	if _, err := os.Stat(filepath.Join(vdir, "apteva-host")); err == nil {
+		names = append(names, "apteva-host")
+	}
+	for _, name := range names {
 		dst := resolveBin(name)
 		_ = os.Remove(dst)
 		// Relative target: bin/<name> → current/<name> resolves the

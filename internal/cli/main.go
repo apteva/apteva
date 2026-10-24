@@ -254,6 +254,12 @@ Flags:`)
 			os.Exit(1)
 		}
 
+		realServerBin := bin
+		if *serverBin == "" {
+			if hostBin := optionalHostBinary(bin); hostBin != "" {
+				bin = hostBin
+			}
+		}
 		serverProc = exec.Command(bin)
 		serverProc.Dir = filepath.Dir(bin)
 		setProcGroup(serverProc)
@@ -295,6 +301,7 @@ Flags:`)
 			// suppressed during normal operation.
 			serverEnv = append(serverEnv, "APTEVA_LOG_LEVEL=debug")
 		}
+		serverEnv = append(serverEnv, "APTEVA_HOME="+aptevaDir(), "APTEVA_SERVER_BIN="+realServerBin)
 		serverProc.Env = append(os.Environ(), serverEnv...)
 		if *verbose && !*tui {
 			serverProc.Stdout = os.Stdout
