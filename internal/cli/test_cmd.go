@@ -1029,7 +1029,16 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 
 	var credentials map[string]string
 	authType := "bearer"
+	appSlug := provider
 	switch provider {
+	case "openai":
+		apiKey := envValue(env, "OPENAI_API_KEY")
+		if apiKey == "" {
+			return fmt.Errorf("openai requires OPENAI_API_KEY in the environment or ~/.apteva/test.env")
+		}
+		// Current Server discovers API providers from scoped connections.
+		appSlug = "openai-api"
+		credentials = map[string]string{"token": apiKey}
 	case "openai-codex":
 		accessToken := envValue(env, "OPENAI_CODEX_ACCESS_TOKEN")
 		if accessToken == "" {
@@ -1077,7 +1086,7 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 	autoMCP := false
 	body, err := json.Marshal(map[string]any{
 		"source":      "local",
-		"app_slug":    provider,
+		"app_slug":    appSlug,
 		"name":        "Tier 3 " + provider,
 		"auth_type":   authType,
 		"credentials": credentials,
