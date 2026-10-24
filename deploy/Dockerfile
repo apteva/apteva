@@ -14,7 +14,7 @@
 #   ./apteva --remote <host>:5280
 
 # ─── Build Go binaries ───
-FROM golang:1.26.5-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 RUN apk add --no-cache git
 
 WORKDIR /build
@@ -33,7 +33,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /apteva-mcp-runner ./cmd/apteva-m
 
 # ─── Runtime ───
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates chromium
+RUN apk add --no-cache ca-certificates gcompat opus chromium
 
 COPY --from=builder /apteva-core /usr/local/bin/apteva-core
 COPY --from=builder /apteva-server /usr/local/bin/apteva-server

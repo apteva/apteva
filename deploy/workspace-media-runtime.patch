@@ -1,0 +1,17 @@
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -21 +21 @@
+-FROM golang:1.26.5-alpine AS go-builder
++FROM golang:1.26.10-alpine AS go-builder
+@@ -96 +96 @@
+-RUN apk add --no-cache ca-certificates
++RUN apk add --no-cache ca-certificates gcompat opus
+--- a/scripts/release.sh
++++ b/scripts/release.sh
+@@ -176,3 +176,3 @@
+-# 3. Per-platform compile loop. CGO is OFF so binaries are static +
+-# cross-compile cleanly. modernc.org/sqlite
+-# is pure-Go so we don't need cgo for SQLite. -ldflags strips DWARF + symbol
++# 3. Per-platform compile loop. CGO is OFF for cross-compilation. The Core
++# native media bridge still needs the Linux libc loader (gcompat on Alpine),
++# and optional PCM/WebRTC needs libopus. SQLite remains pure Go. -ldflags strips DWARF + symbol
