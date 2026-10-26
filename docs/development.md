@@ -67,4 +67,4 @@ python3 scripts/pin-release-sources.py --sources /path/to/SOURCE_COMMITS
 python3 scripts/pin-release-sources.py --sources /path/to/SOURCE_COMMITS --check
 ```
 
-Commit the updated workflow together with the package version before pushing the release tag. The check fails if either build matrix retains a stale component revision. Published archive and Docker build logs must also match the frozen manifest.
+Commit the updated workflow together with the package version before pushing the release tag. The check fails if either build matrix or the dashboard/integrations version-metadata URLs retain a stale component revision. Published archive and Docker build logs must also match the frozen manifest.

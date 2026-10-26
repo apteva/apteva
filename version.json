@@ -8,7 +8,7 @@
     "apteva-server":       "0.96.1",
     "apteva-core":         "0.96.1",
     "apteva-dashboard":    "0.51.0",
-    "apteva-integrations": "0.54.0"
+    "apteva-integrations": "0.54.1"
   },
   "artifacts": {
     "darwin-arm64": {

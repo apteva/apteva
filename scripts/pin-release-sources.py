@@ -32,6 +32,20 @@ def replace(match):
 after = pattern.sub(replace, before)
 if any(count != 2 for count in counts.values()):
     parser.error(f"expected archive and Docker checkout pins for each component: {counts}")
+metadata_counts = {"dashboard": 0, "integrations": 0}
+metadata_pattern = re.compile(r"(https://raw\.githubusercontent\.com/apteva/(dashboard|integrations)/)(?:main|[a-f0-9]{40})(/package\.json)")
+
+def replace_metadata(match):
+    name = match[2]
+    metadata_counts[name] += 1
+    value = match[1] + sources[name] + match[3]
+    if match[0] != value:
+        stale.append(name + " metadata")
+    return value
+
+after = metadata_pattern.sub(replace_metadata, after)
+if any(count != 1 for count in metadata_counts.values()):
+    parser.error(f"expected a frozen version metadata URL for each UI component: {metadata_counts}")
 if args.check and stale:
     print("Stale release pins: " + ", ".join(sorted(set(stale))), file=sys.stderr)
     sys.exit(1)
