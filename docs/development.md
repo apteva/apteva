@@ -57,3 +57,14 @@ Keep `package.json`, `cli.js`, and `install.js` together at the repository root.
 Keep `version.json` at the repository root. Installed CLIs and servers fetch `https://raw.githubusercontent.com/apteva/apteva/main/version.json`; moving it would break update discovery for existing installations. Preserve release archive and binary names as well.
 
 Docker builds use `deploy/Dockerfile.server`; the [deployment guide](deployment.md) describes its sibling checkout context.
+
+## Freeze platform release sources
+
+Before tagging a platform release, record the tested sibling repository commits in a `SOURCE_COMMITS` file (`repository-name full-commit-sha` per line). Refresh both archive and Docker checkout pins from that manifest:
+
+```sh
+python3 scripts/pin-release-sources.py --sources /path/to/SOURCE_COMMITS
+python3 scripts/pin-release-sources.py --sources /path/to/SOURCE_COMMITS --check
+```
+
+Commit the updated workflow together with the package version before pushing the release tag. The check fails if either build matrix retains a stale component revision. Published archive and Docker build logs must also match the frozen manifest.

@@ -55,7 +55,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 02c4dcd69a3ae1e2302d8268d9a66f6784be0702
+          ref: 2ae654ff922dc1556fd2ad2a263d81ae0293dd1a
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -92,7 +92,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: 5ceb042cb61f6b3b18075bb927e4f0bedb151e89
+          ref: d2bed840621b54ea74e1d459621ddc49e4996525
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -104,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: fb0abffc9ff7e02b86e7d912abe4f4147821b5aa
+          ref: 822f2e769dfc1a44aed9bf25242ba36c237033be
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -399,6 +399,12 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Deprecate superseded component build
+        if: steps.version.outputs.version == '0.96.1'
+        run: npm deprecate apteva@0.96.0 "Built with stale component pins. Use apteva@0.96.1 or later for the current server, SDK and integrations."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   build-docker:
     needs: release
     strategy:
@@ -433,7 +439,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 02c4dcd69a3ae1e2302d8268d9a66f6784be0702
+          ref: 2ae654ff922dc1556fd2ad2a263d81ae0293dd1a
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -465,7 +471,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: 5ceb042cb61f6b3b18075bb927e4f0bedb151e89
+          ref: d2bed840621b54ea74e1d459621ddc49e4996525
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -473,7 +479,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: fb0abffc9ff7e02b86e7d912abe4f4147821b5aa
+          ref: 822f2e769dfc1a44aed9bf25242ba36c237033be
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
