@@ -104,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: e4dab78af356014fbde07bbe3e5e866434bb8e99
+          ref: 52666a40baa9c98358e8d9861d6978cac6d677d1
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -282,7 +282,7 @@ jobs:
             | jq -r .version)
           INT_VER=$(curl -fsSL \
             -H "Authorization: token ${REPO_TOKEN}" \
-            "https://raw.githubusercontent.com/apteva/integrations/e4dab78af356014fbde07bbe3e5e866434bb8e99/package.json" \
+            "https://raw.githubusercontent.com/apteva/integrations/52666a40baa9c98358e8d9861d6978cac6d677d1/package.json" \
             | jq -r .version)
           DARWIN_ARM64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-arm64.tar.gz" | awk '{print $1}')
           DARWIN_AMD64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-amd64.tar.gz" | awk '{print $1}')
@@ -479,7 +479,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: e4dab78af356014fbde07bbe3e5e866434bb8e99
+          ref: 52666a40baa9c98358e8d9861d6978cac6d677d1
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
