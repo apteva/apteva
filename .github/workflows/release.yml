@@ -55,7 +55,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 1926b16dc751fc6cdd9b52bdaf5dcb4f55c1c7a9
+          ref: 5738a2b5746b918490a7407ca1418a060c746dc8
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -71,7 +71,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/dashboard
-          ref: a291a690ad1a1f7b06c00baf17f0020fb0cd4354
+          ref: c50747b9cd7f113afbe37c06eb6667f5cbcad0b8
           path: dashboard
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -92,7 +92,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: 08bf3f919061ff07ac6af23502591faa7555e739
+          ref: 5ba3f82e1b658c7076fa5a5d9ac40d75d522250c
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -104,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: 9c1477b1d9aba11ad4bc17e5fb5bf7b86152505c
+          ref: f3d5edd8db98d7cb19e938ed4d280c343af1b008
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -278,11 +278,11 @@ jobs:
           # token the build job uses for sibling checkouts.
           DASH_VER=$(curl -fsSL \
             -H "Authorization: token ${REPO_TOKEN}" \
-            "https://raw.githubusercontent.com/apteva/dashboard/a291a690ad1a1f7b06c00baf17f0020fb0cd4354/package.json" \
+            "https://raw.githubusercontent.com/apteva/dashboard/c50747b9cd7f113afbe37c06eb6667f5cbcad0b8/package.json" \
             | jq -r .version)
           INT_VER=$(curl -fsSL \
             -H "Authorization: token ${REPO_TOKEN}" \
-            "https://raw.githubusercontent.com/apteva/integrations/9c1477b1d9aba11ad4bc17e5fb5bf7b86152505c/package.json" \
+            "https://raw.githubusercontent.com/apteva/integrations/f3d5edd8db98d7cb19e938ed4d280c343af1b008/package.json" \
             | jq -r .version)
           DARWIN_ARM64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-arm64.tar.gz" | awk '{print $1}')
           DARWIN_AMD64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-amd64.tar.gz" | awk '{print $1}')
@@ -439,7 +439,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 1926b16dc751fc6cdd9b52bdaf5dcb4f55c1c7a9
+          ref: 5738a2b5746b918490a7407ca1418a060c746dc8
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -455,7 +455,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/dashboard
-          ref: a291a690ad1a1f7b06c00baf17f0020fb0cd4354
+          ref: c50747b9cd7f113afbe37c06eb6667f5cbcad0b8
           path: dashboard
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -471,7 +471,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: 08bf3f919061ff07ac6af23502591faa7555e739
+          ref: 5ba3f82e1b658c7076fa5a5d9ac40d75d522250c
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -479,7 +479,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: 9c1477b1d9aba11ad4bc17e5fb5bf7b86152505c
+          ref: f3d5edd8db98d7cb19e938ed4d280c343af1b008
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
