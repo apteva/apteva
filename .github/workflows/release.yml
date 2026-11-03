@@ -55,7 +55,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 86840481cfcbb48f09645df5052fdbaf33e4fc34
+          ref: 0afcd220fe695934150f90fc8f30937fb5393c8a
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -71,7 +71,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/dashboard
-          ref: c50747b9cd7f113afbe37c06eb6667f5cbcad0b8
+          ref: 97dcb591b231f6286a04ad30446b7224db227216
           path: dashboard
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -278,7 +278,7 @@ jobs:
           # token the build job uses for sibling checkouts.
           DASH_VER=$(curl -fsSL \
             -H "Authorization: token ${REPO_TOKEN}" \
-            "https://raw.githubusercontent.com/apteva/dashboard/c50747b9cd7f113afbe37c06eb6667f5cbcad0b8/package.json" \
+            "https://raw.githubusercontent.com/apteva/dashboard/97dcb591b231f6286a04ad30446b7224db227216/package.json" \
             | jq -r .version)
           INT_VER=$(curl -fsSL \
             -H "Authorization: token ${REPO_TOKEN}" \
@@ -439,7 +439,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 86840481cfcbb48f09645df5052fdbaf33e4fc34
+          ref: 0afcd220fe695934150f90fc8f30937fb5393c8a
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -455,7 +455,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/dashboard
-          ref: c50747b9cd7f113afbe37c06eb6667f5cbcad0b8
+          ref: 97dcb591b231f6286a04ad30446b7224db227216
           path: dashboard
           token: ${{ secrets.REPO_TOKEN }}
 
