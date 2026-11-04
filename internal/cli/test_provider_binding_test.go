@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -206,5 +208,73 @@ func TestApplyTestModelOverrideStillWritesKnownProvider(t *testing.T) {
 	providers, ok := config["providers"].([]map[string]any)
 	if !ok || len(providers) != 1 || providers[0]["name"] != "opencode-go" {
 		t.Fatalf("providers = %#v", config["providers"])
+	}
+}
+
+func TestExtraProviderIsNotASubstitution(t *testing.T) {
+	res := &ScenarioResult{ObservedProviders: []string{"openai-codex", "opencode-go"}, ObservedModels: []string{"gpt-6.1-sol", "kimi-k3"}}
+	opts := testOpts{provider: "openai-codex", model: "gpt-6.1-sol", extraProviders: []string{"opencode-go"}}
+	for _, got := range effectiveRuntimeAsserts(opts, res) {
+		if !got.OK {
+			t.Errorf("%s failed: %+v", got.Clause, got)
+		}
+	}
+}
+
+func TestExtraProviderStillCatchesAThirdProvider(t *testing.T) {
+	res := &ScenarioResult{ObservedProviders: []string{"openai-codex", "opencode-go", "fireworks"}, ObservedModels: []string{"gpt-6.1-sol"}}
+	opts := testOpts{provider: "openai-codex", model: "gpt-6.1-sol", extraProviders: []string{"opencode-go"}}
+	if effectiveRuntimeAsserts(opts, res)[0].OK {
+		t.Fatal("a provider nobody asked for passed")
+	}
+}
+
+func TestExtraProviderDoesNotExcuseTheDefaultNeverRunning(t *testing.T) {
+	res := &ScenarioResult{ObservedProviders: []string{"opencode-go"}, ObservedModels: []string{"kimi-k3"}}
+	opts := testOpts{provider: "openai-codex", model: "gpt-6.1-sol", extraProviders: []string{"opencode-go"}}
+	for _, got := range effectiveRuntimeAsserts(opts, res) {
+		if got.OK {
+			t.Errorf("%s passed with only the extra provider observed", got.Clause)
+		}
+	}
+}
+
+func TestTelemetryRecordsProviderPerThread(t *testing.T) {
+	res := &ScenarioResult{}
+	applyTelemetry(res, telemetryEvent{Type: "llm.start", ThreadID: "main", Data: map[string]any{"provider": "openai-codex"}})
+	applyTelemetry(res, telemetryEvent{Type: "llm.start", ThreadID: "worker", Data: map[string]any{"provider": "opencode-go"}})
+	if got := res.ObservedThreadProviders["worker"]; len(got) != 1 || got[0] != "opencode-go" {
+		t.Fatalf("worker = %v", got)
+	}
+	if got := res.ObservedThreadProviders["main"]; len(got) != 1 || got[0] != "openai-codex" {
+		t.Fatalf("main = %v", got)
+	}
+}
+
+func TestExtraProviderModelIsSetOnItsConnection(t *testing.T) {
+	t.Cleanup(func() { delete(extraProviderModels, "opencode-go") })
+	if got := splitProviderList("opencode-go=kimi-k3"); len(got) != 1 || got[0] != "opencode-go" {
+		t.Fatalf("names = %v", got)
+	}
+	var patched map[string]string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/connections":
+			fmt.Fprint(w, `{"id":42}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/connections/42/runtime-config":
+			if err := json.NewDecoder(r.Body).Decode(&patched); err != nil {
+				t.Error(err)
+			}
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer api.Close()
+	server := &testServer{addr: strings.TrimPrefix(api.URL, "http://"), apiKey: "key", projectID: "p"}
+	if err := provisionSpawnedTestProvider(server, "opencode-go", []string{"OPENCODE_GO_API_KEY=key"}); err != nil {
+		t.Fatal(err)
+	}
+	if patched["model_large"] != "kimi-k3" || patched["model_medium"] != "kimi-k3" || patched["model_small"] != "kimi-k3" {
+		t.Fatalf("patched = %v", patched)
 	}
 }

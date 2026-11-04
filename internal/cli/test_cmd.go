@@ -73,12 +73,15 @@ type testOpts struct {
 	projectID    string
 	provider     string
 	model        string
-	appDir       string
-	timeout      time.Duration
-	maxBudgetUSD float64
-	artifactsDir string
-	verbose      bool
-	jsonOutput   bool
+	// extraProviders join the agents' pool without becoming their default, for
+	// scenarios that test work deliberately running on another provider.
+	extraProviders []string
+	appDir         string
+	timeout        time.Duration
+	maxBudgetUSD   float64
+	artifactsDir   string
+	verbose        bool
+	jsonOutput     bool
 }
 
 type Scenario struct {
@@ -296,8 +299,10 @@ type ScenarioResult struct {
 	ArtifactsDir          string              `json:"artifacts_dir,omitempty"`
 	ObservedProviders     []string            `json:"observed_providers,omitempty"`
 	ObservedModels        []string            `json:"observed_models,omitempty"`
-	Error                 string              `json:"error,omitempty"`
-	telemetry             []telemetryEvent
+	// ObservedThreadProviders is which providers served each thread's turns.
+	ObservedThreadProviders map[string][]string `json:"observed_thread_providers,omitempty"`
+	Error                   string              `json:"error,omitempty"`
+	telemetry               []telemetryEvent
 }
 
 type ToolCallResult struct {
@@ -343,6 +348,7 @@ func cmdTest(args []string) int {
 	projectID := fs.String("project-id", "", "existing project to use with --server (default: create and remove an isolated test project)")
 	provider := fs.String("provider", "", "LLM provider name (e.g. opencode-go); default: whatever the spawned server picks up from env")
 	model := fs.String("model", "", "exact LLM model id for all tiers in this Tier 3 run (requires --provider)")
+	extraProviders := fs.String("extra-provider", "", "comma-separated providers to add alongside --provider without making them the default, as name or name=model; only with a spawned server")
 	appDir := fs.String("app-dir", ".", "path to the app under test (used when scenarios omit setup.app.path)")
 	timeoutFlag := fs.Duration("timeout", 90*time.Second, "default per-scenario timeout")
 	maxBudgetUSD := fs.Float64("max-budget-usd", 0, "abort when cumulative cost exceeds this (0 = unbounded)")
@@ -374,19 +380,20 @@ func cmdTest(args []string) int {
 	}
 
 	opts := testOpts{
-		ctx:          ctx,
-		target:       target,
-		serverAddr:   *serverAddr,
-		serverAPIKey: resolveTestServerAPIKey(*serverAddr),
-		projectID:    *projectID,
-		provider:     *provider,
-		model:        *model,
-		appDir:       *appDir,
-		timeout:      *timeoutFlag,
-		maxBudgetUSD: *maxBudgetUSD,
-		artifactsDir: *artifactsDir,
-		verbose:      *verbose,
-		jsonOutput:   *jsonOut,
+		ctx:            ctx,
+		target:         target,
+		serverAddr:     *serverAddr,
+		serverAPIKey:   resolveTestServerAPIKey(*serverAddr),
+		projectID:      *projectID,
+		provider:       *provider,
+		extraProviders: splitProviderList(*extraProviders),
+		model:          *model,
+		appDir:         *appDir,
+		timeout:        *timeoutFlag,
+		maxBudgetUSD:   *maxBudgetUSD,
+		artifactsDir:   *artifactsDir,
+		verbose:        *verbose,
+		jsonOutput:     *jsonOut,
 	}
 
 	nativeResults := []NativeTestResult{}
@@ -1007,6 +1014,12 @@ func bootstrapServer(opts *testOpts) (*testServer, error) {
 		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("configure test provider: %w", err)
 	}
+	for _, extra := range opts.extraProviders {
+		if err := provisionSpawnedTestProvider(srv, extra, baseEnv); err != nil {
+			_ = cmd.Process.Kill()
+			return nil, fmt.Errorf("configure extra test provider %s: %w", extra, err)
+		}
+	}
 	fmt.Fprintf(os.Stderr, "spawned apteva-server at %s (data: %s, project: %s)\n", addr, dataDir, pid)
 	return srv, nil
 }
@@ -1111,6 +1124,40 @@ func provisionSpawnedTestProvider(server *testServer, requested string, env []st
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("create %s runtime connection: HTTP %d: %s", provider, resp.StatusCode, tcTruncate(string(raw), 200))
+	}
+	model := extraProviderModels[provider]
+	if model == "" {
+		return nil
+	}
+	// Without a pick, Server gives every tier the first model upstream lists.
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return fmt.Errorf("read %s runtime connection: %w", provider, err)
+	}
+	return patchRuntimeModels(server, created.ID, model)
+}
+
+func patchRuntimeModels(server *testServer, connectionID int64, model string) error {
+	body, err := json.Marshal(map[string]string{"model_large": model, "model_medium": model, "model_small": model})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPatch, fmt.Sprintf("http://%s/api/connections/%d/runtime-config", server.addr, connectionID), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+server.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("set connection %d models: HTTP %d: %s", connectionID, resp.StatusCode, tcTruncate(string(raw), 200))
 	}
 	return nil
 }
@@ -1958,10 +2005,52 @@ func runScenario(server *testServer, s Scenario, opts testOpts) (res ScenarioRes
 func effectiveRuntimeAsserts(opts testOpts, res *ScenarioResult) []AssertResult {
 	var out []AssertResult
 	if want := normalizeProviderName(opts.provider); want != "" {
-		out = append(out, matchEffectiveRuntime("provider", want, res.ObservedProviders))
+		out = append(out, matchEffectiveRuntime("provider", want, withoutProviders(res.ObservedProviders, opts.extraProviders)))
 	}
 	if want := strings.TrimSpace(opts.model); want != "" {
-		out = append(out, matchEffectiveRuntime("model", want, res.ObservedModels))
+		observed := res.ObservedModels
+		if len(opts.extraProviders) > 0 {
+			// Telemetry doesn't tie models to providers here, and extra providers
+			// run their own, so only require that the requested model ran.
+			for _, model := range res.ObservedModels {
+				if strings.EqualFold(model, want) {
+					observed = []string{model}
+					break
+				}
+			}
+		}
+		out = append(out, matchEffectiveRuntime("model", want, observed))
+	}
+	return out
+}
+
+// extraProviderModels pins all tiers of an --extra-provider given as name=model.
+var extraProviderModels = map[string]string{}
+
+func splitProviderList(raw string) []string {
+	var out []string
+	for _, entry := range strings.Split(raw, ",") {
+		name, model, _ := strings.Cut(entry, "=")
+		if name = normalizeProviderName(name); name != "" {
+			out = append(out, name)
+			if model = strings.TrimSpace(model); model != "" {
+				extraProviderModels[name] = model
+			}
+		}
+	}
+	return out
+}
+
+func withoutProviders(observed, excluded []string) []string {
+	var out []string
+	for _, got := range observed {
+		skip := false
+		for _, name := range excluded {
+			skip = skip || strings.EqualFold(got, name)
+		}
+		if !skip {
+			out = append(out, got)
+		}
 	}
 	return out
 }
@@ -2063,6 +2152,10 @@ func applyTelemetry(res *ScenarioResult, ev telemetryEvent) {
 		// neither of these, so this case cannot be folded into it.
 		if provider := strings.TrimSpace(stringMapValue(ev.Data, "provider")); provider != "" {
 			res.ObservedProviders = appendUniqueString(res.ObservedProviders, normalizeProviderName(provider))
+			if res.ObservedThreadProviders == nil {
+				res.ObservedThreadProviders = map[string][]string{}
+			}
+			res.ObservedThreadProviders[ev.ThreadID] = appendUniqueString(res.ObservedThreadProviders[ev.ThreadID], normalizeProviderName(provider))
 		}
 		if model := strings.TrimSpace(stringMapValue(ev.Data, "model")); model != "" {
 			res.ObservedModels = appendUniqueString(res.ObservedModels, model)
