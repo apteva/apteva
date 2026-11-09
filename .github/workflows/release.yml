@@ -55,7 +55,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 0219d133af811d34c3385b7d357f6e102efbe9ce
+          ref: a72dbcafdf05a283ffd9ff51f07105e44ecbe4a6
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -84,7 +84,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: 5bbcb772a29a27a58a53fdc8861e3a6353df3e7b
+          ref: a9ba6345e9916f0e15afaa0f5090d5c444cd3f03
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -96,7 +96,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: 52666a40baa9c98358e8d9861d6978cac6d677d1
+          ref: d23bfa1176eec8672e22865cc36d69d67474cbd7
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -274,7 +274,7 @@ jobs:
             | jq -r .version)
           INT_VER=$(curl -fsSL \
             -H "Authorization: token ${REPO_TOKEN}" \
-            "https://raw.githubusercontent.com/apteva/integrations/52666a40baa9c98358e8d9861d6978cac6d677d1/package.json" \
+            "https://raw.githubusercontent.com/apteva/integrations/d23bfa1176eec8672e22865cc36d69d67474cbd7/package.json" \
             | jq -r .version)
           DARWIN_ARM64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-arm64.tar.gz" | awk '{print $1}')
           DARWIN_AMD64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-amd64.tar.gz" | awk '{print $1}')
@@ -431,7 +431,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 0219d133af811d34c3385b7d357f6e102efbe9ce
+          ref: a72dbcafdf05a283ffd9ff51f07105e44ecbe4a6
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -455,7 +455,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: 5bbcb772a29a27a58a53fdc8861e3a6353df3e7b
+          ref: a9ba6345e9916f0e15afaa0f5090d5c444cd3f03
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -463,7 +463,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: 52666a40baa9c98358e8d9861d6978cac6d677d1
+          ref: d23bfa1176eec8672e22865cc36d69d67474cbd7
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
