@@ -59,14 +59,6 @@ jobs:
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
-      - name: Checkout computer
-        uses: actions/checkout@v4
-        with:
-          repository: apteva/computer
-          ref: 6422bf8280d9dedf9d3db330af9ca89775c698a8
-          path: computer
-          token: ${{ secrets.REPO_TOKEN }}
-
       - name: Checkout dashboard
         uses: actions/checkout@v4
         with:
@@ -441,14 +433,6 @@ jobs:
           repository: apteva/server
           ref: 0219d133af811d34c3385b7d357f6e102efbe9ce
           path: server
-          token: ${{ secrets.REPO_TOKEN }}
-
-      - name: Checkout computer
-        uses: actions/checkout@v4
-        with:
-          repository: apteva/computer
-          ref: 6422bf8280d9dedf9d3db330af9ca89775c698a8
-          path: computer
           token: ${{ secrets.REPO_TOKEN }}
 
       - name: Checkout dashboard

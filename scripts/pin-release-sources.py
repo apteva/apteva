@@ -9,7 +9,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--sources", type=Path, required=True, help="SOURCE_COMMITS manifest")
 parser.add_argument("--check", action="store_true", help="Fail rather than update stale pins")
 args = parser.parse_args()
-names = {"core", "server", "computer", "dashboard", "ui-kit", "app-sdk", "integrations"}
+names = {"core", "server", "dashboard", "ui-kit", "app-sdk", "integrations"}
 sources = dict(line.split() for line in args.sources.read_text().splitlines() if line.strip())
 if not names <= sources.keys() or any(not re.fullmatch(r"[a-f0-9]{40}", sources[n]) for n in names):
     parser.error("manifest must include a full commit SHA for every sibling component")

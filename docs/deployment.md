@@ -41,7 +41,6 @@ workspace/
   apteva/
   core/
   server/
-  computer/
   dashboard/
   ui-kit/
   app-sdk/

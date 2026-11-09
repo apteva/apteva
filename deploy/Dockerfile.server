@@ -1,7 +1,7 @@
 # Apteva release image.
 #
 # Build context is the GitHub Actions workspace after sibling checkouts:
-#   apteva/ core/ server/ computer/ dashboard/ ui-kit/ app-sdk/ integrations/
+#   apteva/ core/ server/ dashboard/ ui-kit/ app-sdk/ integrations/
 #
 # Local equivalent:
 #   docker build -f apteva/deploy/Dockerfile.server -t ghcr.io/apteva/apteva:dev .
@@ -39,7 +39,6 @@ COPY apteva/package.json ./apteva-package.json
 COPY dashboard/package.json ./dashboard-package.json
 COPY integrations/package.json ./integrations-package.json
 COPY core/ ./core/
-COPY computer/ ./computer/
 COPY app-sdk/ ./app-sdk/
 COPY server/ ./server/
 
