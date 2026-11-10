@@ -28,7 +28,10 @@ func cmdDashboardUpdate([]string) int {
 func acquireUpdateLock() (*os.File, error) {
 	return nil, fmt.Errorf("automatic updates are unavailable on Windows")
 }
-func readUpdateJob() (*dashboardUpdateJob, error)      { return nil, os.ErrNotExist }
+func readUpdateJob() (*dashboardUpdateJob, error) { return nil, os.ErrNotExist }
+func reconcileFleetUpdate(string) error {
+	return fmt.Errorf("Fleet updates are unavailable on Windows")
+}
 func updateJobTerminal(string) bool                    { return true }
 func (*dashboardUpdateJob) phase(string, string) error { return nil }
 func (*dashboardUpdateJob) recoverActivation(serviceScope, error) error {

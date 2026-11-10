@@ -44,6 +44,9 @@ func Run(version string) {
 		if invocation.mode == cliModeUpdate && len(invocation.args) > 0 && strings.HasPrefix(invocation.args[0], "--dashboard-") {
 			os.Exit(cmdDashboardUpdate(invocation.args))
 		}
+		if invocation.mode == cliModeUpdate && len(invocation.args) > 0 && invocation.args[0] == "fleet-grant" {
+			os.Exit(cmdFleetUpdateGrant(invocation.args[1:]))
+		}
 		// Known subcommands retain the legacy layout migration, but unknown
 		// commands have already exited without touching local state.
 		_ = migrateLegacyLayout()
