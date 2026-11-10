@@ -3,6 +3,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -13,6 +15,48 @@ import (
 	"testing"
 	"time"
 )
+
+func TestFleetUpdateGrantAndReceiptPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("APTEVA_HOME", home)
+	token, err := writeFleetUpdateGrant(home, true)
+	if err != nil || !strings.HasPrefix(token, "fup_") || len(token) != 68 {
+		t.Fatal("could not issue a valid update grant", err)
+	}
+	path := filepath.Join(home, "fleet-update-grant")
+	raw, err := os.ReadFile(path)
+	digest := sha256.Sum256([]byte(token))
+	if err != nil || string(raw) != hex.EncodeToString(digest[:]) {
+		t.Fatal("expected only the credential digest on disk")
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("grant must be private")
+	}
+	if _, err := writeFleetUpdateGrant(home, false); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || len(raw) != 0 {
+		t.Fatal("revocation must leave an empty policy marker")
+	}
+	id := strings.Repeat("1", 32)
+	job := &dashboardUpdateJob{ID: "one", State: "rolled_back", Target: "1.2.3",
+		Request: dashboardUpdateRequest{RequestID: id, AgentPolicy: "preserve"}}
+	if err := archiveFleetUpdateJob(job); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := findFleetUpdateJob(id, &dashboardUpdateJob{ID: "newer-job"})
+	if err != nil || saved == nil || saved.ID != job.ID || saved.State != job.State {
+		t.Fatal("older Fleet request must retain its own receipt after a new job", err)
+	}
+	missing := strings.Repeat("2", 32)
+	if err := reconcileFleetUpdate(missing); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := findFleetUpdateJob(missing, nil)
+	if err != nil || canceled == nil || canceled.State != "canceled" {
+		t.Fatal("an unaccepted request needs a durable cancellation receipt", err)
+	}
+}
 
 func TestDashboardUpdateJobPersistenceAndLock(t *testing.T) {
 	t.Setenv("APTEVA_HOME", t.TempDir())

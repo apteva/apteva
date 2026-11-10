@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -99,25 +100,41 @@ func deployThroughHost(target, version string, job *dashboardUpdateJob, policy s
 	// Deployment is owned by the host, independent of this terminal/updater.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	s, err := hostRequest(ctx, c, "POST", "/deploy", map[string]string{"binary": filepath.Join(target, "apteva-server"), "version": version, "agent_policy": policy})
-	if err != nil {
+	fleetJob := job != nil && job.Request.RequestID != ""
+	unverified := func(err error) error {
+		if fleetJob {
+			return errors.Join(err, job.phase("recovery_required", err.Error()))
+		}
 		return err
 	}
-	if s.Job == nil {
-		return fmt.Errorf("host did not return a deployment identity")
+	if fleetJob {
+		if err := job.phase("activating", "Requesting activation from the stable host"); err != nil {
+			return err
+		}
+	}
+	s, err := hostRequest(ctx, c, "POST", "/deploy", map[string]string{"binary": filepath.Join(target, "apteva-server"), "version": version, "agent_policy": policy})
+	if err != nil {
+		return unverified(err)
+	}
+	if s.Job == nil || (fleetJob && (s.Job.ID == "" || s.Job.Version != version)) {
+		return unverified(fmt.Errorf("host did not return a deployment identity"))
 	}
 	id := s.Job.ID
 	for {
-		if s.Job == nil || s.Job.ID != id {
-			return fmt.Errorf("host deployment identity changed")
+		if s.Job == nil || s.Job.ID != id || (fleetJob && s.Job.Version != version) {
+			return unverified(fmt.Errorf("host deployment identity changed"))
 		}
-		if err = job.phase(s.Job.Phase, s.Job.Message); err != nil {
-			return err
+		phase, message := s.Job.Phase, s.Job.Message
+		if fleetJob && phase == "succeeded" {
+			phase, message = "activating", "Committing the CLI release after the stable host activated"
+		}
+		if err = job.phase(phase, message); err != nil {
+			return unverified(err)
 		}
 		switch s.Job.Phase {
 		case "succeeded":
 			if s.Version != version {
-				return fmt.Errorf("host activated a different version")
+				return unverified(fmt.Errorf("host activated a different version"))
 			}
 			return nil
 		case "failed", "rolled_back", "recovery_required":
@@ -125,12 +142,12 @@ func deployThroughHost(target, version string, job *dashboardUpdateJob, policy s
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("host deployment continues independently; check status before retrying: %w", ctx.Err())
+			return unverified(fmt.Errorf("host deployment continues independently; check status before retrying: %w", ctx.Err()))
 		case <-time.After(time.Second):
 		}
 		s, err = hostRequest(ctx, c, "GET", "/status", nil)
 		if err != nil {
-			return fmt.Errorf("host status unavailable; no restart fallback attempted: %w", err)
+			return unverified(fmt.Errorf("host status unavailable; no restart fallback attempted: %w", err))
 		}
 	}
 }

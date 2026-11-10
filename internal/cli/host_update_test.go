@@ -10,8 +10,40 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+func TestFleetStableHostRequiresConfirmedDeploymentAndCLICommit(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		reply   int
+		phase   string
+		wantErr bool
+	}{
+		{"lost reply", http.StatusServiceUnavailable, "recovery_required", true},
+		{"stable host activated", http.StatusOK, "activating", false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			home := hostedCLIFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(scenario.reply)
+				_ = json.NewEncoder(w).Encode(hostState{Version: "1.2.3", Job: &hostDeployment{
+					ID: "host-job", Phase: "succeeded", Version: "1.2.3",
+				}})
+			}))
+			job := &dashboardUpdateJob{ID: "fleet-job", Target: "1.2.3",
+				Request: dashboardUpdateRequest{RequestID: strings.Repeat("a", 32)}}
+			err := deployThroughHost(home, "1.2.3", job, "preserve")
+			if (err != nil) != scenario.wantErr {
+				t.Fatalf("unexpected deployment result: %v", err)
+			}
+			saved, err := readUpdateJob()
+			if err != nil || saved.State != scenario.phase {
+				t.Fatalf("unexpected durable deployment state: %+v (%v)", saved, err)
+			}
+		})
+	}
+}
 
 func hostedCLIFixture(t *testing.T, handler http.Handler) string {
 	t.Helper()

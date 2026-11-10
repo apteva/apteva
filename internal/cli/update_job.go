@@ -31,6 +31,7 @@ type dashboardUpdateRequest struct {
 	Method      string `json:"method"`
 	Target      string `json:"target_version"`
 	AgentPolicy string `json:"agent_policy"`
+	RequestID   string `json:"request_id,omitempty"`
 }
 
 type dashboardUpdateJob struct {
@@ -44,20 +45,22 @@ type dashboardUpdateJob struct {
 	Backup        string                 `json:"backup,omitempty"`
 	SchemaChanged bool                   `json:"schema_changed,omitempty"`
 	RollbackSafe  bool                   `json:"rollback_safe"`
+	Reconciled    string                 `json:"reconciled_version,omitempty"`
 	Request       dashboardUpdateRequest `json:"request"`
 	mu            sync.Mutex
 }
 
 type dashboardUpdateView struct {
-	Supported bool                `json:"supported"`
-	Reason    string              `json:"reason,omitempty"`
-	Job       *dashboardUpdateJob `json:"job,omitempty"`
+	Supported     bool                `json:"supported"`
+	Reason        string              `json:"reason,omitempty"`
+	Job           *dashboardUpdateJob `json:"job,omitempty"`
+	FleetProtocol int                 `json:"fleet_update_protocol,omitempty"`
 }
 
 func updateJobPath() string { return filepath.Join(aptevaDir(), "platform-update.json") }
 func updateJobTerminal(state string) bool {
 	switch state {
-	case "succeeded", "failed", "rolled_back", "recovery_required":
+	case "succeeded", "failed", "rolled_back", "recovery_required", "reconciled", "canceled":
 		return true
 	}
 	return false
@@ -65,11 +68,15 @@ func updateJobTerminal(state string) bool {
 
 func (j *dashboardUpdateJob) saveLocked() error {
 	j.UpdatedAt = time.Now().UTC()
+	return j.write(updateJobPath())
+}
+
+func (j *dashboardUpdateJob) write(path string) error {
 	raw, err := json.Marshal(j)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(aptevaDir(), ".update-job-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".update-job-*")
 	if err != nil {
 		return err
 	}
@@ -84,7 +91,7 @@ func (j *dashboardUpdateJob) saveLocked() error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(f.Name(), updateJobPath())
+	return os.Rename(f.Name(), path)
 }
 func (j *dashboardUpdateJob) phase(state, message string) error {
 	if j == nil {
@@ -100,7 +107,11 @@ func (j *dashboardUpdateJob) phase(state, message string) error {
 	return nil
 }
 func readUpdateJob() (*dashboardUpdateJob, error) {
-	raw, err := os.ReadFile(updateJobPath())
+	return readUpdateJobFile(updateJobPath())
+}
+
+func readUpdateJobFile(path string) (*dashboardUpdateJob, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +120,29 @@ func readUpdateJob() (*dashboardUpdateJob, error) {
 		return nil, err
 	}
 	return &job, nil
+}
+
+var fleetUpdateRequestID = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+func fleetUpdateJobPath(id string) string {
+	return filepath.Join(aptevaDir(), "fleet-update-jobs", id+".json")
+}
+
+// Called under the update lock before replacing the current job. Retaining
+// terminal receipts prevents a retry of an older request from launching again.
+func archiveFleetUpdateJob(job *dashboardUpdateJob) error {
+	id := job.Request.RequestID
+	if id == "" {
+		return nil
+	}
+	if !fleetUpdateRequestID.MatchString(id) || !updateJobTerminal(job.State) {
+		return errors.New("cannot archive an invalid or unfinished Fleet update")
+	}
+	path := fleetUpdateJobPath(id)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	return job.write(path)
 }
 func acquireUpdateLock() (*os.File, error) {
 	if err := os.MkdirAll(aptevaDir(), 0700); err != nil {
@@ -226,7 +260,7 @@ func cmdDashboardUpdate(args []string) int {
 	if len(args) == 2 && args[0] == "--dashboard-worker" {
 		return runDashboardUpdateWorker(args[1])
 	}
-	if len(args) != 1 || (args[0] != "--dashboard-probe" && args[0] != "--dashboard-start") {
+	if len(args) != 1 || (args[0] != "--dashboard-probe" && args[0] != "--dashboard-start" && args[0] != "--dashboard-fleet-start") {
 		return 2
 	}
 	var req dashboardUpdateRequest
@@ -234,7 +268,15 @@ func cmdDashboardUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	if (args[0] == "--dashboard-fleet-start") != (req.RequestID != "") ||
+		(req.RequestID != "" && (runtime.GOOS != "linux" || !fleetUpdateRequestID.MatchString(req.RequestID))) {
+		fmt.Fprintln(os.Stderr, "invalid Fleet update request")
+		return 2
+	}
 	view := dashboardUpdateView{}
+	if runtime.GOOS == "linux" {
+		view.FleetProtocol = 1
+	}
 	if err := validateUpdateService(req); err != nil {
 		view.Reason = err.Error()
 	} else {
@@ -269,22 +311,56 @@ func cmdDashboardUpdate(args []string) int {
 		return 1
 	}
 	defer lock.Close()
-	// Re-read under the lock to make concurrent submissions idempotent.
-	if job, err := readUpdateJob(); err == nil && !updateJobTerminal(job.State) {
+	if req.RequestID == "" {
+		if _, err := os.Lstat(filepath.Join(aptevaDir(), "fleet-update-grant")); !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "use Fleet or the local Apteva CLI to update this installation")
+			return 1
+		}
+	}
+	// Re-read under the lock to distinguish a retry from a competing update.
+	job, err = readUpdateJob()
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "cannot read existing update job:", err)
+		return 1
+	}
+	if req.RequestID != "" {
+		existing, lookupErr := findFleetUpdateJob(req.RequestID, job)
+		if lookupErr != nil {
+			fmt.Fprintln(os.Stderr, lookupErr)
+			return 1
+		}
+		if existing != nil {
+			if existing.State != "canceled" && (existing.Target != req.Target || existing.Request.AgentPolicy != req.AgentPolicy) {
+				fmt.Fprintln(os.Stderr, "Fleet request ID is already bound to a different update")
+				return 1
+			}
+			view.Job = existing
+			_ = json.NewEncoder(os.Stdout).Encode(view)
+			return 0
+		}
+	}
+	if job != nil && !updateJobTerminal(job.State) {
+		if req.RequestID != "" {
+			fmt.Fprintln(os.Stderr, "another update is already running")
+			return 1
+		}
 		view.Job = job
 		_ = json.NewEncoder(os.Stdout).Encode(view)
 		return 0
 	}
-	if job, err := readUpdateJob(); err == nil && job.State == "recovery_required" {
+	if job != nil && job.State == "recovery_required" {
 		fmt.Fprintln(os.Stderr, job.Message)
-		return 1
-	} else if err != nil && !os.IsNotExist(err) {
-		fmt.Fprintln(os.Stderr, "cannot read existing update job:", err)
 		return 1
 	}
 	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?$`).MatchString(req.Target) || !semverGreater(req.Target, Version) {
 		fmt.Fprintln(os.Stderr, "target must be a newer published release")
 		return 1
+	}
+	if job != nil {
+		if err := archiveFleetUpdateJob(job); err != nil {
+			fmt.Fprintln(os.Stderr, "archive previous Fleet update:", err)
+			return 1
+		}
 	}
 	job = &dashboardUpdateJob{ID: strconv.FormatInt(time.Now().UnixNano(), 36), State: "queued", Message: "Preparing update", Target: req.Target, Previous: activeVersion(), Request: req}
 	if err := job.saveLocked(); err != nil {
@@ -294,13 +370,87 @@ func cmdDashboardUpdate(args []string) int {
 	// Release before the supervisor starts the worker, which takes the same lock.
 	lock.Close()
 	if err := launchUpdateWorker(job); err != nil {
-		job.phase("failed", err.Error())
+		// The supervisor may have accepted a Fleet launch before its reply
+		// was lost. Keep the queued receipt so the worker can still claim it.
+		if req.RequestID == "" {
+			job.phase("failed", err.Error())
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	view.Job = job
 	_ = json.NewEncoder(os.Stdout).Encode(view)
 	return 0
+}
+
+func findFleetUpdateJob(id string, current *dashboardUpdateJob) (*dashboardUpdateJob, error) {
+	if current != nil && current.Request.RequestID == id {
+		return current, nil
+	}
+	job, err := readUpdateJobFile(fleetUpdateJobPath(id))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err == nil && job.Request.RequestID != id {
+		return nil, errors.New("Fleet update receipt does not match request")
+	}
+	return job, err
+}
+
+func reconcileFleetUpdate(id string) error {
+	if !fleetUpdateRequestID.MatchString(id) {
+		return errors.New("provide a valid Fleet request ID")
+	}
+	lock, err := acquireUpdateLock()
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	current, err := readUpdateJob()
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	job, err := findFleetUpdateJob(id, current)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		// The owner can close an unaccepted request. A late submission
+		// with this ID will find the receipt under the same update lock.
+		return archiveFleetUpdateJob(&dashboardUpdateJob{
+			ID: id, State: "canceled", UpdatedAt: time.Now().UTC(),
+			Request: dashboardUpdateRequest{RequestID: id},
+		})
+	}
+	if job != current {
+		return nil
+	}
+	if job.State != "recovery_required" && (updateJobTerminal(job.State) || time.Since(job.UpdatedAt) < 2*time.Minute) {
+		return errors.New("the update is complete or still within its reporting window")
+	}
+	version := activeVersion()
+	if err := os.Setenv("DB_PATH", job.Request.DBPath); err != nil {
+		return err
+	}
+	if state, present, err := probeHost(); present || err != nil {
+		if err != nil {
+			return err
+		}
+		if state.Job != nil && (!updateJobTerminal(state.Job.Phase) || state.Job.Phase == "recovery_required") {
+			return errors.New("recover the stable host before reconciling the update")
+		}
+		if state.Version != version {
+			return errors.New("repair the local CLI release links before reconciling the stable host")
+		}
+	}
+	if version == "" || (version != job.Target && version != job.Previous) {
+		return errors.New("the installation is serving neither the previous nor the requested release")
+	}
+	if err := waitForUpdateVersion(job.Request.Port, version, 5*time.Second); err != nil {
+		return err
+	}
+	job.Reconciled = version
+	return job.phase("reconciled", "The host operator verified the running release after recovery")
 }
 
 func launchUpdateWorker(j *dashboardUpdateJob) error {
