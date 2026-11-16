@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,11 +36,61 @@ type hostState struct {
 	Job        *hostDeployment `json:"job"`
 }
 
+// apteva-host authenticates control-socket callers with a per-host token it
+// mints on every start: server slots receive it in the environment, local
+// tools read it from control.token next to the socket (mode 0600, so only
+// the user that runs the host can). Hosts that predate the token ignore it.
+const (
+	hostControlTokenHeader = "X-Apteva-Host-Token"
+	hostControlTokenEnv    = "APTEVA_HOST_CONTROL_TOKEN"
+	hostControlTokenFile   = "control.token"
+)
+
 func hostSocket() string { return filepath.Join(aptevaDir(), "host", "control.sock") }
+
+// hostControlToken is resolved per request, so a host restarted mid-deploy
+// (which rotates the token) keeps being reachable.
+func hostControlToken() string {
+	if token := strings.TrimSpace(os.Getenv(hostControlTokenEnv)); token != "" {
+		return token
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(hostSocket()), hostControlTokenFile))
+	if err != nil || len(b) > 512 {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+type hostTokenTransport struct{ base *http.Transport }
+
+func (t *hostTokenTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if token := hostControlToken(); token != "" && r.Header.Get(hostControlTokenHeader) == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set(hostControlTokenHeader, token)
+	}
+	return t.base.RoundTrip(r)
+}
+
+func (t *hostTokenTransport) CloseIdleConnections() { t.base.CloseIdleConnections() }
+
 func hostControlClient() *http.Client {
-	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	base := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", hostSocket())
-	}}}
+	}}
+	return &http.Client{Timeout: 10 * time.Second, Transport: &hostTokenTransport{base: base}}
+}
+
+// hostAccessHint explains a refused control-socket call in terms the
+// operator can act on.
+func hostAccessHint(status int) string {
+	dir := filepath.Dir(hostSocket())
+	switch status {
+	case http.StatusUnauthorized:
+		return fmt.Sprintf(" (the host requires its control token: run this as the user that owns %s so %s is readable, or set %s)", dir, filepath.Join(dir, hostControlTokenFile), hostControlTokenEnv)
+	case http.StatusForbidden:
+		return fmt.Sprintf(" (the host only accepts its own OS user or root on %s; run this as that user)", hostSocket())
+	}
+	return ""
 }
 func hostRequest(ctx context.Context, c *http.Client, method, path string, input any) (hostState, error) {
 	var s hostState
@@ -63,7 +114,7 @@ func hostRequest(ctx context.Context, c *http.Client, method, path string, input
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return s, fmt.Errorf("host: HTTP %d: %s", resp.StatusCode, b)
+		return s, fmt.Errorf("host: HTTP %d: %s%s", resp.StatusCode, bytes.TrimSpace(b), hostAccessHint(resp.StatusCode))
 	}
 	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&s)
 	return s, err

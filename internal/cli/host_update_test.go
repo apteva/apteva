@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -192,5 +193,84 @@ func TestOptionalHostDoesNotInvalidateOlderArchives(t *testing.T) {
 	defer c.CloseIdleConnections()
 	if _, err := hostRequest(context.Background(), c, "POST", "/deploy", make(chan int)); err == nil {
 		t.Fatal("unencodable deployment accepted")
+	}
+}
+
+// recordingHost answers like apteva-host and remembers the control token
+// each request carried.
+func recordingHost(t *testing.T, status int) (string, *[]string) {
+	t.Helper()
+	var seen []string
+	var home string
+	home = hostedCLIFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get(hostControlTokenHeader))
+		if status != http.StatusOK {
+			http.Error(w, "missing or invalid host control token", status)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(hostState{Protocol: 1, Home: home, DBPath: filepath.Join(home, "apteva.db"), PID: 123, ListenAddr: "127.0.0.1:5280"})
+	}))
+	return home, &seen
+}
+
+func TestHostControlTokenFromEnvironment(t *testing.T) {
+	_, seen := recordingHost(t, http.StatusOK)
+	t.Setenv(hostControlTokenEnv, "  env-token  ")
+	if _, present, err := probeHost(); !present || err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(*seen) != 1 || (*seen)[0] != "env-token" {
+		t.Fatalf("token sent: %q", *seen)
+	}
+}
+
+func TestHostControlTokenFromFileFollowsRotation(t *testing.T) {
+	t.Setenv(hostControlTokenEnv, "")
+	home, seen := recordingHost(t, http.StatusOK)
+	tokenPath := filepath.Join(home, "host", hostControlTokenFile)
+	if err := os.WriteFile(tokenPath, []byte("first-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := probeHost(); err != nil {
+		t.Fatal(err)
+	}
+	// A host restart mints a new token; the same CLI run must pick it up.
+	if err := os.WriteFile(tokenPath, []byte("second-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := hostControlClient()
+	defer c.CloseIdleConnections()
+	if _, err := hostRequest(context.Background(), c, "GET", "/status", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(*seen) != 2 || (*seen)[0] != "first-token" || (*seen)[1] != "second-token" {
+		t.Fatalf("tokens sent: %q", *seen)
+	}
+}
+
+func TestHostControlWithoutTokenStillReachesOlderHosts(t *testing.T) {
+	t.Setenv(hostControlTokenEnv, "")
+	_, seen := recordingHost(t, http.StatusOK)
+	if _, present, err := probeHost(); !present || err != nil {
+		t.Fatalf("older host without token support: %v", err)
+	}
+	if len(*seen) != 1 || (*seen)[0] != "" {
+		t.Fatalf("unexpected token header: %q", *seen)
+	}
+}
+
+func TestHostControlRefusalExplainsHowToGetAccess(t *testing.T) {
+	t.Setenv(hostControlTokenEnv, "")
+	for status, want := range map[int]string{
+		http.StatusUnauthorized: hostControlTokenEnv,
+		http.StatusForbidden:    "OS user",
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			recordingHost(t, status)
+			_, present, err := probeHost()
+			if !present || err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "HTTP "+strconv.Itoa(status)) {
+				t.Fatalf("refusal not explained: %v", err)
+			}
+		})
 	}
 }
