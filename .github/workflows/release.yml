@@ -28,12 +28,15 @@ jobs:
           - goos: linux
             goarch: arm64
             runner: ubuntu-latest
+          # CGO is off (modernc sqlite is pure Go), so darwin binaries
+          # cross-compile on Linux. macOS runners are scarce and a release
+          # used to wait 15+ min in their queue.
           - goos: darwin
             goarch: amd64
-            runner: macos-latest
+            runner: ubuntu-latest
           - goos: darwin
             goarch: arm64
-            runner: macos-latest
+            runner: ubuntu-latest
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -100,12 +103,27 @@ jobs:
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
+      # Restores the module and build caches keyed on every Go module the
+      # binaries come from; each matrix entry keeps its own cache because the
+      # runner OS is part of the key.
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.11'
-          cache: false
+          cache: true
+          cache-dependency-path: |
+            apteva/go.sum
+            core/go.sum
+            server/go.sum
+            app-sdk/go.sum
 
       - uses: oven-sh/setup-bun@v2
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('dashboard/bun.lock*', 'ui-kit/bun.lock*', 'integrations/bun.lock*') }}
+          restore-keys: bun-${{ runner.os }}-
 
       - name: Get version
         id: version
@@ -397,8 +415,10 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+  # Builds from the same pinned sources as the tarballs, so it starts with
+  # them instead of after the GitHub release. Images are pushed by digest
+  # only; publish-docker tags them once the release itself has succeeded.
   build-docker:
-    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -520,7 +540,7 @@ jobs:
           retention-days: 1
 
   publish-docker:
-    needs: build-docker
+    needs: [build-docker, release]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
