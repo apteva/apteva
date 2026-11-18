@@ -34,7 +34,7 @@ func TestFleetStableHostRequiresConfirmedDeploymentAndCLICommit(t *testing.T) {
 			}))
 			job := &dashboardUpdateJob{ID: "fleet-job", Target: "1.2.3",
 				Request: dashboardUpdateRequest{RequestID: strings.Repeat("a", 32)}}
-			err := deployThroughHost(home, "1.2.3", job, "preserve")
+			err := deployThroughHost(home, "1.2.3", job, "preserve", false)
 			if (err != nil) != scenario.wantErr {
 				t.Fatalf("unexpected deployment result: %v", err)
 			}

@@ -12,9 +12,17 @@ type hostState struct {
 
 func probeHost() (hostState, bool, error) { return hostState{}, false, nil }
 func optionalHostBinary(string) string    { return "" }
-func deployThroughHost(string, string, *dashboardUpdateJob, string) error {
+func deployThroughHost(string, string, *dashboardUpdateJob, string, bool) error {
 	return fmt.Errorf("hosted deployments are unavailable on Windows")
 }
-func validateThroughHost(string, string) error {
+func validateThroughHost(string, string, bool) (bool, error) {
+	return false, fmt.Errorf("hosted deployments are unavailable on Windows")
+}
+
+const hostCapabilityRestartMigration = "restart_migration"
+
+func (hostState) supports(string) bool    { return false }
+func restartMigrationRequired(error) bool { return false }
+func restartServiceOntoRelease(string, string, hostState, string) error {
 	return fmt.Errorf("hosted deployments are unavailable on Windows")
 }

@@ -100,6 +100,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	dryRun := fs.Bool("dry-run", false, "download + verify + preflight, but skip the symlink flip")
 	keepN := fs.Int("keep", 3, "number of prior versions to keep on disk")
 	agentPolicy := fs.String("agents", "", "agent handling: restart, rolling, or preserve (default: server setting)")
+	restart := fs.Bool("restart", false, "stable host installs: allow a release that changes the database schema; the server restarts onto it and migrates (requests pause meanwhile)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -117,7 +118,15 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		fmt.Fprintln(os.Stderr, "(continuing — `apteva update` will work on a fresh layout)")
 	}
 
-	fmt.Fprintf(os.Stderr, "current: v%s\n", Version)
+	// On a stable-host install the serving version is the host's, which can
+	// differ from this CLI's own version (links not yet repointed, or a CLI
+	// updated separately).
+	current := servingVersion()
+	if current != Version {
+		fmt.Fprintf(os.Stderr, "current: v%s (serving through the stable host; this CLI is v%s)\n", current, Version)
+	} else {
+		fmt.Fprintf(os.Stderr, "current: v%s\n", current)
+	}
 	fmt.Fprintln(os.Stderr, "fetching version manifest…")
 
 	m, err := fetchVersionManifest(versionManifestURL)
@@ -138,11 +147,20 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	// equality, which would offer to "update" v0.12.1 → v0.12.0
 	// the moment version.json went stale (a regression we lived
 	// through twice). semverGreater is in layout.go.
-	if Version == m.Version || (Version != "dev" && semverGreater(Version, m.Version)) {
-		if Version == m.Version {
-			fmt.Fprintf(os.Stderr, "already on latest (v%s)\n", Version)
+	if current == m.Version || (current != "dev" && semverGreater(current, m.Version)) {
+		if current == m.Version && current != Version && job == nil && !*check && !*dryRun {
+			// The host already serves this release; only the CLI links lag.
+			if err := pointSymlinks(m.Version); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "the stable host already serves v%s; CLI links now point at it\n", m.Version)
+			return 0
+		}
+		if current == m.Version {
+			fmt.Fprintf(os.Stderr, "already on latest (v%s)\n", current)
 		} else {
-			fmt.Fprintf(os.Stderr, "running v%s, manifest says v%s — already ahead, nothing to do.\n", Version, m.Version)
+			fmt.Fprintf(os.Stderr, "running v%s, manifest says v%s — already ahead, nothing to do.\n", current, m.Version)
 			fmt.Fprintln(os.Stderr, "(if the manifest looks wrong, the dashboard's update banner reads from the same file at")
 			fmt.Fprintln(os.Stderr, " https://raw.githubusercontent.com/apteva/apteva/main/version.json — file an issue if it's stale.)")
 		}
@@ -150,7 +168,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	}
 
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "  update available: v%s → v%s\n", Version, m.Version)
+	fmt.Fprintf(os.Stderr, "  update available: v%s → v%s\n", current, m.Version)
 	if m.ReleaseNotesURL != "" {
 		fmt.Fprintf(os.Stderr, "  release notes:    %s\n", m.ReleaseNotesURL)
 	}
@@ -310,7 +328,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		_ = os.Chmod(p, 0o755)
 	}
 
-	if _, hosted, err := probeHost(); hosted {
+	if hostState, hosted, err := probeHost(); hosted {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -321,16 +339,46 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 				return 1
 			}
 		}
+		hostRestarts := hostState.supports(hostCapabilityRestartMigration)
 		if *dryRun {
-			if err := validateThroughHost(target, m.Version); err != nil {
+			restartRequired, err := validateThroughHost(target, m.Version, hostRestarts)
+			if restartMigrationRequired(err) {
+				restartRequired, err = true, nil
+			}
+			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
 			}
-			fmt.Fprintln(os.Stderr, "dry run: hosted preflight passed; current version retained")
+			if restartRequired {
+				fmt.Fprintf(os.Stderr, "dry run: hosted preflight passed. v%s changes the database schema, so `apteva update --restart` is needed: the server restarts onto it and migrates. Current version retained.\n", m.Version)
+			} else {
+				fmt.Fprintln(os.Stderr, "dry run: hosted preflight passed; current version retained")
+			}
 			return 0
 		}
-		if err := deployThroughHost(target, m.Version, job, *agentPolicy); err != nil {
+		if *restart && !hostRestarts && job == nil {
+			// This host predates restart migrations. A release with an
+			// unchanged schema still deploys live; otherwise the service
+			// restarts onto the new release, whose host runs the migration.
+			_, err := validateThroughHost(target, m.Version, false)
+			if restartMigrationRequired(err) {
+				if err := restartServiceOntoRelease(target, m.Version, hostState, *agentPolicy); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					return 1
+				}
+				fmt.Fprintf(os.Stderr, "Apteva v%s is serving through the stable host; the database was migrated.\n", m.Version)
+				return 0
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		if err := deployThroughHost(target, m.Version, job, *agentPolicy, *restart && job == nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			if restartMigrationRequired(err) && !*restart {
+				fmt.Fprintf(os.Stderr, "\nv%s changes the database schema, so it cannot replace the running server live.\nRun `apteva update --restart` to restart the server onto it: requests pause while it migrates, and apps restart.\n", m.Version)
+			}
 			return 1
 		}
 		// Commit the CLI pointer only after the host has durably committed a
@@ -511,6 +559,15 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	}
 	fmt.Fprintln(os.Stderr)
 	return 0
+}
+
+// servingVersion is the version this installation serves: the stable
+// host's when one runs, else this CLI's own.
+func servingVersion() string {
+	if state, hosted, err := probeHost(); hosted && err == nil && state.Version != "" {
+		return state.Version
+	}
+	return Version
 }
 
 // fetchVersionManifest GETs the version manifest. Short timeout —

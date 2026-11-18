@@ -127,7 +127,7 @@ func cmdRollback(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if err = deployThroughHost(versionDir(target), target, nil, "preserve"); err != nil {
+		if err = deployThroughHost(versionDir(target), target, nil, "preserve", false); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
