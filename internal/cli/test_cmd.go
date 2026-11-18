@@ -378,6 +378,12 @@ func cmdTest(args []string) int {
 		fmt.Fprintln(os.Stderr, "test model: --model requires --provider")
 		return 2
 	}
+	// A connection-backed primary provider needs its connection pinned too:
+	// Server otherwise gives every tier the first model upstream lists, and
+	// that replaces the per-instance override.
+	if name, m := normalizeProviderName(*provider), strings.TrimSpace(*model); name != "" && m != "" {
+		extraProviderModels[name] = m
+	}
 
 	opts := testOpts{
 		ctx:            ctx,
@@ -3924,15 +3930,17 @@ func tcCreateInstance(server *testServer, projectID, name, directive, mode, prov
 // through the stopped agent's authenticated config endpoint.
 func writeInstanceDiskConfig(server *testServer, instanceID int64, directive, mode, provider, model string, mcpServers []map[string]any, boundAppInstallIDs []int64, includeChannels bool, initialPace map[string]any, agentConfig map[string]any) error {
 	if server.dataDir == "" {
-		body := map[string]any{}
+		// An existing server has no data dir to write; send the expanded
+		// directive and the model pin through the config API instead, or the
+		// agent keeps the unexpanded ${...} directive and the connection's
+		// default model.
+		body := map[string]any{"directive": directive}
+		applyTestModelOverride(body, provider, model)
 		if initialPace != nil {
 			body["main_pace"] = initialPace
 		}
 		if len(mcpServers) > 0 {
 			body["mcp_servers"] = mcpServersWithInstallIDs(mcpServers, boundAppInstallIDs)
-		}
-		if len(body) == 0 {
-			return nil
 		}
 		return requestJSON(http.MethodPut,
 			fmt.Sprintf("http://%s/api/instances/%d/config", server.addr, instanceID),
