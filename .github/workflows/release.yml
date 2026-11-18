@@ -254,9 +254,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      # Only the tarballs: build-docker runs alongside and uploads its own
+      # digest and build-record artifacts, which this job must not wait on.
+      - name: Download release tarballs
         uses: actions/download-artifact@v4
         with:
+          pattern: apteva-*
           path: artifacts
           merge-multiple: true
 
