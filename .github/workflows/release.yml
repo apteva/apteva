@@ -28,12 +28,15 @@ jobs:
           - goos: linux
             goarch: arm64
             runner: ubuntu-latest
+          # CGO is off (modernc sqlite is pure Go), so darwin binaries
+          # cross-compile on Linux. macOS runners are scarce and a release
+          # used to wait 15+ min in their queue.
           - goos: darwin
             goarch: amd64
-            runner: macos-latest
+            runner: ubuntu-latest
           - goos: darwin
             goarch: arm64
-            runner: macos-latest
+            runner: ubuntu-latest
 
     runs-on: ${{ matrix.runner }}
     steps:
