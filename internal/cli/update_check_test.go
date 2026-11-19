@@ -270,8 +270,45 @@ func TestRollbackBlockersFollowIncompatibleUpdates(t *testing.T) {
 			t.Fatalf("wrong blocker %+v", blockers[0])
 		}
 	}
-	if len(readUpdateHistory()) != 3 {
-		t.Fatalf("history kept entries it should not: %+v", readUpdateHistory())
+	// The 1.3.0 -> 1.4.0 update ran no check: recorded as unknown, and it
+	// blocks rolling back across it.
+	history := readUpdateHistory()
+	if len(history) != 4 || history[3].Classification != "unknown" || history[3].Compatible {
+		t.Fatalf("history: %+v", history)
+	}
+	if blockers := rollbackBlockers("1.4.0", "1.3.0"); len(blockers) != 1 || blockers[0].Classification != "unknown" {
+		t.Fatalf("unknown update did not block: %+v", blockers)
+	}
+}
+
+func TestRollbackUnrecordedFindsUpdatesWithNoHistory(t *testing.T) {
+	t.Setenv("APTEVA_HOME", t.TempDir())
+	// Nothing recorded: an older CLI or the dashboard installed 2.0.0.
+	if v, gap := rollbackUnrecorded("2.0.0", "1.9.0"); !gap || v != "2.0.0" {
+		t.Fatalf("empty history: %q %v", v, gap)
+	}
+	recordUpdateHistory("1.0.0", "1.1.0", &updateCheckSummary{Classification: "compatible", Compatible: true})
+	recordUpdateHistory("1.1.0", "1.3.0", &updateCheckSummary{Classification: "unchanged", Compatible: true})
+	// 1.3.0 -> 1.5.0 happened outside the CLI; 1.5.0 -> 1.6.0 is recorded.
+	recordUpdateHistory("1.5.0", "1.6.0", &updateCheckSummary{Classification: "compatible", Compatible: true})
+	for _, tc := range []struct {
+		current, target, missing string
+	}{
+		{"1.3.0", "1.0.0", ""},      // every hop recorded
+		{"1.3.0", "1.2.0", ""},      // the recorded hop jumps past the target
+		{"1.6.0", "1.5.0", ""},      // the recorded hop reaches the target
+		{"1.6.0", "1.3.0", "1.5.0"}, // nothing says how 1.5.0 arrived
+		{"1.6.0", "1.0.0", "1.5.0"},
+	} {
+		v, gap := rollbackUnrecorded(tc.current, tc.target)
+		if gap != (tc.missing != "") || v != tc.missing {
+			t.Fatalf("%s -> %s: %q %v, want %q", tc.current, tc.target, v, gap, tc.missing)
+		}
+	}
+	// A later rollback and update through the CLI are followed too.
+	recordUpdateHistory("1.3.0", "1.5.0", nil)
+	if v, gap := rollbackUnrecorded("1.6.0", "1.0.0"); gap {
+		t.Fatalf("recorded unknown hop still reported missing at %s", v)
 	}
 }
 

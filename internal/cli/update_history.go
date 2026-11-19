@@ -123,11 +123,18 @@ func readUpdateHistory() []updateHistoryEntry {
 	return entries
 }
 
+// recordUpdateHistory records an update. Without a check summary (a release
+// server older than the database check) the update is recorded as unknown:
+// nothing says whether the release it replaced can still run afterwards.
 func recordUpdateHistory(from, to string, s *updateCheckSummary) {
-	if s == nil || from == "" || to == "" || from == to {
+	if from == "" || to == "" || from == to {
 		return
 	}
-	entries := append(readUpdateHistory(), updateHistoryEntry{From: from, To: to, At: time.Now().UTC(), Classification: s.Classification, Compatible: s.Compatible, Backup: s.Backup})
+	entry := updateHistoryEntry{From: from, To: to, At: time.Now().UTC(), Classification: "unknown"}
+	if s != nil {
+		entry.Classification, entry.Compatible, entry.Backup = s.Classification, s.Compatible, s.Backup
+	}
+	entries := append(readUpdateHistory(), entry)
 	if len(entries) > 50 {
 		entries = entries[len(entries)-50:]
 	}
@@ -144,7 +151,8 @@ func recordUpdateHistory(from, to string, s *updateCheckSummary) {
 }
 
 // rollbackBlockers lists recorded updates between target and current that the
-// target release cannot run after: rolling back past them needs the backup.
+// target release cannot run after, or may not (unknown: no check ran):
+// rolling back past them needs the backup.
 func rollbackBlockers(current, target string) []updateHistoryEntry {
 	var blockers []updateHistoryEntry
 	for _, e := range readUpdateHistory() {
@@ -159,4 +167,29 @@ func rollbackBlockers(current, target string) []updateHistoryEntry {
 		blockers = append(blockers, e)
 	}
 	return blockers
+}
+
+// rollbackUnrecorded returns the version whose arrival the history cannot
+// account for on the way from current back to target. Updates made by an
+// older CLI, by apteva-host from the dashboard, or by Fleet leave no record,
+// so the history cannot say whether target still runs on this database.
+// It follows the most recent recorded update into each version, newest
+// first, until it reaches target or a version below it.
+func rollbackUnrecorded(current, target string) (string, bool) {
+	history := readUpdateHistory()
+	at := current
+	for semverGreater(at, target) {
+		found := false
+		for i := len(history) - 1; i >= 0; i-- {
+			e := history[i]
+			if e.To == at && e.From != "" && semverGreater(at, e.From) {
+				at, found = e.From, true
+				break
+			}
+		}
+		if !found {
+			return at, true
+		}
+	}
+	return "", false
 }

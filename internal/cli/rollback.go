@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"time"
@@ -139,7 +140,11 @@ func cmdRollback(args []string) int {
 	// use makes every release before it unable to run on this database.
 	if blockers := rollbackBlockers(active, target); len(blockers) > 0 {
 		for _, b := range blockers {
-			fmt.Fprintf(os.Stderr, "apteva rollback: the update from v%s to v%s changed the database in a way v%s cannot use.\n", b.From, b.To, target)
+			if b.Classification == "unknown" {
+				fmt.Fprintf(os.Stderr, "apteva rollback: no database check ran for the update from v%s to v%s, so it may have changed the database in a way v%s cannot use.\n", b.From, b.To, target)
+			} else {
+				fmt.Fprintf(os.Stderr, "apteva rollback: the update from v%s to v%s changed the database in a way v%s cannot use.\n", b.From, b.To, target)
+			}
 			if b.Backup == "" {
 				continue
 			}
@@ -151,6 +156,15 @@ func cmdRollback(args []string) int {
 		}
 		if !force {
 			fmt.Fprintf(os.Stderr, "Restore that backup with the service stopped, then roll back; or pass --force to start v%s on the current database anyway.\n", target)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "--force: starting v%s on the current database.\n", target)
+	} else if version, unrecorded := rollbackUnrecorded(active, target); unrecorded {
+		// No record of how a release between target and active was
+		// installed, so nothing says target can run on this database.
+		fmt.Fprintf(os.Stderr, "apteva rollback: there is no record of the update to v%s (made by an older apteva CLI, from the dashboard, or by Fleet), so it cannot confirm v%s runs on the current database.\n", version, target)
+		if !force {
+			fmt.Fprintf(os.Stderr, "If a backup from before that update exists under %s, restore it with the service stopped, then roll back; or pass --force to start v%s on the current database anyway.\n", filepath.Join(aptevaDir(), "update-backups"), target)
 			return 1
 		}
 		fmt.Fprintf(os.Stderr, "--force: starting v%s on the current database.\n", target)
