@@ -35,19 +35,26 @@ type dashboardUpdateRequest struct {
 }
 
 type dashboardUpdateJob struct {
-	ID            string                 `json:"id"`
-	State         string                 `json:"state"`
-	Message       string                 `json:"message"`
-	Target        string                 `json:"target_version"`
-	Previous      string                 `json:"previous_version"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	WorkerPID     int                    `json:"worker_pid,omitempty"`
-	Backup        string                 `json:"backup,omitempty"`
-	SchemaChanged bool                   `json:"schema_changed,omitempty"`
-	RollbackSafe  bool                   `json:"rollback_safe"`
-	Reconciled    string                 `json:"reconciled_version,omitempty"`
-	Request       dashboardUpdateRequest `json:"request"`
-	mu            sync.Mutex
+	ID string `json:"id"`
+	// Source is "cli" for an update started from this CLI; empty for the
+	// dashboard and Fleet, which launch a worker.
+	Source        string    `json:"source,omitempty"`
+	State         string    `json:"state"`
+	Message       string    `json:"message"`
+	Target        string    `json:"target_version"`
+	Previous      string    `json:"previous_version"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	WorkerPID     int       `json:"worker_pid,omitempty"`
+	Backup        string    `json:"backup,omitempty"`
+	SchemaChanged bool      `json:"schema_changed,omitempty"`
+	RollbackSafe  bool      `json:"rollback_safe"`
+	Reconciled    string    `json:"reconciled_version,omitempty"`
+	// Check is what the release's database check found; Progress is the
+	// check's progress while it runs.
+	Check    *updateCheckSummary    `json:"check,omitempty"`
+	Progress *updateJobProgress     `json:"progress,omitempty"`
+	Request  dashboardUpdateRequest `json:"request"`
+	mu       sync.Mutex
 }
 
 type dashboardUpdateView struct {
@@ -283,6 +290,14 @@ func cmdDashboardUpdate(args []string) int {
 		view.Supported = true
 	}
 	job, err := readUpdateJob()
+	if err == nil && job.Source == "cli" && !updateJobTerminal(job.State) {
+		// A command-line update holds the lock while it runs; if the lock is
+		// free, it ended without recording an outcome.
+		if lock, lockErr := acquireUpdateLock(); lockErr == nil {
+			settleInterruptedCLIJob(job)
+			lock.Close()
+		}
+	}
 	if err == nil {
 		view.Job = job
 		if !updateJobTerminal(job.State) && time.Since(job.UpdatedAt) > 2*time.Minute {
@@ -323,6 +338,7 @@ func cmdDashboardUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, "cannot read existing update job:", err)
 		return 1
 	}
+	settleInterruptedCLIJob(job)
 	if req.RequestID != "" {
 		existing, lookupErr := findFleetUpdateJob(req.RequestID, job)
 		if lookupErr != nil {
@@ -502,22 +518,7 @@ func runDashboardUpdateWorker(id string) int {
 	if err := j.phase("preparing", "Checking this installation"); err != nil {
 		return 1
 	}
-	stop := make(chan struct{})
-	defer close(stop)
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				j.mu.Lock()
-				_ = j.saveLocked()
-				j.mu.Unlock()
-			}
-		}
-	}()
+	defer j.heartbeat()()
 	if err := validateUpdateService(j.Request); err != nil {
 		j.phase("failed", err.Error())
 		return 1
@@ -570,10 +571,18 @@ func (j *dashboardUpdateJob) recoverActivation(scope serviceScope, cause error) 
 }
 
 func (j *dashboardUpdateJob) recoverActivationWith(scope serviceScope, cause error, flip func(string) error, restart func(serviceScope) error, wait func(int, string, time.Duration) error) error {
-	if j.SchemaChanged || !j.RollbackSafe {
-		// Never boot an older binary against a migrated database or silently
-		// discard writes by restoring a snapshot behind the operator's back.
-		j.phase("recovery_required", "The new version failed and database compatibility with the previous version is not confirmed. Database backup: "+j.Backup+". Manual recovery is required; see platform-update.log.")
+	if !j.previousRunsOnDatabase() {
+		// Never boot an older binary against a database it cannot use or
+		// silently discard writes by restoring a backup behind the
+		// operator's back.
+		message := "The new version failed, and the previous version cannot run on the database it migrated."
+		if j.Check == nil {
+			message = "The new version failed and database compatibility with the previous version is not confirmed."
+		}
+		if j.Backup != "" {
+			message += " Database backup taken before the update: " + j.Backup + "."
+		}
+		j.phase("recovery_required", message+" Manual recovery is required"+j.logHint()+".")
 		return cause
 	}
 	j.phase("rolling_back", "Activation failed; restoring the previous version")
@@ -589,6 +598,13 @@ func (j *dashboardUpdateJob) recoverActivationWith(scope serviceScope, cause err
 		j.phase("recovery_required", err.Error())
 		return errors.Join(cause, err)
 	}
-	j.phase("rolled_back", "The update failed. The previous version is running again; see platform-update.log.")
+	j.phase("rolled_back", "The update failed. The previous version is running again"+j.logHint()+".")
 	return cause
+}
+
+func (j *dashboardUpdateJob) logHint() string {
+	if j.dashboard() {
+		return "; see platform-update.log"
+	}
+	return ""
 }

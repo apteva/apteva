@@ -23,6 +23,8 @@ type hostDeployment struct {
 	Phase   string `json:"phase"`
 	Message string `json:"message"`
 	Version string `json:"version"`
+	// Check is the candidate's database check, from hosts that report it.
+	Check *updateCheckSummary `json:"check,omitempty"`
 }
 type hostState struct {
 	HostBinary string          `json:"host_binary"`
@@ -177,7 +179,8 @@ func deployThroughHost(target, version string, job *dashboardUpdateJob, policy s
 	c := hostControlClient()
 	defer c.CloseIdleConnections()
 	// Deployment is owned by the host, independent of this terminal/updater.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	// The host bounds its database check (30 minutes) and the activation.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 	fleetJob := job != nil && job.Request.RequestID != ""
 	unverified := func(err error) error {
@@ -203,16 +206,27 @@ func deployThroughHost(target, version string, job *dashboardUpdateJob, policy s
 		return unverified(fmt.Errorf("host did not return a deployment identity"))
 	}
 	id := s.Job.ID
-	shown := ""
+	shown, shownMessage, printed := "", "", time.Time{}
+	checkSeen := false
 	for {
 		if s.Job == nil || s.Job.ID != id || (fleetJob && s.Job.Version != version) {
 			return unverified(fmt.Errorf("host deployment identity changed"))
 		}
 		phase, message := s.Job.Phase, s.Job.Message
-		if job == nil && phase != shown && !updateJobTerminal(phase) {
-			// A restart migration has downtime; show where it is.
+		if !job.dashboard() && !updateJobTerminal(phase) && (phase != shown || (message != shownMessage && time.Since(printed) > 5*time.Second)) {
+			// The database check reports progress, and a restart migration
+			// has downtime; show where each is.
 			fmt.Fprintf(os.Stderr, "  %s: %s\n", phase, message)
-			shown = phase
+			shown, shownMessage, printed = phase, message, time.Now()
+		}
+		if s.Job.Check != nil && !checkSeen {
+			checkSeen = true
+			check := *s.Job.Check
+			check.RollbackSafe = check.Classification == "unchanged"
+			job.recordCheck(&check)
+			if !job.dashboard() {
+				fmt.Fprintf(os.Stderr, "  %s\n", describeCheck(&check))
+			}
 		}
 		if fleetJob && phase == "succeeded" {
 			phase, message = "activating", "Committing the CLI release after the stable host activated"
@@ -268,17 +282,22 @@ func optionalHostBinary(serverBin string) string {
 func validateThroughHost(target, version string, allowRestart bool) (restartRequired bool, err error) {
 	c := hostControlClient()
 	defer c.CloseIdleConnections()
-	c.Timeout = 6 * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	// The host bounds its database check at 30 minutes.
+	c.Timeout = 35 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 	defer cancel()
 	request := map[string]any{"binary": filepath.Join(target, "apteva-server"), "version": version}
 	if allowRestart {
 		request["allow_restart"] = true
 	}
 	var result struct {
-		RestartRequired bool `json:"restart_required"`
+		RestartRequired bool                `json:"restart_required"`
+		Check           *updateCheckSummary `json:"check"`
 	}
 	err = hostCall(ctx, c, "POST", "/validate", request, &result)
+	if err == nil && result.Check != nil {
+		fmt.Fprintf(os.Stderr, "  %s\n", describeCheck(result.Check))
+	}
 	return result.RestartRequired, err
 }
 
