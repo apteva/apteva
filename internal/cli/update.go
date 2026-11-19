@@ -257,7 +257,14 @@ func runUpdate(args []string, job *dashboardUpdateJob) (code int) {
 				stopInterrupt()
 				stopHeartbeat()
 				job.finish(code)
-				pruneUpdateBackups("")
+				backup := filepath.Join(aptevaDir(), "update-backups", job.ID, "apteva.db")
+				if code == 0 {
+					pruneUpdateBackups(backup)
+				} else {
+					// A failed update keeps every backup; drop only an
+					// empty directory its check left.
+					_ = os.Remove(filepath.Dir(backup))
+				}
 			}()
 		}
 	}

@@ -275,25 +275,48 @@ func TestRollbackBlockersFollowIncompatibleUpdates(t *testing.T) {
 	}
 }
 
-func TestPruneUpdateBackupsKeepsTheNewest(t *testing.T) {
+func TestPruneUpdateBackupsKeepsEarlierBackupsUnlessANewOneExists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("APTEVA_HOME", home)
 	root := filepath.Join(home, "update-backups")
-	for i, name := range []string{"old", "newer", "host-x"} {
+	write := func(name string, data string) {
 		dir := filepath.Join(root, name)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		at := time.Now().Add(time.Duration(i-3) * time.Hour)
-		_ = os.Chtimes(dir, at, at)
+		if data != "" {
+			if err := os.WriteFile(filepath.Join(dir, "apteva.db"), []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-	pruneUpdateBackups("")
-	entries, _ := os.ReadDir(root)
-	if len(entries) != 1 || entries[0].Name() != "host-x" {
-		t.Fatalf("kept %v", entries)
+	names := func() []string {
+		entries, _ := os.ReadDir(root)
+		var out []string
+		for _, e := range entries {
+			out = append(out, e.Name())
+		}
+		return out
 	}
+	write("old", "db")
+	write("host-x", "db")
+
+	// An update that took no backup (only an empty directory) keeps every
+	// earlier backup, even though its empty directory is the newest.
+	write("job-empty", "")
+	pruneUpdateBackups(filepath.Join(root, "job-empty", "apteva.db"))
+	if got := names(); len(got) != 2 || got[0] != "host-x" || got[1] != "old" {
+		t.Fatalf("kept %v, want host-x and old", got)
+	}
+	// A missing backup removes nothing either.
 	pruneUpdateBackups(filepath.Join(root, "missing", "apteva.db"))
-	if entries, _ := os.ReadDir(root); len(entries) != 0 {
-		t.Fatalf("named backup should be the only one kept, got %v", entries)
+	if got := names(); len(got) != 2 {
+		t.Fatalf("kept %v, want both earlier backups", got)
+	}
+	// An update with its own backup replaces the earlier ones.
+	write("job-new", "db")
+	pruneUpdateBackups(filepath.Join(root, "job-new", "apteva.db"))
+	if got := names(); len(got) != 1 || got[0] != "job-new" {
+		t.Fatalf("kept %v, want only job-new", got)
 	}
 }

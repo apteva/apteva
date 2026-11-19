@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -75,38 +74,25 @@ func sweepUpdateChecks(root string) {
 	}
 }
 
-// pruneUpdateBackups keeps only the newest backup: the one named, or none.
-// Backups are written only for updates the previous version cannot run on,
-// and each restores the state just before that update.
+// pruneUpdateBackups runs after a successful update. When that update took
+// its own backup (keep, a non-empty file), backups of earlier updates are
+// removed. Otherwise every backup stays: the newest existing one may still be
+// the only way back across an earlier incompatible update.
 func pruneUpdateBackups(keep string) {
-	root := filepath.Join(aptevaDir(), "update-backups")
+	keepDir := filepath.Dir(keep)
+	if info, err := os.Stat(keep); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		// Only an empty directory left by a check that took no backup.
+		_ = os.Remove(keepDir)
+		return
+	}
+	root := filepath.Dir(keepDir)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return
 	}
-	keepDir := ""
-	if keep != "" {
-		keepDir = filepath.Dir(keep)
-	}
-	var dirs []string
 	for _, entry := range entries {
-		if entry.IsDir() {
-			dirs = append(dirs, filepath.Join(root, entry.Name()))
-		}
-	}
-	if keepDir == "" {
-		// No new backup: keep the newest existing one.
-		sort.Slice(dirs, func(i, j int) bool {
-			a, _ := os.Stat(dirs[i])
-			b, _ := os.Stat(dirs[j])
-			return a != nil && b != nil && a.ModTime().After(b.ModTime())
-		})
-		if len(dirs) > 0 {
-			keepDir = dirs[0]
-		}
-	}
-	for _, dir := range dirs {
-		if dir != keepDir {
+		dir := filepath.Join(root, entry.Name())
+		if entry.IsDir() && dir != keepDir {
 			_ = os.RemoveAll(dir)
 		}
 	}
