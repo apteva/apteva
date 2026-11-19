@@ -25,7 +25,6 @@ package cli
 import (
 	"archive/tar"
 	"compress/gzip"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -85,14 +84,17 @@ func cmdUpdate(args []string) int {
 		return 1
 	}
 	defer lock.Close()
-	if job, err := readUpdateJob(); err == nil && (!updateJobTerminal(job.State) || job.State == "recovery_required") {
-		fmt.Fprintln(os.Stderr, "a dashboard update is pending or needs recovery; inspect platform-update.json")
-		return 1
+	if job, err := readUpdateJob(); err == nil {
+		settleInterruptedCLIJob(job)
+		if !updateJobTerminal(job.State) || job.State == "recovery_required" {
+			fmt.Fprintln(os.Stderr, "a dashboard update is pending or needs recovery; inspect platform-update.json")
+			return 1
+		}
 	}
 	return runUpdate(args, nil)
 }
 
-func runUpdate(args []string, job *dashboardUpdateJob) int {
+func runUpdate(args []string, job *dashboardUpdateJob) (code int) {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	check := fs.Bool("check", false, "show what would update without applying")
@@ -101,6 +103,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	keepN := fs.Int("keep", 3, "number of prior versions to keep on disk")
 	agentPolicy := fs.String("agents", "", "agent handling: restart, rolling, or preserve (default: server setting)")
 	restart := fs.Bool("restart", false, "stable host installs: allow a release that changes the database schema; the server restarts onto it and migrates (requests pause meanwhile)")
+	fullCheck := fs.Bool("full-check", false, "check the release's migrations against a full copy of the database instead of a reduced one")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -138,7 +141,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		fmt.Fprintln(os.Stderr, "manifest missing version field")
 		return 1
 	}
-	if job != nil && m.Version != job.Target {
+	if job.dashboard() && m.Version != job.Target {
 		fmt.Fprintln(os.Stderr, "published release changed; review the new version before updating")
 		return 1
 	}
@@ -148,7 +151,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	// the moment version.json went stale (a regression we lived
 	// through twice). semverGreater is in layout.go.
 	if current == m.Version || (current != "dev" && semverGreater(current, m.Version)) {
-		if current == m.Version && current != Version && job == nil && !*check && !*dryRun {
+		if current == m.Version && current != Version && !job.dashboard() && !*check && !*dryRun {
 			// The host already serves this release; only the CLI links lag.
 			if err := pointSymlinks(m.Version); err != nil {
 				fmt.Fprintln(os.Stderr, err)
@@ -223,7 +226,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		}
 		return 1
 	}
-	if job != nil && len(art.SHA256) != 64 {
+	if job.dashboard() && len(art.SHA256) != 64 {
 		fmt.Fprintln(os.Stderr, "dashboard updates require a release checksum")
 		return 1
 	}
@@ -235,6 +238,27 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		if !(ans == "y" || ans == "Y" || ans == "yes") {
 			fmt.Fprintln(os.Stderr, "cancelled.")
 			return 0
+		}
+	}
+
+	if job == nil && !*dryRun {
+		// An update started here is recorded like a dashboard update, so the
+		// dashboard shows it and its outcome is kept.
+		cliJob, err := newCLIUpdateJob(m.Version, activeVersion(), *agentPolicy)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot record the update: %v\n", err)
+			return 1
+		}
+		if cliJob != nil {
+			job = cliJob
+			stopHeartbeat := job.heartbeat()
+			stopInterrupt := job.stopOnInterrupt()
+			defer func() {
+				stopInterrupt()
+				stopHeartbeat()
+				job.finish(code)
+				pruneUpdateBackups("")
+			}()
 		}
 	}
 
@@ -333,7 +357,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if job != nil {
+		if job.dashboard() {
 			if err := validateUpdateService(job.Request); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
@@ -356,7 +380,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 			}
 			return 0
 		}
-		if *restart && !hostRestarts && job == nil {
+		if *restart && !hostRestarts && !job.dashboard() {
 			// This host predates restart migrations. A release with an
 			// unchanged schema still deploys live; otherwise the service
 			// restarts onto the new release, whose host runs the migration.
@@ -374,7 +398,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 				return 1
 			}
 		}
-		if err := deployThroughHost(target, m.Version, job, *agentPolicy, *restart && job == nil); err != nil {
+		if err := deployThroughHost(target, m.Version, job, *agentPolicy, *restart && !job.dashboard()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			if restartMigrationRequired(err) && !*restart {
 				fmt.Fprintf(os.Stderr, "\nv%s changes the database schema, so it cannot replace the running server live.\nRun `apteva update --restart` to restart the server onto it: requests pause while it migrates, and apps restart.\n", m.Version)
@@ -388,48 +412,26 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		recordUpdateHistory(hostState.Version, m.Version, job.checkSummary())
 		fmt.Fprintf(os.Stderr, "Apteva v%s is serving through the stable host.\n", m.Version)
 		return 0
 	}
 
-	// 4. Preflight — run apteva-server --preflight against the new
+	// 4. Check the release before activating it: its server boots its
+	//    configuration and runs its migrations on a reduced copy of the
+	//    database, reports whether the previous version could still run on
+	//    the result, and backs the database up only when it could not.
 	job.phase("preflight", "Checking the new version and database migrations")
-	//    binary. Loads config, runs DB migrations dry, opens an
-	//    ephemeral port, exits 0. Catches the "new binary won't
-	//    even boot" class of failure BEFORE we flip the symlink.
-	fmt.Fprintln(os.Stderr, "preflight…")
-	preflightCtx, cancelPreflight := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancelPreflight()
-	preflight := osexec.CommandContext(preflightCtx, filepath.Join(target, "apteva-server"), "--preflight")
-	preflight.Env = append(os.Environ(), "APTEVA_HOME="+aptevaDir())
-	if job != nil {
-		job.mu.Lock()
-		job.Backup = filepath.Join(aptevaDir(), "update-backups", job.ID, "apteva.db")
-		job.mu.Unlock()
-		preflight.Env = append(preflight.Env, "APTEVA_UPDATE_PREFLIGHT="+job.Backup)
-	}
-	preflight.Stdout = os.Stderr
-	preflight.Stderr = os.Stderr
-	if err := preflight.Run(); err != nil {
+	fmt.Fprintln(os.Stderr, "checking the new version against the database…")
+	dbCheck, err := runReleaseCheck(releaseCheckOptions{target: target, version: m.Version, job: job, full: *fullCheck})
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "preflight failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "(new version not activated — old version still in use)")
 		return 1
 	}
-	if job != nil {
-		raw, err := os.ReadFile(job.Backup + ".json")
-		var report struct {
-			Version       string `json:"version"`
-			SchemaChanged bool   `json:"schema_changed"`
-			RollbackSafe  bool   `json:"rollback_safe"`
-		}
-		if err != nil || json.Unmarshal(raw, &report) != nil || report.Version != job.Target {
-			fmt.Fprintln(os.Stderr, "new release did not produce a matching database preflight report")
-			return 1
-		}
-		job.mu.Lock()
-		job.SchemaChanged = report.SchemaChanged
-		job.RollbackSafe = report.RollbackSafe
-		job.mu.Unlock()
+	job.recordCheck(dbCheck)
+	fmt.Fprintf(os.Stderr, "  %s\n", describeCheck(dbCheck))
+	if job.dashboard() {
 		if err := validateUpdateService(job.Request); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -446,7 +448,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 	// the effective configuration while the old version is still active. A
 	// migration failure must never leave bin/current pointing at the new build.
 	serviceScope, serviceInstalled := detectInstalledScope()
-	if job != nil {
+	if job.dashboard() {
 		serviceScope, _ = updateScope(job.Request.Method)
 		serviceInstalled = true
 	}
@@ -514,7 +516,7 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		fmt.Fprintln(os.Stderr, "  restarting service…")
 		healthURL := updateHealthURL()
 		waitHealthy := waitForUpdateHealth
-		if job != nil {
+		if job.dashboard() {
 			healthURL = fmt.Sprintf("http://127.0.0.1:%d/health", job.Request.Port)
 			waitHealthy = func(_ string, timeout time.Duration) error {
 				return waitForUpdateVersion(job.Request.Port, job.Target, timeout)
@@ -553,9 +555,18 @@ func runUpdate(args []string, job *dashboardUpdateJob) int {
 		fmt.Fprintf(os.Stderr, "  pruned old versions: %s\n", strings.Join(removed, ", "))
 	}
 
+	recordUpdateHistory(prior, m.Version, dbCheck)
 	fmt.Fprintf(os.Stderr, "\n  apteva updated to v%s.\n", m.Version)
 	if prior != "" {
-		fmt.Fprintf(os.Stderr, "  rollback: apteva rollback %s\n", prior)
+		if dbCheck != nil && !dbCheck.Compatible {
+			backup := "the backup taken before the update"
+			if dbCheck.Backup != "" {
+				backup = dbCheck.Backup
+			}
+			fmt.Fprintf(os.Stderr, "  v%s cannot run on the migrated database; to go back, restore %s first\n", prior, backup)
+		} else {
+			fmt.Fprintf(os.Stderr, "  rollback: apteva rollback %s\n", prior)
+		}
 	}
 	fmt.Fprintln(os.Stderr)
 	return 0

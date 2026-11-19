@@ -51,9 +51,22 @@ func cmdRollback(args []string) int {
 		return 1
 	}
 	defer lock.Close()
-	if job, err := readUpdateJob(); err == nil && !updateJobTerminal(job.State) {
-		fmt.Fprintln(os.Stderr, "a dashboard update is pending; wait for it to finish before rolling back")
-		return 1
+	force := false
+	var positional []string
+	for _, arg := range args {
+		if arg == "--force" {
+			force = true
+			continue
+		}
+		positional = append(positional, arg)
+	}
+	args = positional
+	if job, err := readUpdateJob(); err == nil {
+		settleInterruptedCLIJob(job)
+		if !updateJobTerminal(job.State) {
+			fmt.Fprintln(os.Stderr, "a dashboard update is pending; wait for it to finish before rolling back")
+			return 1
+		}
 	}
 	all, err := installedVersions()
 	if err != nil {
@@ -97,7 +110,7 @@ func cmdRollback(args []string) int {
 			target = target[1:]
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "usage: apteva rollback [<version>]")
+		fmt.Fprintln(os.Stderr, "usage: apteva rollback [--force] [<version>]")
 		return 2
 	}
 
@@ -120,6 +133,27 @@ func cmdRollback(args []string) int {
 	if target == active {
 		fmt.Fprintf(os.Stderr, "apteva rollback: already on v%s.\n", active)
 		return 0
+	}
+
+	// An update that changed the database in a way older releases cannot
+	// use makes every release before it unable to run on this database.
+	if blockers := rollbackBlockers(active, target); len(blockers) > 0 {
+		for _, b := range blockers {
+			fmt.Fprintf(os.Stderr, "apteva rollback: the update from v%s to v%s changed the database in a way v%s cannot use.\n", b.From, b.To, target)
+			if b.Backup == "" {
+				continue
+			}
+			if _, err := os.Stat(b.Backup); err == nil {
+				fmt.Fprintf(os.Stderr, "  The database from before that update is backed up at %s.\n", b.Backup)
+			} else {
+				fmt.Fprintf(os.Stderr, "  Its backup (%s) is no longer on disk.\n", b.Backup)
+			}
+		}
+		if !force {
+			fmt.Fprintf(os.Stderr, "Restore that backup with the service stopped, then roll back; or pass --force to start v%s on the current database anyway.\n", target)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "--force: starting v%s on the current database.\n", target)
 	}
 
 	if _, hosted, err := probeHost(); hosted {
