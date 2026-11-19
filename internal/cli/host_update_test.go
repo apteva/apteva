@@ -148,6 +148,9 @@ func TestHostedRollbackKeepsPointerOnFailureAndUsesExistingCommand(t *testing.T)
 	if err := pointSymlinks("2.0.0"); err != nil {
 		t.Fatal(err)
 	}
+	// The CLI recorded the update it is rolling back; an unrecorded one is
+	// refused before reaching the host (TestRollbackRefusesUnrecordedUpdate).
+	recordUpdateHistory("1.0.0", "2.0.0", &updateCheckSummary{Classification: "compatible", Compatible: true})
 	if code := cmdRollback([]string{"1.0.0"}); code == 0 || activeVersion() != "2.0.0" {
 		t.Fatal("failed hosted rollback changed CLI pointer")
 	}
@@ -272,5 +275,27 @@ func TestHostControlRefusalExplainsHowToGetAccess(t *testing.T) {
 				t.Fatalf("refusal not explained: %v", err)
 			}
 		})
+	}
+}
+
+// A rollback across an update the CLI has no record of is refused without
+// --force, before the host is asked to deploy anything.
+func TestRollbackRefusesUnrecordedUpdate(t *testing.T) {
+	t.Setenv("APTEVA_HOME", t.TempDir())
+	for _, version := range []string{"1.0.0", "2.0.0"} {
+		if err := os.MkdirAll(versionDir(version), 0755); err != nil {
+			t.Fatal(err)
+		}
+		for _, bin := range binNames {
+			if err := os.WriteFile(filepath.Join(versionDir(version), bin), []byte("test"), 0755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := pointSymlinks("2.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdRollback([]string{"1.0.0"}); code != 1 || activeVersion() != "2.0.0" {
+		t.Fatalf("unrecorded rollback: code %d, active %s", code, activeVersion())
 	}
 }
