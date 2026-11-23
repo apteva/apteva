@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: ae7d7789191aee0880555bfb4fd24f1f06f78dad
+          ref: b146b2901335a111c19affc7daf1411c6d8a11c4
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -99,7 +99,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: 57451314aa28db9fdbbacd3a12ba89413d998e69
+          ref: 7b2246d0ae577a977b665268be35a2ccda8a35d8
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -295,7 +295,7 @@ jobs:
             | jq -r .version)
           INT_VER=$(curl -fsSL \
             -H "Authorization: token ${REPO_TOKEN}" \
-            "https://raw.githubusercontent.com/apteva/integrations/57451314aa28db9fdbbacd3a12ba89413d998e69/package.json" \
+            "https://raw.githubusercontent.com/apteva/integrations/7b2246d0ae577a977b665268be35a2ccda8a35d8/package.json" \
             | jq -r .version)
           DARWIN_ARM64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-arm64.tar.gz" | awk '{print $1}')
           DARWIN_AMD64=$(sha256sum "artifacts/apteva-${VERSION}-darwin-amd64.tar.gz" | awk '{print $1}')
@@ -454,7 +454,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: ae7d7789191aee0880555bfb4fd24f1f06f78dad
+          ref: b146b2901335a111c19affc7daf1411c6d8a11c4
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -486,7 +486,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/integrations
-          ref: 57451314aa28db9fdbbacd3a12ba89413d998e69
+          ref: 7b2246d0ae577a977b665268be35a2ccda8a35d8
           path: integrations
           token: ${{ secrets.REPO_TOKEN }}
 
