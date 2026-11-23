@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: e6450d1dbd634a00536aabfb79d7545e593bc2e2
+          ref: 784630c874187edb8b2ee558e0e92e2bfd1d646b
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -454,7 +454,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: e6450d1dbd634a00536aabfb79d7545e593bc2e2
+          ref: 784630c874187edb8b2ee558e0e92e2bfd1d646b
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
