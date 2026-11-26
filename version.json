@@ -1,31 +1,31 @@
 {
   "schema": "apteva-platform/v1",
-  "version": "0.100.29",
-  "released_at": "2026-11-24T07:24:19Z",
-  "release_notes_url": "https://github.com/apteva/apteva/releases/tag/v0.100.29",
+  "version": "0.100.30",
+  "released_at": "2026-11-26T13:54:59Z",
+  "release_notes_url": "https://github.com/apteva/apteva/releases/tag/v0.100.30",
   "components": {
-    "apteva":              "0.100.29",
-    "apteva-server":       "0.100.29",
-    "apteva-core":         "0.100.29",
+    "apteva":              "0.100.30",
+    "apteva-server":       "0.100.30",
+    "apteva-core":         "0.100.30",
     "apteva-dashboard":    "0.56.0",
     "apteva-integrations": "0.62.0"
   },
   "artifacts": {
     "darwin-arm64": {
-      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.29/apteva-0.100.29-darwin-arm64.tar.gz",
-      "sha256": "e9c8bde2067f00600428fb950e0e0989b5a43f99f203157d0b6fe263d4e3ff46"
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.30/apteva-0.100.30-darwin-arm64.tar.gz",
+      "sha256": "6be02b1453bc5f0bf1a7ed0bf90cb1d6b563a30f4560c0c3959f07189bef6529"
     },
     "darwin-amd64": {
-      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.29/apteva-0.100.29-darwin-amd64.tar.gz",
-      "sha256": "91ac1677e2fe716c26a466d406a098a4c85cae33dc36b975169d66a5cc89bc2b"
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.30/apteva-0.100.30-darwin-amd64.tar.gz",
+      "sha256": "52cd2ebf7cf4d6bdf944a209e1c2a5ddc74c5ed814f496af8ba88af5f432b023"
     },
     "linux-arm64": {
-      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.29/apteva-0.100.29-linux-arm64.tar.gz",
-      "sha256": "cd5d2bf356dcc7e3ae22ef164308c5820f0ebd0f6e152866a1588fb802fe7b4c"
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.30/apteva-0.100.30-linux-arm64.tar.gz",
+      "sha256": "46aabecd2466c0450cc2d15b442dcbccf9724d6ba504865e8996229fd60b5db0"
     },
     "linux-amd64": {
-      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.29/apteva-0.100.29-linux-amd64.tar.gz",
-      "sha256": "74dd4028407537b2cf1fa42bb73a61968d2bae57f68eb192d4e0bf727dedcf6b"
+      "url":    "https://github.com/apteva/apteva/releases/download/v0.100.30/apteva-0.100.30-linux-amd64.tar.gz",
+      "sha256": "5634aabd464c58f5de5b7c534f12bd0d5b4fa6de270a4ebf5aab1385a6afe687"
     }
   }
 }
