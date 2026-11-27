@@ -22,6 +22,7 @@ func TestParseCLIInvocationRecognizesCommandsAndRunFlags(t *testing.T) {
 		{name: "versions", args: []string{"versions"}, mode: cliModeVersions},
 		{name: "rollback", args: []string{"rollback", "0.26.0"}, mode: cliModeRollback, rest: []string{"0.26.0"}},
 		{name: "geoip", args: []string{"geoip", "status"}, mode: cliModeGeoIP, rest: []string{"status"}},
+		{name: "reset password", args: []string{"reset-password", "--email", "a@example.test"}, mode: cliModeResetPassword, rest: []string{"--email", "a@example.test"}},
 		{name: "version word", args: []string{"version"}, mode: cliModeVersion},
 		{name: "version flag", args: []string{"--version"}, mode: cliModeVersion},
 		{name: "version short", args: []string{"-v"}, mode: cliModeVersion},

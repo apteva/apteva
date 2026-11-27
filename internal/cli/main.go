@@ -67,6 +67,8 @@ func Run(version string) {
 			os.Exit(cmdGeoIP(invocation.args))
 		case cliModeHTTPS:
 			os.Exit(cmdHTTPS(invocation.args))
+		case cliModeResetPassword:
+			os.Exit(cmdResetPassword(invocation.args))
 		}
 	}
 
@@ -85,6 +87,7 @@ Commands:
   versions   List installed versions
   rollback   Roll back to an installed version
   geoip      Manage the optional country database
+  reset-password  Set a new password for a forgotten account
   version    Print the CLI version
 
 Flags:`)
