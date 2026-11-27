@@ -18,6 +18,7 @@ const (
 	cliModeGeoIP
 	cliModeVersion
 	cliModeHTTPS
+	cliModeResetPassword
 )
 
 type cliInvocation struct {
@@ -53,6 +54,8 @@ func parseCLIInvocation(args []string) (cliInvocation, error) {
 		return cliInvocation{mode: cliModeGeoIP, args: rest}, nil
 	case "https":
 		return cliInvocation{mode: cliModeHTTPS, args: rest}, nil
+	case "reset-password":
+		return cliInvocation{mode: cliModeResetPassword, args: rest}, nil
 	case "version", "--version", "-v":
 		if len(rest) != 0 {
 			return cliInvocation{}, fmt.Errorf("%s does not accept additional arguments", first)
