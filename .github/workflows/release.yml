@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 9f4d306cb06a63cd7d09d3ac1d42860fadbd02da
+          ref: 631d7862dc395ba94ee23c32a0925f6a5570c483
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -87,7 +87,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: dc7656a647a77e898de293400576681047b56ba9
+          ref: 8c56d50a5e84676deba7a581099b7529107dcd4d
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -454,7 +454,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/server
-          ref: 9f4d306cb06a63cd7d09d3ac1d42860fadbd02da
+          ref: 631d7862dc395ba94ee23c32a0925f6a5570c483
           path: server
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -478,7 +478,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: apteva/app-sdk
-          ref: dc7656a647a77e898de293400576681047b56ba9
+          ref: 8c56d50a5e84676deba7a581099b7529107dcd4d
           path: app-sdk
           token: ${{ secrets.REPO_TOKEN }}
 
